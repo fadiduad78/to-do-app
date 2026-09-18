@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: zerotodo
+    runtime: node
+    plan: free
+    buildCommand: "true"
+    startCommand: node server/server.js
+    healthCheckPath: /api/config
+    envVars:
+      - key: ZT_TOKEN
+        generateValue: true
+      - key: NODE_VERSION
+        value: "20"
+      - key: ZT_DATA_DIR
+        value: /var/data/zerotodo
+    persistentDisk:
+      name: zerotodo-data
+      mountPath: /var/data/zerotodo
+      sizeGB: 1

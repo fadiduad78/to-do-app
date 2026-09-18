@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZeroTodo — a to-do list that never loses your data</title>
+  <meta name="description" content="A zero-data-loss to-do list. Your tasks live in your browser (IndexedDB + redundant localStorage backup) and sync online to your own server, so they survive cleared browser data and follow you across devices.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Crect%20width='100'%20height='100'%20rx='22'%20fill='%234f46e5'/%3E%3Cpath%20d='M28%2052l16%2016%2028-32'%20stroke='white'%20stroke-width='10'%20fill='none'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">✓</span> ZeroTodo</div>
+
+  <!-- Save-status indicator: the user always knows whether their data is safe on disk. -->
+  <div id="savePill" class="save-pill" role="status" aria-live="polite">
+    <span class="dot"></span><span id="savePillText">Loading…</span>
+  </div>
+
+  <!-- Cloud-sync status: ☁ Synced / Syncing… / Offline (data is still saved locally). -->
+  <div id="cloudPill" class="save-pill cloud off" role="status" aria-live="polite"
+       title="Cloud sync: your data is also stored on the server, so it survives cleared browser data and works on other devices.">
+    <span class="dot"></span><span id="cloudPillText">☁ Connecting…</span>
+  </div>
+
+  <div class="top-actions">
+    <button id="exportBtn" class="btn btn-ghost" title="Download all tasks as a JSON backup file">Export</button>
+    <button id="importBtn" class="btn btn-ghost" title="Restore tasks from a JSON backup file">Import</button>
+    <button id="themeBtn" class="btn btn-icon" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
+    <button id="settingsBtn" class="btn btn-icon" title="Settings" aria-label="Settings">⚙</button>
+  </div>
+</header>
+
+<!-- Non-blocking warning/error banners (storage errors, recovery notices, backup reminder). -->
+<div id="bannerHost" class="banners"></div>
+
+<main class="container">
+
+  <!-- Add / edit composer. In-progress input is auto-saved to a draft key (see app.js). -->
+  <section id="composer" class="composer" hidden>
+    <h2 id="composerTitle">New task</h2>
+    <form id="taskForm" novalidate>
+      <input id="f-title" type="text" maxlength="200" placeholder="What needs to be done?" autocomplete="off" required>
+      <textarea id="f-desc" rows="2" maxlength="2000" placeholder="Description (optional)"></textarea>
+      <div class="form-row">
+        <label class="field">
+          <span>Due date</span>
+          <input id="f-due" type="date">
+        </label>
+        <label class="field">
+          <span>Priority</span>
+          <select id="f-priority">
+            <option value="low">Low</option>
+            <option value="med" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label class="field grow">
+          <span>Tags</span>
+          <input id="f-tags" type="text" placeholder="e.g. work, home" autocomplete="off">
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" id="saveTaskBtn">Add task</button>
+        <button type="button" class="btn btn-ghost" id="cancelTaskBtn">Cancel</button>
+        <span class="draft-hint" id="draftHint" hidden>Draft auto-saved — survives refresh/close</span>
+      </div>
+    </form>
+  </section>
+
+  <section class="toolbar">
+    <input id="searchInput" type="search" placeholder="Search title or description…" autocomplete="off" aria-label="Search tasks">
+    <button id="newTaskBtn" class="btn btn-primary">＋ New task</button>
+  </section>
+
+  <!-- A pending draft (from a previous session) can be resumed or discarded without opening the form. -->
+  <div id="draftResume" class="draft-resume" hidden>
+    <span>✎ Unsaved draft: <b class="draft-label"></b></span>
+    <button id="draftResumeBtn" class="btn btn-sm btn-primary">Resume</button>
+    <button id="draftDiscardBtn" class="btn btn-sm btn-ghost" title="Discard draft">Discard</button>
+  </div>
+
+  <nav class="filters" id="filterTabs" aria-label="Task filters"></nav>
+  <div id="tagChips" class="tag-chips" hidden></div>
+
+  <div id="trashBar" class="trash-bar" hidden>
+    <span><b id="trashCount"></b> in trash — kept for 30 days, then removed automatically.</span>
+    <button id="emptyTrashBtn" class="btn btn-danger-ghost">Empty trash</button>
+  </div>
+
+  <ul id="taskList" class="task-list" aria-label="Tasks"></ul>
+  <div id="emptyState" class="empty-state" hidden></div>
+
+  <section id="settingsPanel" class="settings-panel" hidden>
+    <h2>Settings</h2>
+    <label class="setting-row">
+      <span>Theme</span>
+      <select id="themeSelect">
+        <option value="auto">Auto (match system)</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+    <label class="setting-row">
+      <span>Backup reminder</span>
+      <select id="reminderSelect">
+        <option value="0">Off</option>
+        <option value="3">Every 3 days</option>
+        <option value="7">Every 7 days</option>
+        <option value="14">Every 14 days</option>
+        <option value="30">Every 30 days</option>
+      </select>
+    </label>
+    <p class="muted small" id="storageInfo"></p>
+    <p class="muted small">Your data is saved in this browser first (IndexedDB + backup mirror), and — when online — synced to the server so it survives cleared browser data and works on other devices. Exporting a backup JSON is still a great extra safety net.</p>
+
+    <h2 style="margin-top:14px">Cloud sync</h2>
+    <label class="setting-row">
+      <span>Sync enabled</span>
+      <input type="checkbox" id="cloudEnabled" checked>
+    </label>
+    <label class="setting-row">
+      <span>Server URL</span>
+      <input type="text" id="cloudEndpoint" placeholder="(blank = same server this page was loaded from)" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="setting-row">
+      <span>Passkey</span>
+      <input type="password" id="cloudToken" placeholder="only if the server has ZT_TOKEN set" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="setting-row">
+      <span>&nbsp;</span>
+      <button class="btn btn-primary btn-sm" id="cloudSaveBtn" type="button">Apply &amp; sync now</button>
+    </div>
+    <p class="muted small" id="cloudInfo"></p>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span id="footerCounts" class="muted small"></span>
+    <span class="muted small">Saved in this browser (IndexedDB + backup mirror) and synced to the ☁ server when online — so it survives cleared browser data. Keep exporting the occasional JSON backup for belt-and-braces.</span>
+  </div>
+</footer>
+
+<div id="toastHost" class="toast-host" aria-live="polite"></div>
+<div id="modalHost"></div>
+<input type="file" id="importFile" accept=".json,application/json" hidden>
+
+<noscript><p style="text-align:center;padding:20px">ZeroTodo needs JavaScript to run.</p></noscript>
+
+<script src="storage.js"></script>
+<script src="cloud.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
