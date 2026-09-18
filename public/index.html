@@ -20,7 +20,7 @@
 
   <!-- Cloud-sync status: ☁ Synced / Syncing… / Offline (data is still saved locally). -->
   <div id="cloudPill" class="save-pill cloud off" role="status" aria-live="polite"
-       title="Cloud sync: your data is also stored on the server, so it survives cleared browser data and works on other devices.">
+       title="Cloud sync: sign in with your account and your data is also stored on the server — survives cleared browser data, works on all your devices.">
     <span class="dot"></span><span id="cloudPillText">☁ Connecting…</span>
   </div>
 
@@ -124,13 +124,13 @@
       <span>Server URL</span>
       <input type="text" id="cloudEndpoint" placeholder="(blank = same server this page was loaded from)" autocomplete="off" spellcheck="false">
     </label>
-    <label class="setting-row">
-      <span>Passkey</span>
-      <input type="password" id="cloudToken" placeholder="only if the server has ZT_TOKEN set" autocomplete="off" spellcheck="false">
-    </label>
     <div class="setting-row">
-      <span>&nbsp;</span>
-      <button class="btn btn-primary btn-sm" id="cloudSaveBtn" type="button">Apply &amp; sync now</button>
+      <span>Signed in as</span>
+      <span class="muted" id="cloudAcctName">Not signed in</span>
+    </div>
+    <div class="setting-row" style="justify-content:flex-end;gap:8px">
+      <button class="btn btn-sm btn-primary" id="cloudSignInBtn" type="button">Sign in / Create account</button>
+      <button class="btn btn-sm btn-ghost" id="cloudSignOutBtn" type="button" hidden>Sign out</button>
     </div>
     <p class="muted small" id="cloudInfo"></p>
   </section>

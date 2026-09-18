@@ -174,6 +174,48 @@ try {
   const ev = await evRead;
   ok(/"type":"sync"/.test(ev), 'watcher received live sync event');
 
+  console.log('9. user accounts: signup, sessions, isolation, legacy adoption');
+  // validation
+  r = await fetch(BASE + '/api/signup', H('POST', { username: 'ab', password: 'longenoughpw' }));
+  ok(r.status === 400, 'username too short → 400');
+  r = await fetch(BASE + '/api/signup', H('POST', { username: 'alice', password: '123' }));
+  ok(r.status === 400, 'password too short → 400');
+  // first account adopts the legacy admin dataset (this test already filled it)
+  const sr = await fetch(BASE + '/api/signup', H('POST', { username: 'alice', password: 'wonderland-42' }));
+  const alice = await sr.json();
+  ok(sr.status === 200 && alice.token && alice.username === 'alice', 'first signup returns session token');
+  const AH = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + alice.token };
+  let meRes = await fetch(BASE + '/api/me', { headers: AH });
+  ok(meRes.ok && (await meRes.json()).username === 'alice', 'GET /api/me validates the session');
+  let aState = await (await fetch(BASE + '/api/state', { headers: AH })).json();
+  ok(aState.tasks.length === before.tasks.length + 1 && aState.tasks.some((t) => t.id === 'x2'), 'first account adopted legacy data (saw ' + aState.tasks.length + ' tasks)');
+  // duplicate + bad login
+  r = await fetch(BASE + '/api/signup', H('POST', { username: 'alice', password: 'whatever-12' }));
+  ok(r.status === 409, 'duplicate username → 409');
+  r = await fetch(BASE + '/api/login', H('POST', { username: 'alice', password: 'nope-nope-nope' }));
+  ok(r.status === 401, 'wrong password → 401');
+  r = await fetch(BASE + '/api/login', H('POST', { username: 'ALICE ', password: 'wonderland-42' }));
+  ok(r.status === 200, 'login is case-insensitive + trims');
+  const aliceToken2 = (await r.json()).token;
+  ok(aliceToken2 === alice.token || typeof aliceToken2 === 'string', 'login re-issues a valid token');
+  // second account: NO adoption, isolated
+  const s2 = await fetch(BASE + '/api/signup', H('POST', { username: 'bob', password: 'builder-77' }));
+  const bob = await s2.json();
+  const BH = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bob.token };
+  let bState = await (await fetch(BASE + '/api/state', { headers: BH })).json();
+  ok(bState.tasks.length === 0, 'second account starts empty (no legacy adoption)');
+  await fetch(BASE + '/api/sync', { method: 'POST', headers: AH, body: JSON.stringify({ clientId: 'A', baseRev: aState.rev, state: { savedAt: Date.now(), settings: {}, tasks: [task('alice-only', 'secret plan', ts(8))], trash: [] }, tombstones: {} }) });
+  bState = await (await fetch(BASE + '/api/state', { headers: BH })).json();
+  ok(bState.tasks.length === 0, 'bob cannot see alice\'s task (isolation)');
+  aState = await (await fetch(BASE + '/api/state', { headers: AH })).json();
+  ok(aState.tasks.some((t) => t.id === 'alice-only'), 'alice sees her own task');
+  // forged session token rejected
+  r = await fetch(BASE + '/api/state', { headers: { Authorization: 'Bearer alice.99999999999.deadbeef' } });
+  ok(r.status === 401, 'forged/tampered session rejected');
+  // admin bearer still works (back-compat)
+  r = await fetch(BASE + '/api/state', H('GET'));
+  ok(r.status === 200, 'legacy ZT_TOKEN bearer still maps to admin bucket');
+
   rmSync(dataDir, { recursive: true, force: true });
 } catch (e) {
   console.error('TEST CRASH:', e);

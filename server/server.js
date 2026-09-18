@@ -1,38 +1,42 @@
 /* ============================================================================
  * server.js — ZeroTodo cloud backend (zero dependencies, Node >= 18)
  * ----------------------------------------------------------------------------
- * What it does:
- *   1. Serves the static app files from ./public (so the app + API share one
- *      origin — no CORS headaches when deployed).
- *   2. Persists the full app state (tasks, trash, settings, deletion
- *      tombstones) to ./data/state.json with atomic writes (tmp + rename),
- *      so the data survives restarts, crashes and browser-data clearing.
- *      With ZT_SUPABASE_URL + ZT_SUPABASE_KEY set, every change is also
- *      mirrored to a single Postgres row over plain HTTPS (PostgREST) and
- *      restored from there on boot — this is what makes the free Render plan
- *      (ephemeral filesystem) safe. Retries with backoff; a dead remote never
- *      blocks the API.
- *   3. Merges concurrent changes from multiple devices with a per-record
- *      last-write-wins rule (freshest `updatedAt` wins; a delete only wins
- *      if nothing edited the record afterwards — enforced via tombstones).
- *   4. Pushes live updates to every open client through Server-Sent Events,
- *      so two devices on the same list converge in ~instant time.
+ * Multi-user edition. What it does:
+ *   1. Serves the static app files from ./public (app + API share one origin).
+ *   2. User accounts: username + password (scrypt-hashed, salted). Sessions are
+ *      stateless signed tokens (30 days) — no server-side session store, so a
+ *      restart never logs anyone out. The passkey that used to be pasted into
+ *      the app is gone: ZT_TOKEN now only signs session tokens internally,
+ *      and the Supabase key lives exclusively in server env vars.
+ *   3. One private data bucket per user:
+ *        file mode   → data/users/<username>.json   (admin → legacy data/state.json)
+ *        supabase    → table zerotodo_state_by_user, one row per owner
+ *      Atomic writes + per-user background upload loop with backoff.
+ *   4. Per-record last-write-wins merge (see ingest) + store-scoped tombstones.
+ *   5. Per-user Server-Sent Events: only YOUR devices see YOUR updates.
  *
- * API (all JSON):
- *   GET  /api/config  → { app, authRequired, version }           (no auth)
+ * API (JSON; state endpoints require a session):
+ *   GET  /api/config  → { app, authRequired, storage, version }        (public)
+ *   POST /api/signup  { username, password } → { token, username }
+ *   POST /api/login   { username, password } → { token, username }
+ *   POST /api/logout  → { ok }               (client drops the token)
+ *   GET  /api/me      → { username }         (validates a session)
  *   GET  /api/state   → { rev, savedAt, settings, tasks, trash, tombstones }
  *   POST /api/sync    ← { clientId, baseRev, mode:'merge'|'replace',
  *                         state:{ settings, tasks, trash }, tombstones }
- *                     → same shape as /api/state (the authoritative merged view)
- *   GET  /api/events  → SSE stream: data: {type:'sync', rev, origin}
+ *                     → the authoritative merged view for THIS user
+ *   GET  /api/events  → SSE: data: {type:'sync', rev, origin}
  *
- * Auth (optional but recommended when online):
- *   - env ZT_TOKEN=...           → clients must send `Authorization: Bearer <token>`
- *     (or ?token=... on the SSE endpoint, which cannot set headers)
- *   - or ./data/token.txt        → used if ZT_TOKEN is unset; auto-generated +
- *     printed to the log on first boot so the owner can copy it into Settings
- *   - env ZT_OPEN=1              → explicitly disable auth (bad on the public
- *     internet, handy for a quick LAN test)
+ * Back-compat: an Authorization Bearer equal to ZT_TOKEN maps to the legacy
+ * "admin" bucket (the pre-accounts dataset, incl. the old Supabase id=1 row).
+ * The FIRST account ever created also adopts that legacy data once, so an
+ * existing single-user deployment migrates with zero ceremony.
+ *
+ * Modes / env:
+ *   ZT_TOKEN=...      signing secret for sessions (auto-generated + persisted
+ *                     to data/token.txt when unset) — the client never needs it
+ *   ZT_OPEN=1         auth off: single shared bucket, no login (LAN / testing)
+ *   ZT_SUPABASE_URL / ZT_SUPABASE_KEY   PostgREST persistence (Supabase free)
  * ==========================================================================*/
 'use strict';
 
@@ -48,23 +52,24 @@ const HOST = process.env.ZT_HOST || '0.0.0.0';
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.resolve(process.env.ZT_DATA_DIR || path.join(ROOT, 'data'));
-const STATE_FILE = path.join(DATA_DIR, 'state.json');
+const STATE_FILE = path.join(DATA_DIR, 'state.json');        // legacy admin bucket
+const USERS_DIR = path.join(DATA_DIR, 'users');              // per-user buckets
+const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');  // file-mode accounts
 const TOKEN_FILE = path.join(DATA_DIR, 'token.txt');
 
-const MAX_BODY = 8 * 1024 * 1024;                 // 8 MB is generous for a todo app
-const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // keep in sync with storage.js
-const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // deletions remembered 30 days
+const MAX_BODY = 8 * 1024 * 1024;
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-/* Remote persistence (optional, zero-dep): a single JSON row in Postgres,
- * reached over plain HTTPS via PostgREST (e.g. a free Supabase project).
- * Render's free plan has no persistent disk, so state.json alone would be lost
- * on restart — the remote row is the durable copy; the file is a local cache.
- * Unset the env vars and the server runs file-only (fine for a real VPS or
- * Docker with a volume). */
 const SB_URL = (process.env.ZT_SUPABASE_URL || '').trim().replace(/\/+$/, '');
 const SB_KEY = (process.env.ZT_SUPABASE_KEY || '').trim();
-const SB_TABLE = (process.env.ZT_SUPABASE_TABLE || 'zerotodo_state').trim();
+const SB_TABLE = (process.env.ZT_SUPABASE_STATE_TABLE || 'zerotodo_state_by_user').trim();
+const SB_USERS_TABLE = (process.env.ZT_SUPABASE_USERS_TABLE || 'zerotodo_users').trim();
+const SB_LEGACY_TABLE = (process.env.ZT_SUPABASE_LEGACY_TABLE || 'zerotodo_state').trim();
 const sbEnabled = () => Boolean(SB_URL && SB_KEY);
+
+const RESERVED = new Set(['admin', 'shared', 'signup', 'login', 'logout', 'me', 'config', 'state', 'sync', 'events']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -79,207 +84,145 @@ const MIME = {
   '.webmanifest': 'application/manifest+json',
 };
 
-/* ------------------------------- Auth token ------------------------------- */
+/* --------------------------------- Auth core ------------------------------- */
 
-let TOKEN = null;
+let TOKEN = null; // signing secret (also legacy admin bearer)
 
 function initAuth() {
   if (process.env.ZT_OPEN === '1') { TOKEN = null; return; }
   if (process.env.ZT_TOKEN) { TOKEN = String(process.env.ZT_TOKEN); return; }
   try {
-    if (fs.existsSync(TOKEN_FILE)) {
-      TOKEN = fs.readFileSync(TOKEN_FILE, 'utf8').trim() || null;
-    }
-  } catch (_) { /* fall through to generate */ }
+    if (fs.existsSync(TOKEN_FILE)) TOKEN = fs.readFileSync(TOKEN_FILE, 'utf8').trim() || null;
+  } catch (_) { /* fall through */ }
   if (!TOKEN) {
-    TOKEN = crypto.randomBytes(12).toString('base64url');
+    TOKEN = crypto.randomBytes(24).toString('base64url');
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(TOKEN_FILE, TOKEN + '\n');
     } catch (e) {
-      console.error('[zerotodo] Could not persist token to', TOKEN_FILE, '— using in-memory token only.', e.message);
+      console.error('[zerotodo] Could not persist signing secret:', e.message, '— sessions will reset on restart.');
     }
-    console.log('────────────────────────────────────────────────────────');
-    console.log('[zerotodo] Access passkey (paste into the app → ⚙ Settings → Cloud sync):');
-    console.log('[zerotodo]   ' + TOKEN);
-    console.log('[zerotodo] Set env ZT_TOKEN to choose your own, or ZT_OPEN=1 to disable auth.');
-    console.log('────────────────────────────────────────────────────────');
   }
 }
 
 const authRequired = () => TOKEN !== null;
 
-function checkAuth(req, url) {
-  if (!authRequired()) return true;
+const b64u = (buf) => Buffer.from(buf).toString('base64url');
+const sign = (payload) => crypto.createHmac('sha256', TOKEN).update(payload).digest('base64url');
+
+function makeSession(username) {
+  const exp = Date.now() + SESSION_TTL_MS;
+  const payload = `${username}.${exp}`;
+  return `${payload}.${sign(payload)}`;
+}
+
+function verifySession(tok) {
+  const parts = String(tok || '').split('.');
+  if (parts.length !== 3) return null;
+  const [username, exp, mac] = parts;
+  if (!USERNAME_RE.test(username)) return null;
+  if (Number(exp) < Date.now()) return null;
+  const expect = sign(`${username}.${exp}`);
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expect))) return null;
+  } catch (_) { return null; }
+  return username;
+}
+
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+
+function passwordFromUser(u, password) { // scrypt with per-user salt
+  return crypto.scryptSync(String(password), String(u.salt), 64).toString('hex');
+}
+
+/** Identify the caller: 'shared' (open mode) | legacy admin | session user | null */
+function userFromReq(req, url) {
+  if (!authRequired()) return 'shared';
   const hdr = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/i.exec(hdr);
   const candidate = (m && m[1]) || url.searchParams.get('token') || '';
-  try {
-    return crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(TOKEN));
-  } catch (_) {
-    return false;
-  }
+  if (!candidate) return null;
+  if (candidate === TOKEN) return 'admin';
+  return verifySession(candidate);
 }
 
-/* ------------------------------ State & storage ---------------------------- */
+/* -------------------------- Rate limiting (login/signup) ------------------- */
+
+const attempts = new Map(); // ip → { n, t0 }
+function tooManyAttempts(ip) {
+  const now = Date.now();
+  const a = attempts.get(ip);
+  if (!a || now - a.t0 > 5 * 60000) { attempts.set(ip, { n: 1, t0: now }); return false; }
+  a.n++;
+  return a.n > 20; // 20 auth attempts per 5 min per IP
+}
+
+/* ----------------------- Per-user state buckets ---------------------------- */
 
 /**
- * Server-side truth. Kept in memory; durably mirrored to STATE_FILE after
- * every change (debounced atomic write) and on shutdown.
+ * A bucket = one user's private universe. state is the authoritative in-memory
+ * copy; every change goes through persist(bucket) which mirrors it to the
+ * local file and (when configured) the Supabase row, with background retry.
  */
-let state = {
-  rev: 0,
-  savedAt: 0,
-  settings: {},
-  tasks: [],
-  trash: [],
-  tombstones: {}, // id → deletion timestamp (last-write-wins guard)
-};
-let saveTimer = null;
-let lastLoadedMtime = 0;
+const BUCKETS = new Map(); // username → bucket
 
-function loadState() {
+function bucketFor(username) {
+  let b = BUCKETS.get(username);
+  if (!b) {
+    b = {
+      username,
+      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], tombstones: {} },
+      saveTimer: null, loaded: false, ready: null,
+      sse: new Set(),
+      sbDirty: false, sbRunning: false, sbDelay: 4000, sbLastOk: 0, sbLastError: '',
+    };
+    BUCKETS.set(username, b);
+    b.ready = bootBucket(b);
+  }
+  return b;
+}
+
+function bucketFile(b) {
+  return b.username === 'admin' || b.username === 'shared'
+    ? STATE_FILE
+    : path.join(USERS_DIR, b.username + '.json');
+}
+
+/** Supabase upsert target for this bucket: admin keeps using the legacy row. */
+function sbUpsert(b) {
+  return b.username === 'admin' || b.username === 'shared'
+    ? { table: SB_LEGACY_TABLE, rowKey: { id: 1 } }
+    : { table: SB_TABLE, rowKey: { owner: b.username } };
+}
+
+function fileSave(b) {
   try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    if (fs.existsSync(STATE_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      if (raw && typeof raw === 'object' && Array.isArray(raw.tasks)) {
-        state = normalizeState(raw);
-        lastLoadedMtime = fs.statSync(STATE_FILE).mtimeMs;
-        console.log(`[zerotodo] Loaded state: ${state.tasks.length} task(s), ${state.trash.length} trashed, rev ${state.rev}`);
-      }
+    const target = bucketFile(b);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const tmp = target + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(b.state));
+    fs.renameSync(tmp, target);
+  } catch (e) {
+    console.error('[zerotodo] file save failed (' + b.username + '):', e.message);
+  }
+}
+
+function fileLoad(b) {
+  try {
+    const target = bucketFile(b);
+    if (fs.existsSync(target)) {
+      const raw = JSON.parse(fs.readFileSync(target, 'utf8'));
+      if (raw && Array.isArray(raw.tasks)) b.state = normalizeState(raw);
     }
   } catch (e) {
-    console.error('[zerotodo] Could not read state file, starting fresh:', e.message);
-  }
-  pruneExpired();
-}
-
-function scheduleSave() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveNow, 200);
-}
-
-function saveNow() {
-  clearTimeout(saveTimer);
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const tmp = STATE_FILE + '.' + process.pid + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, STATE_FILE); // atomic: readers never see a partial file
-    lastLoadedMtime = fs.statSync(STATE_FILE).mtimeMs;
-  } catch (e) {
-    console.error('[zerotodo] Failed to persist state:', e.message);
+    console.error('[zerotodo] Could not read state for ' + b.username + ', starting empty:', e.message);
   }
 }
 
-/* ------------------------ Remote persistence (Supabase/PostgREST) --------- */
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function fetchT(url, opts, ms) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), ms || 15000);
-  return fetch(url, { ...opts, signal: ctl.signal, cache: 'no-store' }).finally(() => clearTimeout(t));
-}
-
-function sbHeaders() {
-  return { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
-}
-
-let sbDirty = false;
-let sbRunning = false;
-let sbDelay = 4000;
-let sbLastOk = 0;
-let sbLastError = '';
-
-/** durable-write funnel: local file cache + (if configured) the remote row */
-function persist() {
-  scheduleSave();
-  scheduleRemoteSave();
-}
-
-function scheduleRemoteSave() {
-  sbDirty = true;
-  if (!sbEnabled() || sbRunning) return;
-  runRemoteSaveLoop().catch(() => { sbRunning = false; });
-}
-
-async function runRemoteSaveLoop() {
-  sbRunning = true;
-  while (sbDirty) {
-    sbDirty = false;
-    try {
-      const res = await fetchT(`${SB_URL}/rest/v1/${SB_TABLE}`, {
-        method: 'POST',
-        headers: { ...sbHeaders(), Prefer: 'return=minimal, resolution=merge-duplicates' },
-        body: JSON.stringify({ id: 1, doc: state }),
-      });
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + String(await res.text().catch(() => '')).slice(0, 160));
-      sbLastOk = Date.now();
-      sbLastError = '';
-      sbDelay = 4000;
-    } catch (e) {
-      sbLastError = String((e && e.message) || e);
-      console.warn('[zerotodo] Supabase save failed (' + sbLastError + ') — retry in ' + (sbDelay / 1000) + 's. File cache still holds the data.');
-      await sleep(sbDelay);
-      sbDelay = Math.min(sbDelay * 2, 300000); // backoff up to 5 min
-      sbDirty = true;
-    }
-  }
-  sbRunning = false;
-}
-
-/** One-shot attempt used on shutdown (bounded by a timeout so exit never hangs). */
-async function remoteFlushOnce(timeoutMs) {
-  if (!sbEnabled() || !sbDirty) return true;
-  try {
-    await Promise.race([
-      (async () => {
-        const res = await fetchT(`${SB_URL}/rest/v1/${SB_TABLE}`, {
-          method: 'POST',
-          headers: { ...sbHeaders(), Prefer: 'return=minimal, resolution=merge-duplicates' },
-          body: JSON.stringify({ id: 1, doc: state }),
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-      })(),
-      sleep(timeoutMs),
-    ]);
-    sbDirty = false;
-    return true;
-  } catch (_) { return false; }
-}
-
-/**
- * Boot restore: remote row wins when it is at least as fresh as the local
- * cache (fresh instance → empty file, remote has everything). Both agree
- * afterwards: whichever wins is pushed to the other copy.
- */
-async function loadRemote() {
-  if (!sbEnabled()) return;
-  try {
-    const res = await fetchT(`${SB_URL}/rest/v1/${SB_TABLE}?select=doc&id=eq.1`, { headers: sbHeaders() });
-    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + String(await res.text().catch(() => '')).slice(0, 160));
-    const rows = await res.json();
-    if (Array.isArray(rows) && rows.length && rows[0] && rows[0].doc) {
-      const remote = normalizeState(rows[0].doc);
-      if (remote.rev >= state.rev) {
-        state = remote;
-        saveNow();
-        console.log(`[zerotodo] restored from Supabase: rev ${state.rev}, ${state.tasks.length} task(s)`);
-      } else {
-        console.log('[zerotodo] local file cache is newer than the Supabase row — keeping it and re-uploading');
-        sbDirty = true;
-      }
-    } else {
-      console.log('[zerotodo] Supabase table empty — uploading current state');
-      sbDirty = true;
-    }
-    if (sbDirty) scheduleRemoteSave();
-  } catch (e) {
-    console.error('[zerotodo] Supabase unreachable at boot (' + ((e && e.message) || e) + ') — continuing with file cache; background retry scheduled.');
-    scheduleRemoteSave(); // the loop will keep trying with backoff until it connects
-  }
+function persist(b) {
+  clearTimeout(b.saveTimer);
+  b.saveTimer = setTimeout(() => { fileSave(b); }, 200);
+  scheduleRemoteSave(b);
 }
 
 /* ------------------------- Validation & normalization -------------------- */
@@ -335,30 +278,25 @@ function normalizeState(raw) {
 }
 
 /** Trash retention + tombstone TTL — mirrors the client's rules server-side. */
-function pruneExpired() {
+function pruneExpired(b) {
   const now = Date.now();
   let changed = false;
   const keepTrash = [];
-  for (const t of state.trash) {
+  for (const t of b.state.trash) {
     if (now - (t.trashedAt || 0) > TRASH_RETENTION_MS) {
-      state.tombstones['trash:' + t.id] = Math.max(state.tombstones['trash:' + t.id] || 0, now); // expired trash becomes a deletion
+      b.state.tombstones['trash:' + t.id] = Math.max(b.state.tombstones['trash:' + t.id] || 0, now);
       changed = true;
     } else keepTrash.push(t);
   }
-  if (changed) state.trash = keepTrash;
-  for (const [id, at] of Object.entries(state.tombstones)) {
-    if (now - at > TOMBSTONE_TTL_MS) { delete state.tombstones[id]; changed = true; }
+  if (changed) b.state.trash = keepTrash;
+  for (const [id, at] of Object.entries(b.state.tombstones)) {
+    if (now - at > TOMBSTONE_TTL_MS) { delete b.state.tombstones[id]; changed = true; }
   }
   return changed;
 }
 
 /* --------------------------------- Merging -------------------------------- */
 
-/**
- * Per-record last-write-wins merge of two record lists. Unknown ids from
- * either side are kept (union) — this is what makes multi-device usage safe:
- * neither device can accidentally wipe records it has never seen.
- */
 function mergeRecords(localArr, remoteArr) {
   const byId = new Map();
   for (const t of localArr) byId.set(t.id, t);
@@ -370,11 +308,9 @@ function mergeRecords(localArr, remoteArr) {
 }
 
 /**
- * Tombstones are store-scoped (`"tasks:<id>"`, `"trash:<id>"`) so a move
- * (soft delete = remove from tasks + add to trash) removes stale copies from
- * the store they left, while the fresh copy in the other store survives.
- * A tombstone only kills records that are NOT newer than it (a later edit or
- * restore legitimately revives a record).
+ * Store-scoped tombstones ("tasks:<id>" / "trash:<id>"): a move (soft delete,
+ * restore) only removes copies in the store it left. A tombstone kills records
+ * not newer than it — a later edit/restore legitimately revives a record.
  */
 function applyTombstones(tasks, trash, tombstones) {
   return {
@@ -389,15 +325,8 @@ function enforceLiveWins(tasks, trash) {
   return trash.filter((t) => !live.has(t.id));
 }
 
-/**
- * Merge an incoming client sync into server state.
- *  - mode 'replace' (used after an explicit Import): the client's dataset IS
- *    the truth for tasks/trash/settings; tombstones are unioned.
- *  - mode 'merge' (the normal path): union + per-record last-write-wins;
- *    tombstones unioned then applied to both sides' records.
- * Returns { changed }.
- */
-function ingest(body) {
+/** Merge an incoming client sync into the bucket's state. Returns changed? */
+function ingest(b, body) {
   const incoming = normalizeState({
     rev: 0,
     savedAt: (body.state && body.state.savedAt) || 0,
@@ -407,36 +336,31 @@ function ingest(body) {
     tombstones: body.tombstones || {},
   });
 
-  const newTombstones = { ...state.tombstones };
+  const newTombstones = { ...b.state.tombstones };
   for (const [id, at] of Object.entries(incoming.tombstones)) {
     newTombstones[id] = Math.max(newTombstones[id] || 0, at);
   }
 
   let merged;
   if (body.mode === 'replace') {
-    // An explicit Import/replace overwrites the dataset: tombstones for the
-    // ids being (re)installed are cleared, so the imported records stand.
     for (const t of incoming.tasks) delete newTombstones['tasks:' + t.id];
     for (const t of incoming.trash) delete newTombstones['trash:' + t.id];
     merged = {
       settings: incoming.settings,
       tasks: incoming.tasks,
       trash: enforceLiveWins(incoming.tasks, incoming.trash),
-      savedAt: Math.max(state.savedAt, incoming.savedAt || Date.now()),
+      savedAt: Math.max(b.state.savedAt, incoming.savedAt || Date.now()),
     };
   } else {
-    const tasks = mergeRecords(state.tasks, incoming.tasks);
-    const trash = mergeRecords(state.trash, incoming.trash);
+    const tasks = mergeRecords(b.state.tasks, incoming.tasks);
+    const trash = mergeRecords(b.state.trash, incoming.trash);
     const alive = applyTombstones(tasks, trash, newTombstones);
     merged = {
-      settings: (incoming.savedAt || 0) >= state.savedAt ? incoming.settings : state.settings,
+      settings: (incoming.savedAt || 0) >= b.state.savedAt ? incoming.settings : b.state.settings,
       tasks: alive.tasks,
       trash: enforceLiveWins(alive.tasks, alive.trash),
-      savedAt: Math.max(state.savedAt, incoming.savedAt || 0) || Date.now(),
+      savedAt: Math.max(b.state.savedAt, incoming.savedAt || 0) || Date.now(),
     };
-    // Prune redundant tombstones: a live record newer than the deletion has
-    // already won, so the tombstone only exists to kill stale re-pushes —
-    // which the fresher record does by itself under LWW.
     for (const t of merged.tasks) {
       const k = 'tasks:' + t.id;
       if (newTombstones[k] && (t.updatedAt || 0) > newTombstones[k]) delete newTombstones[k];
@@ -447,36 +371,218 @@ function ingest(body) {
     }
   }
 
-  const before = JSON.stringify([state.tasks, state.trash, state.settings]);
+  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.settings]);
   const after = JSON.stringify([merged.tasks, merged.trash, merged.settings]);
   const changed = before !== after;
 
-  state = {
-    ...state,
-    ...merged,
-    tombstones: newTombstones,
-    rev: state.rev + 1,
-  };
-  pruneExpired();
-  persist();
+  b.state = { ...b.state, ...merged, tombstones: newTombstones, rev: b.state.rev + 1 };
+  pruneExpired(b);
+  persist(b);
   return changed;
 }
 
-/* ------------------------------- SSE clients ------------------------------- */
+/* ------------------------------ HTTP helpers ------------------------------- */
 
-const sseClients = new Set();
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-function broadcast(eventObj, exceptId) {
-  const data = 'data: ' + JSON.stringify(eventObj) + '\n\n';
-  for (const res of sseClients) {
-    if (exceptId && res.__ztId === exceptId) continue;
-    try { res.write(data); } catch (_) { /* dropped below on next error */ }
+function fetchT(url, opts, ms) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms || 15000);
+  return fetch(url, { ...opts, signal: ctl.signal, cache: 'no-store' }).finally(() => clearTimeout(t));
+}
+
+function sbHeaders() {
+  return { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
+}
+
+/* --------------------- Remote persistence (per bucket) ---------------------- */
+
+function scheduleRemoteSave(b) {
+  b.sbDirty = true;
+  if (!sbEnabled() || b.sbRunning) return;
+  runRemoteSaveLoop(b).catch(() => { b.sbRunning = false; });
+}
+
+async function remotePut(b) {
+  const tgt = sbUpsert(b);
+  const res = await fetchT(`${SB_URL}/rest/v1/${tgt.table}`, {
+    method: 'POST',
+    headers: { ...sbHeaders(), Prefer: 'return=minimal, resolution=merge-duplicates' },
+    body: JSON.stringify({ ...tgt.rowKey, doc: b.state }),
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + String(await res.text().catch(() => '')).slice(0, 160));
+}
+
+async function runRemoteSaveLoop(b) {
+  b.sbRunning = true;
+  while (b.sbDirty) {
+    b.sbDirty = false;
+    try {
+      await remotePut(b);
+      b.sbLastOk = Date.now();
+      b.sbLastError = '';
+      b.sbDelay = 4000;
+    } catch (e) {
+      b.sbLastError = String((e && e.message) || e);
+      console.warn(`[zerotodo] supabase save failed (${b.username}): ${b.sbLastError} — retry in ${b.sbDelay / 1000}s (file cache holds the data)`);
+      await sleep(b.sbDelay);
+      b.sbDelay = Math.min(b.sbDelay * 2, 300000);
+      b.sbDirty = true;
+    }
+  }
+  b.sbRunning = false;
+}
+
+async function sbRowGet(table, filters) {
+  const res = await fetchT(`${SB_URL}/rest/v1/${table}?select=doc&${filters}`, { headers: sbHeaders() });
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + String(await res.text().catch(() => '')).slice(0, 160));
+  const rows = await res.json();
+  return Array.isArray(rows) && rows.length && rows[0] && rows[0].doc ? rows[0].doc : null;
+}
+
+/** Boot restore: file cache first, then remote (remote wins when fresher). */
+async function loadBucket(b) {
+  fileLoad(b);
+  if (!sbEnabled()) { b.loaded = true; return; }
+  try {
+    const tgt = sbUpsert(b);
+    const filt = tgt.rowKey.id ? 'id=eq.1' : 'owner=eq.' + encodeURIComponent(b.username);
+    const doc = await sbRowGet(tgt.table, filt);
+    if (doc) {
+      const remote = normalizeState(doc);
+      if (remote.rev >= b.state.rev) {
+        b.state = remote;
+        fileSave(b);
+        console.log(`[zerotodo] ${b.username}: restored from Supabase (rev ${remote.rev}, ${remote.tasks.length} tasks)`);
+      } else {
+        b.sbDirty = true;
+      }
+    } else if (b.state.rev > 0 || b.state.tasks.length) {
+      b.sbDirty = true; // cache has data the table doesn't → seed
+    }
+    if (b.sbDirty) scheduleRemoteSave(b);
+    else b.loaded = true;
+    b.loaded = true;
+  } catch (e) {
+    console.error(`[zerotodo] ${b.username}: supabase unreachable at boot (${(e && e.message) || e}) — file cache in use, retrying in background`);
+    scheduleRemoteSave(b);
+    b.loaded = true;
   }
 }
 
-// keepalive so proxies don't idle-kill the stream
+function bootBucket(b) { return loadBucket(b); }
+
+/* ------------------------------ Accounts store ------------------------------ */
+
+function accountsFromFile() {
+  try {
+    if (fs.existsSync(ACCOUNTS_FILE)) {
+      const d = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8'));
+      if (d && d.users && typeof d.users === 'object') return d;
+    }
+  } catch (e) { console.error('[zerotodo] accounts file unreadable:', e.message); }
+  return { users: {} };
+}
+
+function accountsToFile(d) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = ACCOUNTS_FILE + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(d));
+    fs.renameSync(tmp, ACCOUNTS_FILE);
+  } catch (e) { console.error('[zerotodo] accounts file write failed:', e.message); }
+}
+
+async function listAccounts() {
+  if (!sbEnabled()) {
+    // file mode stores {salt, hash}; expose the same shape as the Postgres rows
+    return Object.entries(accountsFromFile().users).map(([username, u]) => ({
+      username, salt: u.salt, pass_hash: u.hash, created: u.created,
+    }));
+  }
+  const res = await fetchT(`${SB_URL}/rest/v1/${SB_USERS_TABLE}?select=username,pass_hash,salt`, { headers: sbHeaders() });
+  if (!res.ok) throw new Error('users table HTTP ' + res.status + ' — has the SQL from README-ONLINE.md been run?');
+  return await res.json();
+}
+
+async function signup(username, password) {
+  if (!USERNAME_RE.test(username)) throw err(400, 'username: 3–32 chars, lowercase letters, numbers, dots, dashes, underscores; must start with a letter/number');
+  if (RESERVED.has(username)) throw err(400, 'that username is reserved — pick another');
+  if (typeof password !== 'string' || password.length < 8 || password.length > 128) throw err(400, 'password must be 8–128 characters');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+
+  if (!sbEnabled()) {
+    const d = accountsFromFile();
+    if (d.users[username]) throw err(409, 'that username is taken');
+    const firstUser = Object.keys(d.users).length === 0;
+    d.users[username] = { salt, hash, created: Date.now() };
+    accountsToFile(d);
+    if (firstUser) await adoptLegacyInto(username);
+  } else {
+    const existing = await listAccounts();
+    if (existing.some((u) => u.username === username)) throw err(409, 'that username is taken');
+    const firstUser = existing.length === 0;
+    const res = await fetchT(`${SB_URL}/rest/v1/${SB_USERS_TABLE}`, {
+      method: 'POST',
+      headers: { ...sbHeaders(), Prefer: 'return=minimal, resolution=merge-duplicates' },
+      body: JSON.stringify({ username, pass_hash: hash, salt }),
+    });
+    if (!res.ok) throw err(502, 'could not save account: ' + (await res.text().catch(() => '')).slice(0, 120));
+    if (firstUser) await adoptLegacyInto(username);
+  }
+  return makeSession(username);
+}
+
+async function login(username, password) {
+  if (!USERNAME_RE.test(username)) return null;
+  const accounts = await listAccounts().catch((e) => { throw err(502, e.message); });
+  const u = accounts.find((a) => a.username === username);
+  if (!u) return null;
+  const hash = passwordFromUser(u, password);
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(String(u.pass_hash), 'hex'))) return null;
+  } catch (_) { return null; }
+  return makeSession(username);
+}
+
+/** First account ever created inherits the pre-accounts single-user dataset. */
+async function adoptLegacyInto(username) {
+  try {
+    let legacy = null;
+    if (!sbEnabled()) {
+      if (fs.existsSync(STATE_FILE)) legacy = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    } else {
+      legacy = await sbRowGet(SB_LEGACY_TABLE, 'id=eq.1');
+    }
+    if (legacy && (legacy.rev > 0 || (Array.isArray(legacy.tasks) && legacy.tasks.length))) {
+      const nb = bucketFor(username);
+      await nb.ready;
+      nb.state = normalizeState({ ...legacy });
+      persist(nb);
+      console.log(`[zerotodo] first account '${username}' adopted legacy data (${nb.state.tasks.length} task(s))`);
+    }
+  } catch (e) {
+    console.warn('[zerotodo] legacy adoption skipped:', e.message);
+  }
+}
+
+function err(status, message) { const e = new Error(message); e.status = status; return e; }
+
+/* -------------------------------- SSE clients ------------------------------- */
+
+function broadcast(b, eventObj, exceptId) {
+  const data = 'data: ' + JSON.stringify(eventObj) + '\n\n';
+  for (const res of b.sse) {
+    if (exceptId && res.__ztId === exceptId) continue;
+    try { res.write(data); } catch (_) { b.sse.delete(res); }
+  }
+}
+
 setInterval(() => {
-  for (const res of sseClients) { try { res.write(': ping\n\n'); } catch (_) {} }
+  for (const b of BUCKETS.values()) {
+    for (const res of b.sse) { try { res.write(': ping\n\n'); } catch (_) { b.sse.delete(res); } }
+  }
 }, 25000).unref();
 
 /* -------------------------------- HTTP core -------------------------------- */
@@ -487,7 +593,6 @@ function sendJSON(res, code, obj, extraHeaders) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
     ...extraHeaders,
   });
   res.end(body);
@@ -514,12 +619,11 @@ function serveStatic(res, urlPath) {
   if (!filePath.startsWith(PUBLIC_DIR + path.sep) && filePath !== PUBLIC_DIR) {
     res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('forbidden');
   }
-  fs.readFile(filePath, (err, buf) => {
-    if (err) {
-      // SPA-ish fallback: unknown non-file path → index.html (404s only for missing assets with an extension)
+  fs.readFile(filePath, (err2, buf) => {
+    if (err2) {
       if (!path.extname(filePath)) {
-        return fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (e2, index) => {
-          if (e2) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }
+        return fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (e3, index) => {
+          if (e3) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }
           res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' });
           res.end(index);
         });
@@ -539,45 +643,77 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
 
-  // CORS preflight (only matters if someone hosts the frontend elsewhere)
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization,Content-Type',
-      'Access-Control-Max-Age': '600',
-    });
-    return res.end();
-  }
-
   try {
     if (p === '/api/config') {
       return sendJSON(res, 200, {
-        app: 'zerotodo-server', version: 2, authRequired: authRequired(),
+        app: 'zerotodo-server', version: 3, authRequired: authRequired(),
         storage: sbEnabled() ? 'supabase (Postgres) + local cache' : 'local file only',
-        remote: sbEnabled() ? { lastSavedAt: sbLastOk || null, lastError: sbLastError || null } : null,
       });
     }
 
-    // Static files are NOT gated: the app shell contains no user data — the
-    // data only comes from the authenticated /api/* endpoints below.
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+        'Access-Control-Allow-Headers': 'Authorization,Content-Type',
+        'Access-Control-Max-Age': '600',
+      });
+      return res.end();
+    }
+
+    // Static files are not gated: the app shell carries no user data.
     if (!p.startsWith('/api/')) {
       if (req.method !== 'GET') { res.writeHead(405); return res.end(); }
       return serveStatic(res, p);
     }
 
-    if (!checkAuth(req, url)) {
-      return sendJSON(res, 401, { error: 'unauthorized', hint: 'Set the passkey in ⚙ Settings → Cloud sync' });
+    /* -------- auth endpoints (no session needed; rate-limited) -------- */
+
+    if (p === '/api/signup' && req.method === 'POST') {
+      if (!authRequired()) return sendJSON(res, 400, { error: 'accounts are off while the server runs in open mode (ZT_OPEN=1)' });
+      if (tooManyAttempts(req.socket.remoteAddress || '?')) return sendJSON(res, 429, { error: 'too many attempts, try again in a few minutes' });
+      let body; try { body = JSON.parse(await readBody(req)); } catch (_) { body = {}; }
+      try {
+        const uname = String(body.username || '').toLowerCase().trim();
+        const token = await signup(uname, body.password);
+        return sendJSON(res, 200, { ok: true, username: uname, token });
+      } catch (e) {
+        return sendJSON(res, e.status || 500, { error: e.message });
+      }
     }
 
+    if (p === '/api/login' && req.method === 'POST') {
+      if (!authRequired()) return sendJSON(res, 200, { ok: true, username: 'shared', token: TOKEN || 'open' });
+      if (tooManyAttempts(req.socket.remoteAddress || '?')) return sendJSON(res, 429, { error: 'too many attempts, wait a few minutes' });
+      let body; try { body = JSON.parse(await readBody(req)); } catch (_) { body = {}; }
+      try {
+        const uname = String(body.username || '').toLowerCase().trim();
+        const token = await login(uname, body.password);
+        if (!token) return sendJSON(res, 401, { error: 'wrong username or password' });
+        return sendJSON(res, 200, { ok: true, username: uname, token });
+      } catch (e) {
+        return sendJSON(res, e.status || 500, { error: e.message });
+      }
+    }
+
+    if (p === '/api/logout' && req.method === 'POST') return sendJSON(res, 200, { ok: true });
+
+    /* -------- session identity for everything below -------- */
+
+    const user = userFromReq(req, url);
+    if (!user) return sendJSON(res, 401, { error: 'login required' });
+
+    if (p === '/api/me') return sendJSON(res, 200, { ok: true, username: user });
+
+    const b = bucketFor(user);
+    await b.ready; // bucket boot (file + remote) must settle first
+
     if (p === '/api/state' && req.method === 'GET') {
-      await readyPromise; // boot-restore (remote) must settle before serving
-      if (pruneExpired()) persist();
-      return sendJSON(res, 200, state);
+      if (pruneExpired(b)) persist(b);
+      return sendJSON(res, 200, b.state);
     }
 
     if (p === '/api/sync' && req.method === 'POST') {
-      await readyPromise; // never merge against pre-restore state
       let body;
       try { body = JSON.parse(await readBody(req)); }
       catch (e) { return sendJSON(res, 400, { error: 'bad json: ' + e.message }); }
@@ -586,15 +722,11 @@ const server = http.createServer(async (req, res) => {
       }
       const baseRev = Number(body.baseRev);
       let conflicted = false;
-      if (Number.isFinite(baseRev) && baseRev !== state.rev && body.mode !== 'replace') {
-        conflicted = true; // another device moved ahead → merge instead of trusting base
-      }
+      if (Number.isFinite(baseRev) && baseRev !== b.state.rev && body.mode !== 'replace') conflicted = true;
       if (!Number.isFinite(baseRev) && body.mode !== 'replace') conflicted = true;
-
-      // 'replace' skips conflict detection by design (explicit Import).
-      const changed = ingest({ ...body, mode: conflicted ? 'merge' : (body.mode === 'replace' ? 'replace' : 'merge') });
-      if (changed) broadcast({ type: 'sync', rev: state.rev, origin: String(body.clientId || '') }, String(body.clientId || ''));
-      return sendJSON(res, 200, { ...state, conflicted });
+      const changed = ingest(b, { ...body, mode: conflicted ? 'merge' : (body.mode === 'replace' ? 'replace' : 'merge') });
+      if (changed) broadcast(b, { type: 'sync', rev: b.state.rev, origin: String(body.clientId || '') }, String(body.clientId || ''));
+      return sendJSON(res, 200, { ...b.state, conflicted });
     }
 
     if (p === '/api/events' && req.method === 'GET') {
@@ -603,13 +735,13 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-cache, no-transform',
         'Connection': 'keep-alive',
         'Access-Control-Allow-Origin': '*',
-        'X-Accel-Buffering': 'no', // nginx: don't buffer the stream
+        'X-Accel-Buffering': 'no',
       });
       res.write('retry: 3000\n\n');
-      res.write('data: ' + JSON.stringify({ type: 'hello', rev: state.rev }) + '\n\n');
+      res.write('data: ' + JSON.stringify({ type: 'hello', rev: b.state.rev }) + '\n\n');
       res.__ztId = url.searchParams.get('id') || '';
-      sseClients.add(res);
-      const cleanup = () => sseClients.delete(res);
+      b.sse.add(res);
+      const cleanup = () => b.sse.delete(res);
       req.on('close', cleanup);
       res.on('error', cleanup);
       return;
@@ -625,23 +757,22 @@ const server = http.createServer(async (req, res) => {
 /* ------------------------------ Startup / shutdown ------------------------- */
 
 initAuth();
-loadState();
-const readyPromise = loadRemote().then(() => {
-  if (sbEnabled()) console.log('[zerotodo] remote persistence active: ' + SB_URL + ' (table ' + SB_TABLE + ')');
-});
 
 server.listen(PORT, HOST, () => {
   console.log(`[zerotodo] server on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
-  console.log(`[zerotodo] data file: ${STATE_FILE}`);
-  console.log(`[zerotodo] auth: ${authRequired() ? 'passkey required' : 'OPEN (set ZT_TOKEN for internet deployment)'}`);
+  console.log(`[zerotodo] data dir: ${DATA_DIR}`);
+  console.log(`[zerotodo] auth: ${authRequired() ? 'user accounts (signup/login)' : 'OPEN (single shared list — set ZT_TOKEN for accounts)'} | storage: ${sbEnabled() ? 'supabase + file cache' : 'file only'}`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
-    saveNow();
-    await remoteFlushOnce(3000); // give a healthy render redeploy the durable copy
+    for (const b of BUCKETS.values()) { clearTimeout(b.saveTimer); fileSave(b); }
+    await Promise.race([
+      Promise.all([...BUCKETS.values()].map(async (b) => { if (b.sbDirty) { try { await remotePut(b); b.sbDirty = false; } catch (_) {} } })),
+      sleep(3000),
+    ]);
     console.log('[zerotodo] state saved, bye.');
     process.exit(0);
   });
 }
-process.on('exit', saveNow);
+process.on('exit', () => { for (const b of BUCKETS.values()) { try { fileSave(b); } catch (_) {} } });

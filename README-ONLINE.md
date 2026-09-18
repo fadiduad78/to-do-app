@@ -5,6 +5,8 @@ Your local-first app keeps its zero-data-loss guarantees, and every change is no
 
 - ✅ Data survives **clearing browser data / private mode / reinstalling the browser**
 - ✅ Open the same list from **your phone, laptop, any browser** — it syncs live
+- ✅ **Your own account** (username + password) — data is private per user, and
+  there are no passkeys to paste: server secrets live only in the server's env
 - ✅ Two devices open at once? Changes converge in ~1 second (server-sent events)
 - ✅ **Works offline too**: it's local-first — if the server is unreachable the app
   keeps working on this browser's storage and re-syncs when the connection returns
@@ -38,17 +40,36 @@ the server talks to it over plain HTTPS, still zero npm dependencies.
 
 **Step A — create the free database (2 min):**
 1. [supabase.com](https://supabase.com) → **Start your project** (log in with GitHub) → new project, any name, strong DB password, region near you — **free plan**
-2. Open **SQL Editor** → paste & run:
+2. Open **SQL Editor** → paste & run (one shot, safe to re-run):
    ```sql
-   create table public.zerotodo_state (
+   create table if not exists public.zerotodo_state (
      id int primary key default 1,
      doc jsonb not null,
      updated_at timestamptz default now()
    );
+   create table if not exists public.zerotodo_state_by_user (
+     owner text primary key,
+     doc jsonb not null,
+     updated_at timestamptz default now()
+   );
+   create table if not exists public.zerotodo_users (
+     username text primary key,
+     pass_hash text not null,
+     salt text not null,
+     created_at timestamptz default now()
+   );
    alter table public.zerotodo_state enable row level security;
+   alter table public.zerotodo_state_by_user enable row level security;
+   alter table public.zerotodo_users enable row level security;
+   notify pgrst, 'reload schema';
    ```
-   (RLS with no policies = anon/browser keys can read nothing; only the
-   service key below can touch the row. Your tasks are never public.)
+   `zerotodo_state` is the legacy single-user row — after the update, the
+   **first account you create automatically adopts its contents**, then that
+   table keeps serving only the `admin` backdoor bucket. RLS with no policies
+   = anon/browser keys can read nothing; only the service key below can touch
+   the rows. Your tasks are never public.
+   (Already have the first table from the earlier setup? Only run the two new
+   `create table` blocks + their `alter` lines + the `notify`.)
 3. **Settings → Data API** (or “API” in older UI): copy the **Project URL**
    (`https://xxxx.supabase.co`) and the **`service_role` secret key**.
    ⚠️ The service_role key goes on the SERVER only (env var) — never paste it
@@ -61,10 +82,13 @@ the server talks to it over plain HTTPS, still zero npm dependencies.
    secret values** during Apply.
 2. Enter `ZT_SUPABASE_URL` = your Project URL, `ZT_SUPABASE_KEY` = the
    `service_role` key. (Leave `ZT_TOKEN` to Render's auto-generated value.)
-3. Deploy → open the new URL → ⚙ Settings → Cloud sync → paste `ZT_TOKEN`’s
-   value (service → **Environment** tab) → **Apply & sync now**.
-4. Phone: same URL + passkey. Done — data now survives restarts, redeploys and
-   cleared browsers.
+3. Deploy → open the new URL → a **sign-in card appears** → **Create account**
+   (pick a username + a password of 8+ chars). That's the whole setup — no
+   passkey anywhere. The account is created once, on the server; each device
+   only logs in.
+4. Phone: same URL → **sign in** with the same username + password. Done —
+   data now survives restarts, redeploys and cleared browsers, and each
+   account sees only its own list.
 
 Verify it’s really persistent (30 s): add a task → Render dashboard → your
 service → **Options → Trigger manual deploy** → when it comes back up, the
@@ -139,11 +163,20 @@ safety copy — nothing is silently overwritten.)
 
 ## Security notes (please read)
 
-- The passkey (`ZT_TOKEN`) is the only lock on your data. Make it long and random,
-  and **never deploy with `ZT_OPEN=1` on the public internet** — that disables auth.
-- Always use the `https://` URL so the passkey and tasks aren't sent in clear text.
-- This is one shared list (no per-user accounts). Easy to extend later if you want
-  multiple rooms/users.
+- Your **account password** is now the lock on your data — pick a real one.
+  Passwords are stored scrypt-hashed + salted; sessions are signed with
+  `ZT_TOKEN` (Render's generated value) which never leaves the server.
+- `ZT_TOKEN` also remains a hidden **admin backdoor** bearer (legacy bucket).
+  If you want it fully closed, remove the row — but sessions then stop
+  validating across secret changes, so leave it alone unless you know why.
+- **Never deploy with `ZT_OPEN=1` on the public internet** — it disables all auth.
+- Always use the `https://` URL so passwords and tasks aren't sent in clear text.
+- **Accounts:** each username gets a private bucket (own row in
+  `zerotodo_state_by_user`). Signup is open to anyone who can reach the URL —
+  if you want it invite-only, the simplest control is keeping the URL to
+  yourself (nothing links to it publicly) or later adding a signup allowlist.
+- Logging out clears the session on that device; your data stays on the server
+  and in that browser's local cache until the next sign-in replaces it.
 
 ## How sync behaves (FAQ)
 
@@ -163,6 +196,7 @@ safety copy — nothing is silently overwritten.)
 ## Test it (dev)
 
 ```bash
-node server/test.mjs         # server: auth, merge, tombstones, replace, persistence, SSE
-node server/test-client.mjs  # runs the real public/cloud.js against a live server
+node server/test.mjs          # 38 checks: accounts, sessions, merge, tombstones, replace, persistence, SSE
+node server/test-supabase.mjs # 24 checks: mock PostgREST — free-plan restart survival, per-user rows, adoption
+node server/test-client.mjs   # 13 checks: the real public/cloud.js against a live server
 ```
