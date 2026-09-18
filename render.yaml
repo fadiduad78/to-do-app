@@ -9,12 +9,15 @@ services:
     healthCheckPath: /api/config
     envVars:
       - key: ZT_TOKEN
-        generateValue: true          # Render generates a secret; find it under the service's Environment tab
+        generateValue: true          # Render generates the passkey; see service → Environment after deploy
       - key: NODE_VERSION
         value: "20"
-      - key: ZT_DATA_DIR
-        value: /var/data/zerotodo    # must live on the disk path below, not in the repo dir
-    disk:
-      name: zerotodo-data            # 1 GB = the free-plan allowance
-      mountPath: /var/data
-      sizeGB: 1
+      # The free plan has NO persistent disk, so the durable copy lives in a
+      # free Supabase Postgres row (setup: README-ONLINE.md → "Persistence
+      # without a disk"). sync:false = you type the secret in, Render stores
+      # it privately. Without these vars the server still runs, but data only
+      # lives on an ephemeral filesystem — do NOT skip them on the free plan.
+      - key: ZT_SUPABASE_URL
+        sync: false
+      - key: ZT_SUPABASE_KEY
+        sync: false

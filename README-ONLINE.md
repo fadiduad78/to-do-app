@@ -30,25 +30,55 @@ resurrected by an old device pushing its stale copy.
 
 > The URL in this sandbox is a **temporary demo** — use one of these for real.
 
-### Option 1 — Render (free, no server to manage, ~5 minutes) ⭐ recommended
+### Option 1 — Render free + Supabase free (no card, ~10 minutes) ⭐ recommended
 
-1. Put this folder in a GitHub repo (everything except `data/` — already in `.gitignore`).
-2. On [render.com](https://render.com): **New → Blueprint** and pick the repo
-   (it reads `render.yaml`: Node 20, health check, 1 GB persistent disk so your
-   `state.json` survives redeploys).
-3. After it builds you get a URL like `https://zerotodo.onrender.com`.
-4. Open it → ☁ pill says **“Passkey needed”** → ⚙ Settings → Cloud sync → paste the
-   value of `ZT_TOKEN` (Render generated one for you — see service → Environment;
-   change it to your own long random string) → **Apply & sync now**.
-5. On your phone: open the same URL, paste the same passkey once. Done — both
-   devices share one online list.
+Render's **free plan has no persistent disk** (disks are paid), so on free the
+durable copy of your data lives in a free **Supabase Postgres** row instead —
+the server talks to it over plain HTTPS, still zero npm dependencies.
 
-No Blueprint? Manual: **New → Web Service** → Node runtime, build command `true`,
-start command `node server/server.js`, add a **Disk** at path `/var/data` (1 GB on the
-free plan) and env var `ZT_DATA_DIR=/var/data/zerotodo`.
+**Step A — create the free database (2 min):**
+1. [supabase.com](https://supabase.com) → **Start your project** (log in with GitHub) → new project, any name, strong DB password, region near you — **free plan**
+2. Open **SQL Editor** → paste & run:
+   ```sql
+   create table public.zerotodo_state (
+     id int primary key default 1,
+     doc jsonb not null,
+     updated_at timestamptz default now()
+   );
+   alter table public.zerotodo_state enable row level security;
+   ```
+   (RLS with no policies = anon/browser keys can read nothing; only the
+   service key below can touch the row. Your tasks are never public.)
+3. **Settings → Data API** (or “API” in older UI): copy the **Project URL**
+   (`https://xxxx.supabase.co`) and the **`service_role` secret key**.
+   ⚠️ The service_role key goes on the SERVER only (env var) — never paste it
+   into a browser or share it.
 
-> If a Blueprint deploy errors on the yaml, **Delete** the failed blueprint in the
-> Render dashboard and run **New → Blueprint** again so it re-reads the repo.
+**Step B — deploy on Render:**
+1. Push this folder to a GitHub repo, then [render.com](https://render.com) →
+   **New → Blueprint** → pick the repo. It reads `render.yaml`: free web
+   service, health check on `/api/config`, and it will **ask you for two
+   secret values** during Apply.
+2. Enter `ZT_SUPABASE_URL` = your Project URL, `ZT_SUPABASE_KEY` = the
+   `service_role` key. (Leave `ZT_TOKEN` to Render's auto-generated value.)
+3. Deploy → open the new URL → ⚙ Settings → Cloud sync → paste `ZT_TOKEN`’s
+   value (service → **Environment** tab) → **Apply & sync now**.
+4. Phone: same URL + passkey. Done — data now survives restarts, redeploys and
+   cleared browsers.
+
+Verify it’s really persistent (30 s): add a task → Render dashboard → your
+service → **Options → Trigger manual deploy** → when it comes back up, the
+task is still there (restored from Postgres), and `/api/config` shows
+`"storage": "supabase (Postgres) + local cache"`.
+
+Skipped step 2 (no Supabase vars)? The app still works, but the filesystem is
+**ephemeral on the free plan** — data can vanish at any redeploy. Configure
+Supabase before you start adding real tasks.
+Prefer paying $7/mo instead of the Supabase setup? Switch `plan: free` to
+`plan: starter` in `render.yaml` and add a `disk:` block back
+(`disk: { name: zerotodo-data, mountPath: /var/data, sizeGB: 1 }`) — disks work
+on paid plans, and then `ZT_DATA_DIR=/var/data/zerotodo` does the whole job.
+
 
 ### Option 2 — Docker (any host: Fly.io, Hetzner, a Raspberry Pi at home…)
 
@@ -123,9 +153,10 @@ safety copy — nothing is silently overwritten.)
   then the edit wins. Tombstones expire after 30 days.
 - **Offline** → everything works locally; the ☁ pill shows *Offline — saved
   locally*; it re-syncs automatically when the connection returns.
-- **Server restarts** → `data/state.json` reloads; nothing to do. Keep that file
-  (or the disk/volume) backed up — it IS your data. The app's Export button still
-  gives you a portable copy.
+- **Server restarts / redeploys** → with Supabase configured, state is restored
+  from the Postgres row (that's the whole point of it); file-only mode reloads
+  `data/state.json`. The app's Export button still gives you a portable copy
+  of everything at any time.
 - **Multiple browser tabs** → the original BroadcastChannel cross-tab sync still
   works; the server event stream keeps tabs from different devices in step.
 

@@ -7,6 +7,11 @@
  *   2. Persists the full app state (tasks, trash, settings, deletion
  *      tombstones) to ./data/state.json with atomic writes (tmp + rename),
  *      so the data survives restarts, crashes and browser-data clearing.
+ *      With ZT_SUPABASE_URL + ZT_SUPABASE_KEY set, every change is also
+ *      mirrored to a single Postgres row over plain HTTPS (PostgREST) and
+ *      restored from there on boot — this is what makes the free Render plan
+ *      (ephemeral filesystem) safe. Retries with backoff; a dead remote never
+ *      blocks the API.
  *   3. Merges concurrent changes from multiple devices with a per-record
  *      last-write-wins rule (freshest `updatedAt` wins; a delete only wins
  *      if nothing edited the record afterwards — enforced via tombstones).
@@ -49,6 +54,17 @@ const TOKEN_FILE = path.join(DATA_DIR, 'token.txt');
 const MAX_BODY = 8 * 1024 * 1024;                 // 8 MB is generous for a todo app
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // keep in sync with storage.js
 const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // deletions remembered 30 days
+
+/* Remote persistence (optional, zero-dep): a single JSON row in Postgres,
+ * reached over plain HTTPS via PostgREST (e.g. a free Supabase project).
+ * Render's free plan has no persistent disk, so state.json alone would be lost
+ * on restart — the remote row is the durable copy; the file is a local cache.
+ * Unset the env vars and the server runs file-only (fine for a real VPS or
+ * Docker with a volume). */
+const SB_URL = (process.env.ZT_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+const SB_KEY = (process.env.ZT_SUPABASE_KEY || '').trim();
+const SB_TABLE = (process.env.ZT_SUPABASE_TABLE || 'zerotodo_state').trim();
+const sbEnabled = () => Boolean(SB_URL && SB_KEY);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -154,6 +170,115 @@ function saveNow() {
     lastLoadedMtime = fs.statSync(STATE_FILE).mtimeMs;
   } catch (e) {
     console.error('[zerotodo] Failed to persist state:', e.message);
+  }
+}
+
+/* ------------------------ Remote persistence (Supabase/PostgREST) --------- */
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function fetchT(url, opts, ms) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms || 15000);
+  return fetch(url, { ...opts, signal: ctl.signal, cache: 'no-store' }).finally(() => clearTimeout(t));
+}
+
+function sbHeaders() {
+  return { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
+}
+
+let sbDirty = false;
+let sbRunning = false;
+let sbDelay = 4000;
+let sbLastOk = 0;
+let sbLastError = '';
+
+/** durable-write funnel: local file cache + (if configured) the remote row */
+function persist() {
+  scheduleSave();
+  scheduleRemoteSave();
+}
+
+function scheduleRemoteSave() {
+  sbDirty = true;
+  if (!sbEnabled() || sbRunning) return;
+  runRemoteSaveLoop().catch(() => { sbRunning = false; });
+}
+
+async function runRemoteSaveLoop() {
+  sbRunning = true;
+  while (sbDirty) {
+    sbDirty = false;
+    try {
+      const res = await fetchT(`${SB_URL}/rest/v1/${SB_TABLE}`, {
+        method: 'POST',
+        headers: { ...sbHeaders(), Prefer: 'return=minimal, resolution=merge-duplicates' },
+        body: JSON.stringify({ id: 1, doc: state }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + String(await res.text().catch(() => '')).slice(0, 160));
+      sbLastOk = Date.now();
+      sbLastError = '';
+      sbDelay = 4000;
+    } catch (e) {
+      sbLastError = String((e && e.message) || e);
+      console.warn('[zerotodo] Supabase save failed (' + sbLastError + ') — retry in ' + (sbDelay / 1000) + 's. File cache still holds the data.');
+      await sleep(sbDelay);
+      sbDelay = Math.min(sbDelay * 2, 300000); // backoff up to 5 min
+      sbDirty = true;
+    }
+  }
+  sbRunning = false;
+}
+
+/** One-shot attempt used on shutdown (bounded by a timeout so exit never hangs). */
+async function remoteFlushOnce(timeoutMs) {
+  if (!sbEnabled() || !sbDirty) return true;
+  try {
+    await Promise.race([
+      (async () => {
+        const res = await fetchT(`${SB_URL}/rest/v1/${SB_TABLE}`, {
+          method: 'POST',
+          headers: { ...sbHeaders(), Prefer: 'return=minimal, resolution=merge-duplicates' },
+          body: JSON.stringify({ id: 1, doc: state }),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+      })(),
+      sleep(timeoutMs),
+    ]);
+    sbDirty = false;
+    return true;
+  } catch (_) { return false; }
+}
+
+/**
+ * Boot restore: remote row wins when it is at least as fresh as the local
+ * cache (fresh instance → empty file, remote has everything). Both agree
+ * afterwards: whichever wins is pushed to the other copy.
+ */
+async function loadRemote() {
+  if (!sbEnabled()) return;
+  try {
+    const res = await fetchT(`${SB_URL}/rest/v1/${SB_TABLE}?select=doc&id=eq.1`, { headers: sbHeaders() });
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + String(await res.text().catch(() => '')).slice(0, 160));
+    const rows = await res.json();
+    if (Array.isArray(rows) && rows.length && rows[0] && rows[0].doc) {
+      const remote = normalizeState(rows[0].doc);
+      if (remote.rev >= state.rev) {
+        state = remote;
+        saveNow();
+        console.log(`[zerotodo] restored from Supabase: rev ${state.rev}, ${state.tasks.length} task(s)`);
+      } else {
+        console.log('[zerotodo] local file cache is newer than the Supabase row — keeping it and re-uploading');
+        sbDirty = true;
+      }
+    } else {
+      console.log('[zerotodo] Supabase table empty — uploading current state');
+      sbDirty = true;
+    }
+    if (sbDirty) scheduleRemoteSave();
+  } catch (e) {
+    console.error('[zerotodo] Supabase unreachable at boot (' + ((e && e.message) || e) + ') — continuing with file cache; background retry scheduled.');
+    scheduleRemoteSave(); // the loop will keep trying with backoff until it connects
   }
 }
 
@@ -333,7 +458,7 @@ function ingest(body) {
     rev: state.rev + 1,
   };
   pruneExpired();
-  saveNow();
+  persist();
   return changed;
 }
 
@@ -427,7 +552,11 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === '/api/config') {
-      return sendJSON(res, 200, { app: 'zerotodo-server', version: 1, authRequired: authRequired() });
+      return sendJSON(res, 200, {
+        app: 'zerotodo-server', version: 2, authRequired: authRequired(),
+        storage: sbEnabled() ? 'supabase (Postgres) + local cache' : 'local file only',
+        remote: sbEnabled() ? { lastSavedAt: sbLastOk || null, lastError: sbLastError || null } : null,
+      });
     }
 
     // Static files are NOT gated: the app shell contains no user data — the
@@ -442,11 +571,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/state' && req.method === 'GET') {
-      if (pruneExpired()) saveNow();
+      await readyPromise; // boot-restore (remote) must settle before serving
+      if (pruneExpired()) persist();
       return sendJSON(res, 200, state);
     }
 
     if (p === '/api/sync' && req.method === 'POST') {
+      await readyPromise; // never merge against pre-restore state
       let body;
       try { body = JSON.parse(await readBody(req)); }
       catch (e) { return sendJSON(res, 400, { error: 'bad json: ' + e.message }); }
@@ -495,6 +626,9 @@ const server = http.createServer(async (req, res) => {
 
 initAuth();
 loadState();
+const readyPromise = loadRemote().then(() => {
+  if (sbEnabled()) console.log('[zerotodo] remote persistence active: ' + SB_URL + ' (table ' + SB_TABLE + ')');
+});
 
 server.listen(PORT, HOST, () => {
   console.log(`[zerotodo] server on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
@@ -503,8 +637,9 @@ server.listen(PORT, HOST, () => {
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
+  process.on(sig, async () => {
     saveNow();
+    await remoteFlushOnce(3000); // give a healthy render redeploy the durable copy
     console.log('[zerotodo] state saved, bye.');
     process.exit(0);
   });
