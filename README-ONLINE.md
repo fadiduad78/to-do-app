@@ -44,8 +44,11 @@ resurrected by an old device pushing its stale copy.
    devices share one online list.
 
 No Blueprint? Manual: **New → Web Service** → Node runtime, build command `true`,
-start command `node server/server.js`, add a **Disk** at path `/var/data/zerotodo`
-and env var `ZT_DATA_DIR=/var/data/zerotodo`.
+start command `node server/server.js`, add a **Disk** at path `/var/data` (1 GB on the
+free plan) and env var `ZT_DATA_DIR=/var/data/zerotodo`.
+
+> If a Blueprint deploy errors on the yaml, **Delete** the failed blueprint in the
+> Render dashboard and run **New → Blueprint** again so it re-reads the repo.
 
 ### Option 2 — Docker (any host: Fly.io, Hetzner, a Raspberry Pi at home…)
 

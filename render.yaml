@@ -1,3 +1,4 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
 services:
   - type: web
     name: zerotodo
@@ -8,12 +9,12 @@ services:
     healthCheckPath: /api/config
     envVars:
       - key: ZT_TOKEN
-        generateValue: true
+        generateValue: true          # Render generates a secret; find it under the service's Environment tab
       - key: NODE_VERSION
         value: "20"
       - key: ZT_DATA_DIR
-        value: /var/data/zerotodo
-    persistentDisk:
-      name: zerotodo-data
-      mountPath: /var/data/zerotodo
+        value: /var/data/zerotodo    # must live on the disk path below, not in the repo dir
+    disk:
+      name: zerotodo-data            # 1 GB = the free-plan allowance
+      mountPath: /var/data
       sizeGB: 1
