@@ -4138,11 +4138,13 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     let ops;
     if (S.ui.editingId && byId(S.ui.editingId)) {
       const t = byId(S.ui.editingId);
+      const prevDue = { dueDate: t.dueDate, dueTime: t.dueTime };
       Object.assign(t, {
         title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
         priority: v.priority, tags: v.tags, projectId: v.projectId, recurrence: v.recurrence, updatedAt: now,
       });
       ops = [{ store: STORES.tasks, op: 'put', value: t }];
+      await askShiftCustomReminders(t, v.remRows, prevDue);
       remSyncTask(t, v.remRows, ops);
     } else {
       // New tasks slot in at the top (lowest sortOrder).
@@ -5440,6 +5442,42 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     }
     if (droppedNoDate) toast(droppedNoDate + ' reminder(s) need a due date on the task — not saved.');
     return created;
+  }
+
+  /** Due-date policy (unified scheduling): relative reminders always ride the
+   *  new due; CUSTOM reminders are absolute wall-clock choices, so a due move
+   *  never rewrites them silently — the user is asked, and the default
+   *  ("Keep them") preserves them. Shifting moves existing rows by the exact
+   *  due delta so a "day before, 10 PM" intent survives a day-long slip. */
+  async function askShiftCustomReminders(t, rows, prevDue) {
+    const existing = (rows || []).filter((rw) => rw.id && rw.reminderType === 'custom');
+    if (!existing.length) return;
+    const oldB = dueEpochFor(prevDue);
+    const newB = dueEpochFor(t);
+    if (oldB == null || newB == null || oldB === newB) return;
+    const delta = newB - oldB;
+    const s = Math.round(Math.abs(delta) / 1000);
+    const dd = Math.floor(s / 86400), hh = Math.floor((s % 86400) / 3600), mi = Math.floor((s % 3600) / 60);
+    const span = (dd ? dd + (dd === 1 ? ' day' : ' days') : '')
+      + (dd && (hh || mi) ? ', ' : '') + (hh ? hh + (hh === 1 ? ' hour' : ' hours') : '')
+      + ((dd || hh) && mi ? ', ' : '') + (mi || (!dd && !hh) ? (mi || 1) + (mi === 1 ? ' minute' : ' minutes') : '');
+    const shift = await confirmDialog({
+      title: 'Move custom reminders too?',
+      body: 'The due date moved ' + span + ' ' + (delta > 0 ? 'later' : 'earlier') + '. Move '
+        + existing.length + ' custom reminder(s) by the same amount, or keep the times you picked?',
+      confirmLabel: 'Shift with due',
+      cancelLabel: 'Keep them',
+    });
+    if (!shift) return;
+    for (const rw of existing) {
+      const rec = S.reminders.find((x) => x.id === rw.id && x.taskId === t.id);
+      if (!rec) continue;
+      const base = localEpoch(rw.customDate || rec.customDate, rw.customTime || rec.customTime, '09:00');
+      if (base == null) continue;
+      const nd = new Date(base + delta);
+      rw.customDate = ymd(nd);
+      rw.customTime = String(nd.getHours()).padStart(2, '0') + ':' + String(nd.getMinutes()).padStart(2, '0');
+    }
   }
 
   /* --------- the engine: catch-up, dedup, arm, fire --------- */

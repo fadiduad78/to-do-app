@@ -1174,11 +1174,14 @@ await sleep(300);
   ok(doc.activeElement && doc.activeElement.id === 'addRemBtn', 'focus lands inside the Reminders block, not at the form top');
   $('#cancelTaskBtn').click(); await sleep(140);
 
-  /* ---- 4. due-date change: recalc relative, keep absolute, no duplicates ---- */
+  /* ---- 4. due change: relatives recalc; absolutes get ASKED, never moved silently ---- */
   const before = idsOf('Submit assignment');
   doc.querySelector('#calHost [data-cdate="' + D3 + '"] .cal-chip[data-tid="' + assignId + '"]').click(); await sleep(160);
   await dueAt(D4, '23:59');
-  await save(); await sleep(200);
+  $('#saveTaskBtn').click(); await sleep(220);
+  const keepBtn = [...doc.querySelectorAll('#modalHost .modal-actions .btn')].find((b) => /Keep them/i.test(b.textContent));
+  ok(!!keepBtn, 'due change WITH custom reminders asks the user before touching absolute times');
+  keepBtn.click(); await sleep(340);
   {
     const rs = remsFor('Submit assignment');
     const by = Object.fromEntries(rs.map((r) => [r.reminderType, r]));
@@ -1187,10 +1190,26 @@ await sleep(300);
     ok(rs.length === 3 && idsOf('Submit assignment') === before, 'due change re-uses the SAME records — zero duplicates');
     ok(by.d1.triggerAt === locEpoch(y3, mo3, d3, 23, 59), 'd1 recalculated against the new due (now D4 → D3 23:59)');
     ok(by.h1.triggerAt === locEpoch(y4, mo4, d4, 22, 59), 'h1 recalculated against the new due');
-    ok(by.custom.triggerAt === locEpoch(y3, mo3, d3, 22, 0), 'absolute custom reminder untouched by a due change (it was never "obsolete")');
+    ok(by.custom.triggerAt === locEpoch(y3, mo3, d3, 22, 0), '"Keep them" left the absolute custom exactly where it was picked');
     ok(!doc.querySelector('#calHost [data-cdate="' + D3 + '"] .cal-chip[data-tid="' + assignId + '"]')
       && !!doc.querySelector('#calHost [data-cdate="' + D4 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem'),
       'calendar moved the chip to the new day — the 🔔 indicator rides along');
+  }
+  // and the explicit "shift with due" path: absolutes follow the same delta, still no forks
+  const D5 = dOff(5);
+  doc.querySelector('#calHost [data-cdate="' + D4 + '"] .cal-chip[data-tid="' + assignId + '"]').click(); await sleep(160);
+  await dueAt(D5, '23:59');
+  $('#saveTaskBtn').click(); await sleep(220);
+  const shiftBtn = [...doc.querySelectorAll('#modalHost .modal-actions .btn')].find((b) => /Shift with due/i.test(b.textContent));
+  ok(!!shiftBtn, 'the dialog offers the shift option');
+  shiftBtn.click(); await sleep(380);
+  {
+    const by2 = Object.fromEntries(remsFor('Submit assignment').map((r) => [r.reminderType, r]));
+    const [y5, mo5, d5] = ymdBits(D5), [y4, mo4, d4] = ymdBits(D4);
+    ok(by2.d1.triggerAt === locEpoch(y4, mo4, d4, 23, 59) && by2.h1.triggerAt === locEpoch(y5, mo5, d5, 22, 59), 'relatives re-anchored to the second shift too');
+    ok(by2.custom.triggerAt === locEpoch(y4, mo4, d4, 22, 0) && by2.custom.customDate === D4 && by2.custom.customTime === '22:00',
+      '"Shift with due" moved the custom reminder by EXACTLY the due delta (record rewritten, times preserved as wall-clock)');
+    ok(idsOf('Submit assignment') === before, 'both ask-paths keep the same 3 record ids — zero duplicates either way');
   }
 
   /* ---- 5. trash: cancel NOW, leave the calendar, never notify ---- */
@@ -1208,7 +1227,7 @@ await sleep(300);
     const rs = remsById(assignId);
     ok(rs.length === 3 && remsFor('Submit assignment').map((r) => r.id).sort().join('|') === before, 'restore re-uses the same records — still no duplicates');
     ok(rs.every((r) => r.status === 'pending'), 'valid future reminders re-armed on restore');
-    ok(!!doc.querySelector('#calHost [data-cdate="' + D4 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem'), 'calendar presence restored with the indicator');
+    ok(!!doc.querySelector('#calHost [data-cdate="' + D5 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem'), 'calendar presence restored with the indicator');
   }
 
   /* ---- 7. fire → snooze (due untouched) → complete (history kept) ---- */
