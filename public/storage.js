@@ -60,7 +60,7 @@
 
   // The data-shape version written by this app. When you change the task or
   // settings shape, bump this and add a MIGRATIONS[oldVersion] step below.
-  const SCHEMA_VERSION = 3;
+  const SCHEMA_VERSION = 4;
 
   // Trash retention: items are auto-purged 30 days after being trashed.
   const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -127,8 +127,18 @@
     2(payload) {
       return { ...payload, subtasks: Array.isArray(payload.subtasks) ? payload.subtasks : [] };
     },
-    // Future: 3(payload) { return { ...payload, /* transform */ }; }
-    // …and bump SCHEMA_VERSION to 4.
+    // v3 → v4: calendar times. Purely additive — tasks without a time get an
+    // explicit null and keep living on their dueDate alone.
+    3(payload) {
+      return {
+        ...payload,
+        tasks: (payload.tasks || []).map((t) => (
+          typeof t.dueTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.dueTime) ? t : { ...t, dueTime: null }
+        )),
+      };
+    },
+    // Future: 4(payload) { return { ...payload, /* transform */ }; }
+    // …and bump SCHEMA_VERSION to 5.
   };
 
   /**
@@ -250,6 +260,10 @@
     t.updatedAt = Number(raw.updatedAt) || now;
     t.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : now;
     t.projectId = typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : null;
+    // Calendar support: an optional "HH:MM" placement on the due date. The
+    // task remains the ONE source of truth for its dates — the calendar view
+    // reads/writes exactly these two fields.
+    t.dueTime = typeof raw.dueTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.dueTime) ? raw.dueTime : null;
     if (isTrash) t.trashedAt = Number(raw.trashedAt) || now;
     into.push(t);
     return true;

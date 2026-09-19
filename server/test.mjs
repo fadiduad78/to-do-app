@@ -144,6 +144,11 @@ try {
   ok(s.json.subtasks[0].title === 'B wins' && s.json.subtasks[0].completed === true, 'subtask edits LWW-merge like tasks');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], subtasks: [] }, { 'subtasks:sX': ts(120) }, 'merge');
   ok(s.json.subtasks.length === 0, 'a subtasks-scoped tombstone purges the subtask on every device');
+  s = await sync('A', s.json.rev, { tasks: [task('new1', 'Timed', ts(7), { dueDate: '2026-09-19', dueTime: '09:30' })], trash: [] }, {}, 'merge');
+  const timed = s.json.tasks.find((x) => x.id === 'new1');
+  ok(timed.dueDate === '2026-09-19' && timed.dueTime === '09:30', 'task dueTime rides through the server in the task itself (no second date store)');
+  s = await sync('B', s.json.rev, { tasks: [task('new1', 'Timed', ts(8), { dueDate: '2026-09-19', dueTime: '25:99' })], trash: [] }, {}, 'merge');
+  ok(s.json.tasks.find((x) => x.id === 'new1').dueTime === null, 'invalid dueTime normalized server-side; valid date untouched');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [{ id: 'pI', name: 'B wins', createdAt: ts(1), updatedAt: ts(99) }] }, {}, 'merge');
   ok(s.json.projects[0].name === 'B wins', 'project edits LWW-merge like tasks');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [] }, { 'projects:pI': ts(120) }, 'merge');

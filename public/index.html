@@ -49,6 +49,10 @@
           <input id="f-due" type="date">
         </label>
         <label class="field">
+          <span>Time</span>
+          <input id="f-time" type="time">
+        </label>
+        <label class="field">
           <span>Priority</span>
           <select id="f-priority">
             <option value="low">Low</option>
@@ -75,6 +79,7 @@
 
   <section class="toolbar">
     <input id="searchInput" type="search" placeholder="Search title or description…" autocomplete="off" aria-label="Search tasks">
+    <button id="calBtn" class="btn btn-ghost" aria-pressed="false" title="Calendar: a view over the same tasks">📅 Calendar</button>
     <button id="newTaskBtn" class="btn btn-primary">＋ New task</button>
   </section>
 
@@ -92,6 +97,14 @@
        Everything inside is rendered by app.js — markup lives there. -->
   <div id="projectBar" class="project-bar" hidden></div>
   <div id="projectDetail" class="project-detail" hidden></div>
+
+  <!-- Calendar: a VIEW over the existing tasks (Month/Week/Day). It never
+       stores tasks — clicks open the same composer; drags update the task's
+       own dueDate/dueTime. See renderCalendar() in app.js. -->
+  <section id="calendar" class="calendar" hidden aria-label="Calendar">
+    <div id="calBar" class="cal-bar"></div>
+    <div id="calHost" class="cal-body"></div>
+  </section>
 
   <div id="trashBar" class="trash-bar" hidden>
     <span><b id="trashCount"></b> in trash — kept for 30 days, then removed automatically.</span>

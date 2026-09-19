@@ -31,7 +31,7 @@ const ok = (cond, name) => {
 
 /* ------------------------------ constants ------------------------------ */
 
-ok(ZT.constants.SCHEMA_VERSION === 3, 'SCHEMA_VERSION bumped to 3 (v2 projects, v3 subtasks)');
+ok(ZT.constants.SCHEMA_VERSION === 4, 'SCHEMA_VERSION bumped to 4 (v2 projects, v3 subtasks, v4 calendar times)');
 ok(ZT.constants.STORES.projects === 'projects', 'STORES exposes the projects store');
 
 /* ------------------------------- migration ------------------------------ */
@@ -47,7 +47,7 @@ const v1 = {
   settings: { theme: 'dark' },
 };
 const v2 = ZT.helpers.migratePayload(v1);
-ok(v2.schemaVersion === 3, 'v1 payload migrates all the way to schemaVersion 3');
+ok(v2.schemaVersion === 4, 'v1 payload migrates all the way to schemaVersion 4');
 ok(Array.isArray(v2.projects) && v2.projects.length === 0, 'migration adds an empty projects list');
 ok(v2.tasks.find((t) => t.id === 't1').projectId === 'ghost', 'existing projectId survives migration');
 ok(v2.tasks.find((t) => t.id === 't2').projectId === null, 'field-free task gets projectId: null');
@@ -55,11 +55,11 @@ ok(v2.tasks.find((t) => t.id === 't1').title === 'Old', 'task data untouched by 
 ok(v2.settings.theme === 'dark', 'settings survive migration');
 // v0 payloads (the very old backups) run migrations 0 then 1 → must land at 2
 const fromZero = ZT.helpers.migratePayload({ schemaVersion: 0, tasks: [{ id: 'z', title: 'Z', status: 'active', createdAt: 1, updatedAt: 1 }] });
-ok(fromZero.schemaVersion === 3 && fromZero.tasks[0].projectId === null, 'v0 payload upgrades all the way to v3');
+ok(fromZero.schemaVersion === 4 && fromZero.tasks[0].projectId === null, 'v0 payload upgrades all the way to v4');
 // idempotent: running migration over an already-v2 payload via cleanPath is a no-op
 ok(v2.projects === v2.projects && v2.tasks.length === 2, 'migration keeps payload shape');
 const v3 = ZT.helpers.migratePayload({ schemaVersion: 2, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1 }], subtasks: [{ id: 's1', parentTaskId: 't1', title: 'kept', completed: false, position: 0, createdAt: 1, updatedAt: 1 }] });
-ok(v3.schemaVersion === 3 && v3.subtasks.length === 1 && v3.subtasks[0].title === 'kept', 'v2 payload with subtasks passes v3 migration untouched');
+ok(v3.schemaVersion === 4 && v3.subtasks.length === 1 && v3.subtasks[0].title === 'kept', 'v2 payload with subtasks passes the chain untouched');
 ok(ZT.helpers.migratePayload({ schemaVersion: 2, tasks: [] }).subtasks.length === 0, 'v2 payload without subtasks defaults the array');
 
 /* ------------------------------ coerceProject --------------------------- */
@@ -118,6 +118,24 @@ ok(ZT.helpers.backupNewer({ savedAt: 9000, tasks: [], trash: [], projects: [{ id
 ok(ZT.helpers.backupNewer({ savedAt: 9000, tasks: [], trash: [], projects: [] }, idb) === false,
   'backup without the extra project is not newer');
 
+/* --------------------------- dueTime (v4) -------------------------------- */
+
+const m4 = ZT.helpers.migratePayload({ schemaVersion: 3, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1, dueTime: '08:30' }], subtasks: [] });
+ok(m4.schemaVersion === 4 && m4.tasks[0].dueTime === '08:30', 'v3 payload keeps a valid dueTime through migration');
+const m4b = ZT.helpers.migratePayload({ schemaVersion: 3, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1 }] });
+ok(m4b.tasks[0].dueTime === null, 'v3 payload without dueTime gets an explicit null (calendar = view, not a copy)');
+const m4c = ZT.helpers.migratePayload({ schemaVersion: 3, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1, dueTime: '25:99' }] });
+ok(m4c.tasks[0].dueTime === null, 'garbage dueTime normalized to null, task kept (never dropped)');
+const vt = ZT.helpers.validatePayload({
+  app: 'zerotodo', schemaVersion: 4,
+  tasks: [
+    { id: 'a', title: 'ok', status: 'active', createdAt: 1, updatedAt: 1, dueTime: '23:15', dueDate: '2026-09-19' },
+    { id: 'b', title: 'bad', status: 'active', createdAt: 1, updatedAt: 1, dueTime: 930 },
+  ],
+});
+ok(vt.tasks[0].dueTime === '23:15' && vt.tasks[0].dueDate === '2026-09-19', 'dueTime+dueDate parse together');
+ok(vt.tasks.length === 2 && vt.tasks[1].dueTime === null, 'non-string dueTime → null; task still imported');
+
 /* ------------------------------ coerceSubtask ----------------------------- */
 
 const sinkS = [];
@@ -175,7 +193,7 @@ ok(await A.commit([
 ]), 'commit with project ops succeeds');
 
 const backup = JSON.parse(A.exportData());
-ok(backup.schemaVersion === 3, 'export carries schemaVersion 3');
+ok(backup.schemaVersion === 4, 'export carries schemaVersion 4');
 ok(backup.projects.length === 1 && backup.projects[0].name === 'Launch', 'export includes projects');
 const subA = { id: 'sA', parentTaskId: 'tA', title: 'Design database', completed: false, completedAt: null, position: 0, createdAt: now, updatedAt: now };
 A.state.subtasks.push(subA);

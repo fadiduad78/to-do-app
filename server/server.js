@@ -238,6 +238,7 @@ function coerceTask(raw, isTrash) {
   t.title = raw.title;
   t.description = typeof raw.description === 'string' ? raw.description : '';
   t.dueDate = typeof raw.dueDate === 'string' && raw.dueDate ? raw.dueDate : null;
+  t.dueTime = typeof raw.dueTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.dueTime) ? raw.dueTime : null;
   t.priority = raw.priority === 'low' || raw.priority === 'high' ? raw.priority : 'med';
   t.status = raw.status === 'completed' ? 'completed' : 'active';
   t.tags = Array.isArray(raw.tags)
@@ -731,7 +732,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/config') {
       return sendJSON(res, 200, {
-        app: 'zerotodo-server', version: 5, authRequired: authRequired(),
+        app: 'zerotodo-server', version: 6, authRequired: authRequired(),
         storage: sbEnabled() ? 'supabase (Postgres) + local cache' : 'local file only',
       });
     }

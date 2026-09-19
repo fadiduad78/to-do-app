@@ -185,11 +185,15 @@ ok(st.tasks.find((x) => x.id === 't3'), 'deleting a project never touches its ta
 
 // purge (empty-trash / delete-forever path): delete op + task detach in ONE commit
 memory.projects = [];
-t3.projectId = null;
-t3.updatedAt = Date.now() + 700;
+// Re-query the row: every echo replaces st.tasks with the server's canonical
+// objects (they now carry dueTime), so a reference captured before a sync is
+// an orphan — mutate what the state ACTUALLY holds (CONVENTIONS.md rule).
+const t3row = memory.tasks.find((x) => x.id === 't3');
+t3row.projectId = null;
+t3row.updatedAt = Date.now() + 700;
 await store.commit([
   { store: 'projects', op: 'delete', key: 'pA' },
-  { store: 'tasks', op: 'put', value: t3 },
+  { store: 'tasks', op: 'put', value: t3row },
 ]);
 await wait(1400);
 st = await serverState();

@@ -20,8 +20,11 @@ if the server is unreachable, every original guarantee still holds.
 
 ## Features
 
-- Add / edit / delete / complete tasks (title, optional description, due date,
-  priority low/med/high, tags, UUID id, createdAt/updatedAt).
+- Add / edit / delete / complete tasks (title, optional description, due date
+  + optional time, priority low/med/high, tags, UUID id, createdAt/updatedAt).
+- Subtasks (checklists) per task, projects with progress, and a **📅 Calendar**
+  (Month / Week / Day) — all *views over the same task records*: rescheduling
+  by drag-and-drop updates the task's own `dueDate`/`dueTime`, never a copy.
 - Filters: All / Active / Completed / Trash, plus **by tag**, plus full-text
   search over title + description.
 - Reordering: drag-and-drop (desktop) **and** ↑/↓ buttons (touch-friendly).

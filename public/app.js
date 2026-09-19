@@ -32,13 +32,14 @@
     bannerHost: $('bannerHost'),
     composer: $('composer'), composerTitle: $('composerTitle'),
     taskForm: $('taskForm'),
-    fTitle: $('f-title'), fDesc: $('f-desc'), fDue: $('f-due'),
+    fTitle: $('f-title'), fDesc: $('f-desc'), fDue: $('f-due'), fTime: $('f-time'),
     fPriority: $('f-priority'), fProject: $('f-project'), fTags: $('f-tags'),
     saveTaskBtn: $('saveTaskBtn'), cancelTaskBtn: $('cancelTaskBtn'), draftHint: $('draftHint'),
     searchInput: $('searchInput'), newTaskBtn: $('newTaskBtn'),
     draftResume: $('draftResume'), draftResumeBtn: $('draftResumeBtn'), draftDiscardBtn: $('draftDiscardBtn'),
     filterTabs: $('filterTabs'), tagChips: $('tagChips'),
     projectBar: $('projectBar'), projectDetail: $('projectDetail'),
+    calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
     taskList: $('taskList'), emptyState: $('emptyState'),
     trashBar: $('trashBar'), trashCount: $('trashCount'), emptyTrashBtn: $('emptyTrashBtn'),
     settingsPanel: $('settingsPanel'), themeSelect: $('themeSelect'), reminderSelect: $('reminderSelect'),
@@ -97,7 +98,8 @@
     // migration + validation (see storage.js recover()).
     const rec = await store.recover();
     S = rec.state;
-    S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null };
+    S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null,
+               cal: { open: false, view: 'month', anchor: '' } };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
@@ -106,6 +108,12 @@
     S.settings.filterProject = typeof S.settings.filterProject === 'string' && S.settings.filterProject ? S.settings.filterProject : null;
     if (S.settings.filterProject && !S.projects.some((p) => p.id === S.settings.filterProject && !p.deletedAt)) S.settings.filterProject = null;
     S.ui.projectView = S.settings.filterProject;
+    // Calendar prefs (view + filters) persist like the other settings; the
+    // anchor date itself is transient per session.
+    S.settings.calendarView = ['month', 'week', 'day'].includes(S.settings.calendarView) ? S.settings.calendarView : 'month';
+    S.settings.calendarFilters = (S.settings.calendarFilters && typeof S.settings.calendarFilters === 'object') ? S.settings.calendarFilters : {};
+    S.ui.cal.view = S.settings.calendarView;
+    S.ui.cal.anchor = ymd(new Date());
 
     store.startSync();
 
@@ -420,6 +428,18 @@
     renderSettings();
     renderFooter();
     refreshDraftResumeUI();
+    // Calendar mode: the task list UI steps aside; the calendar is a view
+    // over the SAME in-memory state — no duplicate data anywhere.
+    const calOn = !!(S.ui && S.ui.cal.open);
+    els.calendar.hidden = !calOn;
+    els.calBtn.classList.toggle('on', calOn);
+    els.calBtn.setAttribute('aria-pressed', String(calOn));
+    if (calOn) {
+      for (const el of [els.filterTabs, els.tagChips, els.projectBar, els.projectDetail, els.trashBar, els.taskList, els.emptyState]) el.hidden = true;
+      renderCalendar();
+    } else {
+      els.taskList.hidden = false;
+    }
     if (els.savePill.classList.contains('saved')) setPill('saved');
   }
 
@@ -586,6 +606,7 @@
   }
 
   function renderList() {
+    if (S.ui.cal.open) return; // calendar is showing; list content is hidden
     const inTrash = S.settings.filterMode === 'trash';
     const list = visibleTasks();
     const trashedProj = inTrash ? trashedProjects() : [];
@@ -651,6 +672,7 @@
     els.fTitle.value = prefill && prefill.title != null ? prefill.title : (editing ? editing.title : '');
     els.fDesc.value = prefill && prefill.description != null ? prefill.description : (editing ? editing.description : '');
     els.fDue.value = prefill && prefill.dueDate != null ? prefill.dueDate : (editing ? (editing.dueDate || '') : '');
+    els.fTime.value = prefill && prefill.dueTime != null ? prefill.dueTime : (editing ? (editing.dueTime || '') : '');
     els.fPriority.value = (prefill && prefill.priority) || (editing ? editing.priority : 'med');
     els.fTags.value = prefill && prefill.tags != null
       ? prefill.tags.join(', ')
@@ -678,6 +700,7 @@
       title: els.fTitle.value,
       description: els.fDesc.value.trim(),
       dueDate: els.fDue.value || null,
+      dueTime: els.fTime.value || null,
       priority: els.fPriority.value,
       tags: els.fTags.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
       projectId: els.fProject.value || null,
@@ -697,7 +720,7 @@
     if (S.ui.editingId && byId(S.ui.editingId)) {
       const t = byId(S.ui.editingId);
       Object.assign(t, {
-        title, description: v.description, dueDate: v.dueDate,
+        title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
         priority: v.priority, tags: v.tags, projectId: v.projectId, updatedAt: now,
       });
       ops = [{ store: STORES.tasks, op: 'put', value: t }];
@@ -707,7 +730,7 @@
       const base = Number.isFinite(min) ? min : 0;
       const t = {
         id: helpers.uuid(),
-        title, description: v.description, dueDate: v.dueDate,
+        title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
         priority: v.priority, tags: v.tags,
         projectId: v.projectId,
         status: 'active',
@@ -738,7 +761,7 @@
     return {
       kind: S.ui.editingId ? 'edit' : 'new',
       taskId: S.ui.editingId,
-      title: v.title, description: v.description, dueDate: v.dueDate,
+      title: v.title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
       priority: v.priority, tags: v.tags,
       projectId: v.projectId,
       savedAt: Date.now(),
@@ -1490,6 +1513,281 @@
     toast(existing ? 'Project updated.' : 'Project “' + truncate(p.name, 30) + '” created.');
   }
 
+  /* ------------------------------- Calendar ------------------------------- */
+  /* A pure VIEW over S.tasks. One source of truth for dates: task.dueDate
+     (+ optional task.dueTime). Dragging does not copy anything — it updates
+     the existing task record (same id, all other properties intact) in one
+     commit, so trash/backup/sync all follow automatically. */
+
+  const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+  function ymd(d) {
+    const p = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  function ymdParse(s) { const p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
+  function addDaysYmd(s, n) { const d = ymdParse(s); d.setDate(d.getDate() + n); return ymd(d); }
+  function mondayOf(s) { const d = ymdParse(s); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return ymd(d); }
+
+  function calFilters() { return S.settings.calendarFilters || {}; }
+  function calVisible(t) {
+    const f = calFilters();
+    if (f.calPriority && t.priority !== f.calPriority) return false;
+    if (f.calTag && !(t.tags || []).includes(f.calTag)) return false;
+    if (f.calProject) {
+      if (f.calProject === 'none') { if (t.projectId) return false; }
+      else if (t.projectId !== f.calProject) return false;
+    }
+    if (f.calStatus === 'active' && t.status === 'completed') return false;
+    if (f.calStatus === 'completed' && t.status !== 'completed') return false;
+    return true;
+  }
+  function calTasksOn(ds) {
+    return S.tasks
+      .filter((t) => t.dueDate === ds && calVisible(t))
+      .sort((x, y) => ((x.dueTime || '99:99') < (y.dueTime || '99:99') ? -1 : (x.dueTime || '99:99') > (y.dueTime || '99:99') ? 1 : 0)
+        || (x.priority === 'high' ? -1 : 0) - (y.priority === 'high' ? -1 : 0));
+  }
+  function calStats(ds) {
+    const tasks = calTasksOn(ds);
+    const today = ymd(new Date());
+    return {
+      tasks,
+      done: tasks.filter((t) => t.status === 'completed').length,
+      overdue: tasks.filter((t) => t.status !== 'completed' && ds < today).length,
+    };
+  }
+  function calChip(t) {
+    const done = t.status === 'completed';
+    const due = formatDue(t.dueDate, done);
+    const overCls = due && due.cls === 'overdue' ? ' is-over' : '';
+    return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + '" data-tid="' + esc(t.id) + '" draggable="true"' +
+      ' title="' + esc((t.dueTime ? t.dueTime + ' — ' : '') + t.title) + '">' +
+      '<i class="cal-dot" aria-hidden="true"></i>' + (t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') +
+      (done ? '✓ ' : '') + esc(truncate(t.title, 22)) + '</span>';
+  }
+  function calMonthCell(ds, dim) {
+    const st = calStats(ds);
+    const today = ymd(new Date());
+    const shown = st.tasks.slice(0, 3);
+    const more = st.tasks.length - shown.length;
+    return '<div class="cal-cell' + (ds === today ? ' is-today' : '') + (dim ? ' dim' : '') + '" data-cdate="' + ds + '">' +
+      '<span class="cal-day">' + Number(ds.slice(8)) +
+        (st.overdue ? '<em class="cal-over" title="' + st.overdue + ' overdue task(s)">!' + st.overdue + '</em>' : '') +
+        (st.tasks.length ? '<em class="cal-n" title="' + st.done + ' of ' + st.tasks.length + ' done">' + st.done + '/' + st.tasks.length + '</em>' : '') +
+      '</span>' +
+      '<div class="cal-chips">' + shown.map((t) => calChip(t)).join('') +
+        (more > 0 ? '<button class="cal-more" data-cmore="' + ds + '" type="button">+' + more + ' more</button>' : '') +
+      '</div></div>';
+  }
+
+  function renderCalendar() {
+    const cal = S.ui.cal;
+    const a = ymdParse(cal.anchor);
+    const f = calFilters();
+    let title = '';
+    let body = '';
+
+    if (cal.view === 'month') {
+      title = MONTH_NAMES[a.getMonth()] + ' ' + a.getFullYear();
+      const start = mondayOf(ymd(new Date(a.getFullYear(), a.getMonth(), 1)));
+      let cells = '';
+      for (let i = 0; i < 42; i++) {
+        const ds = addDaysYmd(start, i);
+        cells += calMonthCell(ds, ymdParse(ds).getMonth() !== a.getMonth());
+      }
+      body = '<div class="cal-week-heads">' + DAY_NAMES.map((d) => '<span class="cal-wh">' + d + '</span>').join('') + '</div>' +
+        '<div class="cal-month">' + cells + '</div>';
+    } else if (cal.view === 'week') {
+      const mon = mondayOf(cal.anchor);
+      const days = []; for (let i = 0; i < 7; i++) days.push(addDaysYmd(mon, i));
+      const d0 = ymdParse(days[0]); const d6 = ymdParse(days[6]);
+      title = d0.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' – ' +
+        d6.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      const heads = '<span></span>' + days.map((ds) => {
+        const st = calStats(ds);
+        return '<span class="cal-wh' + (ds === ymd(new Date()) ? ' is-today' : '') + '">' +
+          DAY_NAMES[(ymdParse(ds).getDay() + 6) % 7] + ' ' + Number(ds.slice(8)) +
+          (st.tasks.length ? '<em>' + st.tasks.length + '</em>' : '') + '</span>';
+      }).join('');
+      const allDay = '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span>' +
+        days.map((ds) => {
+          const ts = calTasksOn(ds).filter((t) => !t.dueTime);
+          return '<div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' +
+            ts.slice(0, 4).map((t) => calChip(t)).join('') + (ts.length > 4 ? '<span class="cal-more">…+' + (ts.length - 4) + '</span>' : '') + '</div>';
+        }).join('') + '</div>';
+      let rows = '';
+      for (let h = 0; h < 24; h++) {
+        const perDay = days.map((ds) => calTasksOn(ds).filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h));
+        if ((h < 6 || h > 22) && !perDay.some((ts) => ts.length)) continue; // collapse quiet hours
+        rows += '<div class="cal-row"><span class="cal-hour-lbl">' + String(h).padStart(2, '0') + ':00</span>' +
+          days.map((ds, i) => '<div class="cal-cell slot' + (perDay[i].length ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '">' +
+            perDay[i].map((t) => calChip(t)).join('') + '</div>').join('') + '</div>';
+      }
+      body = '<div class="cal-week-heads">' + heads + '</div><div class="cal-scroll">' + allDay + rows + '</div>';
+    } else { // day
+      const ds = cal.anchor;
+      title = ymdParse(ds).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+      const st = calStats(ds);
+      const pct = st.tasks.length ? Math.round((st.done / st.tasks.length) * 100) : 0;
+      const allday = st.tasks.filter((t) => !t.dueTime);
+      const early = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) < 6);
+      const late = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) > 22);
+      let rows = '';
+      for (let h = 6; h <= 22; h++) {
+        const ts = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h);
+        rows += '<div class="cal-row day"><span class="cal-hour-lbl">' + String(h).padStart(2, '0') + ':00</span>' +
+          '<div class="cal-cell slot' + (ts.length ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '">' +
+          ts.map((t) => calChip(t)).join('') + '</div></div>';
+      }
+      body = '<div class="cal-day-summary"><span>' + st.tasks.length + ' task(s)</span><span>·</span>' +
+        '<span>' + st.done + ' done</span>' + (st.overdue ? '<span>·</span><span class="cal-over">⚠ ' + st.overdue + ' overdue</span>' : '') +
+        '<span class="spacer"></span><span class="cal-mini"><i style="width:' + pct + '%"></i></span><span>' + pct + '%</span>' +
+        '<button class="btn btn-sm btn-primary" data-cnew="' + ds + '" type="button">＋ New task</button></div>' +
+        (allday.length ? '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span><div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' + allday.map((t) => calChip(t)).join('') + '</div></div>' : '') +
+        (early.length ? '<div class="cal-row"><span class="cal-hour-lbl">Early</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="3">' + early.map((t) => calChip(t)).join('') + '</div></div>' : '') +
+        rows +
+        (late.length ? '<div class="cal-row"><span class="cal-hour-lbl">Late</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="23">' + late.map((t) => calChip(t)).join('') + '</div></div>' : '');
+    }
+
+    const mk = (key, cur, items) => '<label class="cal-filter"><select data-cfilter="' + key + '" title="Filter">' +
+      items.map(([v, l]) => '<option value="' + esc(String(v)) + '"' + (String(cur || '') === String(v) ? ' selected' : '') + '>' + esc(l) + '</option>').join('') + '</select></label>';
+    els.calBar.innerHTML =
+      '<div class="cal-nav">' +
+        ['month', 'week', 'day'].map((v2) => '<button class="filter-btn' + (cal.view === v2 ? ' on' : '') + '" data-cview="' + v2 + '" type="button">' + v2[0].toUpperCase() + v2.slice(1) + '</button>').join('') +
+        '<button class="btn btn-sm btn-ghost" data-cnav="prev" type="button" title="Previous (←)">‹ Prev</button>' +
+        '<button class="btn btn-sm btn-ghost" data-cnav="today" type="button" title="Today (T)">Today</button>' +
+        '<button class="btn btn-sm btn-ghost" data-cnav="next" type="button" title="Next (→)">Next ›</button>' +
+        '<h2 class="cal-title">' + title + '</h2>' +
+      '</div>' +
+      '<div class="cal-filters">' +
+        mk('calProject', f.calProject, [['', 'All projects'], ['none', '📥 Inbox']].concat(liveProjects().map((p) => [p.id, p.icon + ' ' + p.name]))) +
+        mk('calPriority', f.calPriority, [['', 'Any priority'], ['high', '⚑ High'], ['med', 'Medium'], ['low', 'Low']]) +
+        mk('calTag', f.calTag, [['', 'Any tag']].concat(allTags().map(([tag, n]) => [tag, tag + ' (' + n + ')']))) +
+        mk('calStatus', f.calStatus, [['', 'Any status'], ['active', 'Active only'], ['completed', 'Completed only']]) +
+      '</div>';
+    els.calHost.innerHTML = body;
+  }
+
+  function calShift(dir) {
+    const cal = S.ui.cal;
+    const a = ymdParse(cal.anchor);
+    if (cal.view === 'month') cal.anchor = ymd(new Date(a.getFullYear(), a.getMonth() + dir, 1));
+    else if (cal.view === 'week') cal.anchor = addDaysYmd(cal.anchor, dir * 7);
+    else cal.anchor = addDaysYmd(cal.anchor, dir);
+    renderCalendar();
+  }
+  function calToday() { S.ui.cal.anchor = ymd(new Date()); renderCalendar(); }
+  async function calSetView(v) {
+    S.ui.cal.view = v;
+    S.settings.calendarView = v;
+    await store.commit([]); // persist preference (settings meta) — no task data touched
+    renderCalendar();
+  }
+  async function calSetFilter(key, val) {
+    S.settings.calendarFilters = { ...calFilters(), [key]: val || null };
+    await store.commit([]);
+    renderCalendar();
+  }
+  function calQuickCreate(ds, hour) {
+    openComposer({ mode: 'new' }, { dueDate: ds, dueTime: hour != null ? String(hour).padStart(2, '0') + ':00' : null, title: '', description: '', tags: [] });
+  }
+
+  let calDragId = null;
+  function onCalDragStart(e) {
+    const chip = e.target.closest && e.target.closest('.cal-chip');
+    if (!chip) return;
+    calDragId = chip.dataset.tid || null;
+    chip.classList.add('dragging');
+    if (e.dataTransfer) { try { e.dataTransfer.setData('text/plain', calDragId || ''); e.dataTransfer.effectAllowed = 'move'; } catch (_) {} }
+  }
+  function onCalDragOver(e) {
+    const z = e.target.closest('[data-cdate]');
+    if (!z) return;
+    e.preventDefault();
+    if (e.dataTransfer) { try { e.dataTransfer.dropEffect = 'move'; } catch (_) {} }
+    z.classList.add('cal-drop');
+  }
+  function clearCalDrop() {
+    els.calHost.querySelectorAll('.cal-drop').forEach((x) => x.classList.remove('cal-drop'));
+    els.calHost.querySelectorAll('.cal-chip.dragging').forEach((x) => x.classList.remove('dragging'));
+  }
+  function onCalDrop(e) {
+    const z = e.target.closest('[data-cdate]');
+    clearCalDrop();
+    if (!z) return;
+    e.preventDefault();
+    let id = '';
+    try { id = (e.dataTransfer && e.dataTransfer.getData('text/plain')) || ''; } catch (_) {}
+    id = id || calDragId;
+    calDragId = null;
+    const t = id && byId(id);
+    if (!t) { renderCalendar(); return; }
+    const wasDate = t.dueDate; const wasTime = t.dueTime || null;
+    t.dueDate = z.dataset.cdate || null;                    // update the EXISTING task…
+    if (z.hasAttribute('data-allday')) t.dueTime = null;    // dropped All-day → no time
+    else if (z.dataset.chour != null) t.dueTime = String(z.dataset.chour).padStart(2, '0') + ':00';
+    t.updatedAt = Date.now();                               // …id + everything else preserved
+    if (t.dueDate === wasDate && (t.dueTime || null) === wasTime) { renderCalendar(); return; }
+    store.commit([{ store: STORES.tasks, op: 'put', value: t }]).then(() => {
+      renderAll();
+      const lbl = t.dueDate ? ymdParse(t.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'the Inbox';
+      toast('Moved “' + truncate(t.title, 26) + '” to ' + lbl + (t.dueTime ? ' ' + t.dueTime : '') + ' — same task, same id.');
+    });
+  }
+  function onCalHostClick(e) {
+    const chip = e.target.closest('.cal-chip');
+    if (chip) { if (chip.dataset.tid) openComposer({ mode: 'edit', taskId: chip.dataset.tid }); return; }
+    const more = e.target.closest('[data-cmore]');
+    if (more) { S.ui.cal.anchor = more.dataset.cmore; calSetView('day'); return; }
+    const cn = e.target.closest('[data-cnew]');
+    if (cn) { calQuickCreate(cn.dataset.cnew, null); return; }
+    const cell = e.target.closest('[data-cdate]');
+    if (!cell) return;
+    if (e.target.closest('.cal-day')) { S.ui.cal.anchor = cell.dataset.cdate; calSetView('day'); return; } // day-number → day view
+    calQuickCreate(cell.dataset.cdate, cell.dataset.chour != null ? cell.dataset.chour : null); // empty area → quick create
+  }
+  function onCalBarClick(e) {
+    const v = e.target.closest('[data-cview]');
+    if (v) { calSetView(v.dataset.cview); return; }
+    const n = e.target.closest('[data-cnav]');
+    if (!n) return;
+    if (n.dataset.cnav === 'today') calToday();
+    else calShift(n.dataset.cnav === 'prev' ? -1 : 1);
+  }
+  function onCalKeys(e) {
+    if (!S || !S.ui || !S.ui.cal.open || S.ui.composerOpen) return;
+    const tg = ((e.target && e.target.tagName) || '').toLowerCase();
+    if (tg === 'input' || tg === 'textarea' || tg === 'select' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); calShift(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); calShift(1); }
+    else if (e.key === 't' || e.key === 'T') calToday();
+    else if (e.key === 'm' || e.key === 'M') calSetView('month');
+    else if (e.key === 'w' || e.key === 'W') calSetView('week');
+    else if (e.key === 'd' || e.key === 'D') calSetView('day');
+  }
+  function wireCalendar() {
+    els.calBtn.onclick = () => {
+      S.ui.cal.open = !S.ui.cal.open;
+      if (S.ui.cal.open) S.ui.cal.anchor = ymd(new Date());
+      renderAll();
+      if (S.ui.cal.open) els.calendar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    els.calBar.addEventListener('click', onCalBarClick);
+    els.calBar.addEventListener('change', (e) => {
+      const sel = e.target.closest('[data-cfilter]');
+      if (sel) calSetFilter(sel.dataset.cfilter, sel.value);
+    });
+    els.calHost.addEventListener('click', onCalHostClick);
+    els.calHost.addEventListener('dragstart', onCalDragStart);
+    els.calHost.addEventListener('dragover', onCalDragOver);
+    els.calHost.addEventListener('dragleave', (e) => { const z = e.target.closest('[data-cdate]'); if (z) z.classList.remove('cal-drop'); });
+    els.calHost.addEventListener('drop', onCalDrop);
+    els.calHost.addEventListener('dragend', clearCalDrop);
+    document.addEventListener('keydown', onCalKeys);
+  }
+
   /* --------------------------- Filters & search --------------------------- */
 
   async function setFilterMode(m) {
@@ -1629,7 +1927,7 @@
     els.cancelTaskBtn.onclick = () => closeComposer(); // draft stays on disk
 
     // Composer input → debounced draft autosave
-    for (const el of [els.fTitle, els.fDesc, els.fDue, els.fPriority, fProjectSelect(), els.fTags]) {
+    for (const el of [els.fTitle, els.fDesc, els.fDue, els.fTime, els.fPriority, fProjectSelect(), els.fTags]) {
       el.addEventListener('input', () => {
         el.classList.remove('invalid');
         scheduleDraft();
@@ -1800,6 +2098,9 @@
     });
 
     els.emptyTrashBtn.onclick = emptyTrash;
+
+    // Calendar module (view over tasks; keyboard + drag handlers inside)
+    wireCalendar();
 
     // Follow system theme changes while in auto mode
     if (window.matchMedia) {

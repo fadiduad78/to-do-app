@@ -44,8 +44,15 @@ supports one nesting level, subtree walks are visited-set cycle-safe).
 4. **`app.js`** — every mutation = mutate `S`, then ONE `store.commit([...])`
    with ops for *every* store it touches (a purge that orphans tasks commits
    the detach in the same transaction).
-5. **Tests** — extend all four suites (`server/test.mjs`,
-   `test-storage.mjs`, `test-supabase.mjs`, `test-client.mjs`).
+5. **Server normalization is additive** — if `coerceTask` on the server gains
+   a field (e.g. `dueTime`), every echoed row differs from what a client
+   pushed *before* that field existed → `adoptRemote` swaps in its canonical
+   objects. Anything holding a task reference across a sync (tests, or code
+   that captured a row) goes stale: **re-query the live state by id at
+   mutation time**, never mutate a captured object (see test-client detach).
+6. **Tests** — extend all five suites (`server/test.mjs`,
+   `test-storage.mjs`, `test-supabase.mjs`, `test-client.mjs`,
+   `test-ui.mjs`).
    `test-storage.mjs` runs the real `storage.js` in Node (LS-only engine),
    `test-client.mjs` runs the real `cloud.js` against the real server — keep
    using them instead of re-implementing logic in tests.
@@ -69,6 +76,12 @@ Tombstones are **store-scoped**: `tasks:x` never kills the `trash:x` copy
 (that's how a soft delete survives sync on the other side).
 
 ## 4. UI/UX invariants
+
+* **String-built HTML must be parse-safe**: every `<select>` template needs its
+  `</select>` (an unclosed one silently swallows the following `<label>` /
+  `<select>` start tags in real parsers too — this exact bug shipped once and
+  only the jsdom harness caught it). After any `innerHTML` re-render, DOM
+  references from before the render are dead: re-query every click.
 
 * Anything destructive is either undoable via an 8 s toast *or* lands in the
   shared Trash view (restorable for 30 days).
