@@ -942,3 +942,49 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
   .focus-bar { padding: 8px 10px; gap: 8px; }
   .fz-time { font-size: 24px; }
 }
+
+/* ============================== Habits module ============================== */
+.habits-view { margin: 10px 0 24px; }
+.habits-view[hidden] { display: none; }
+.hab-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 6px 0 2px; }
+.hab-head h2 { margin: 0; font-size: 20px; }
+.hab-empty { background: var(--panel); border: 1px dashed var(--border); border-radius: var(--radius); padding: 18px; color: var(--muted); font-size: 14px; margin: 10px 0; }
+.hab-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin: 10px 0; }
+.hab-card.done { border-color: var(--ok); background: linear-gradient(135deg, var(--ok-soft), var(--panel) 55%); }
+.hab-card.archived { opacity: 0.72; }
+.hab-top { display: flex; align-items: center; gap: 10px; }
+.hab-name { font-weight: 700; font-size: 15px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hab-streak { flex: none; font-size: 13px; font-weight: 700; padding: 2px 10px; border-radius: 999px; background: var(--panel-2); color: var(--muted); }
+.hab-streak.hot { background: var(--warn-soft); color: var(--warn); }
+.hab-desc { color: var(--muted); font-size: 12.5px; margin: 3px 0 0; }
+.hab-stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.hab-stats span { font-size: 11.5px; color: var(--muted); background: var(--panel-2); border-radius: 999px; padding: 2px 9px; }
+.hab-week { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 8px; }
+.hab-day { font-size: 11.5px; color: var(--muted); background: var(--panel-2); border: 1px solid transparent; border-radius: 8px; padding: 3px 7px; }
+.hab-day b { font-weight: 700; }
+.hab-day.today { border-color: var(--accent); }
+.hab-day.met { background: var(--ok-soft); color: var(--ok); }
+.hab-day.part { background: var(--warn-soft); color: var(--warn); }
+.hab-day.miss { color: var(--danger); }
+.hab-day.off { opacity: 0.55; }
+.hab-day.future { opacity: 0.8; }
+.hab-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.hab-count { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-right: auto; }
+.hab-arch-toggle { background: none; border: 0; color: var(--muted); font-size: 12.5px; cursor: pointer; padding: 6px 2px; }
+.hab-arch-toggle:hover { color: var(--text); }
+.hab-cal { margin-top: 10px; }
+.hab-cal-title { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
+.hab-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; max-width: 340px; }
+.hab-cal-cell { position: relative; text-align: center; font-size: 10.5px; color: var(--muted); background: var(--panel-2); border-radius: 6px; padding: 3px 0 2px; line-height: 1.25; }
+.hab-cal-cell.head { background: none; font-weight: 700; font-size: 9.5px; }
+.hab-cal-cell.empty { background: none; }
+.hab-cal-cell i { display: block; font-style: normal; font-size: 7px; line-height: 1; margin-top: 1px; }
+.hab-cal-cell.met { background: var(--ok-soft); color: var(--ok); }
+.hab-cal-cell.part { background: var(--warn-soft); color: var(--warn); }
+.hab-cal-cell.miss { color: var(--danger); }
+.hab-cal-cell.today { outline: 1.5px solid var(--accent); }
+.hab-cal-cell.off, .hab-cal-cell.future { opacity: 0.6; }
+.hab-modal label { display: block; font-size: 13px; margin: 9px 0 0; }
+.hab-modal label input[type=text], .hab-modal label input[type=number], .hab-modal label input[type=time], .hab-modal label select { display: block; width: 100%; margin-top: 3px; }
+.hab-modal .hab-days { display: flex; gap: 6px; margin-top: 6px; }
+@media (max-width: 560px) { .hab-day { font-size: 10.5px; padding: 3px 5px; } .hab-count { width: 100%; margin-bottom: 2px; } }

@@ -171,7 +171,7 @@ function bucketFor(username) {
   if (!b) {
     b = {
       username,
-      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], projects: [], subtasks: [], reminders: [], tombstones: {} },
+      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], projects: [], subtasks: [], reminders: [], habits: [], tombstones: {} },
       saveTimer: null, loaded: false, ready: null,
       sse: new Set(),
       sbDirty: false, sbRunning: false, sbDelay: 4000, sbLastOk: 0, sbLastError: '',
@@ -293,18 +293,58 @@ function coerceTask(raw, isTrash) {
   return t;
 }
 
+/** Habit records — same coercion rules as public/storage.js coerceHabit
+ * (kept in lock-step deliberately: a client-side reject the server accepted
+ * would reappear on the next pull). */
+const HABIT_FREQS = ['daily', 'weekly', 'days'];
+function coerceHabit(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (typeof raw.id !== 'string' || !raw.id) return null;
+  if (typeof raw.name !== 'string' || !raw.name.trim()) return null;
+  const now = Date.now();
+  const h = { ...raw };
+  h.name = raw.name.trim().slice(0, 120);
+  h.description = typeof raw.description === 'string' ? raw.description.slice(0, 2000) : '';
+  h.frequency = HABIT_FREQS.indexOf(raw.frequency) >= 0 ? raw.frequency : 'daily';
+  h.weekdays = h.frequency === 'days'
+    ? [...new Set((Array.isArray(raw.weekdays) ? raw.weekdays : []).map(Number)
+        .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))].sort((a, b) => a - b)
+    : [];
+  if (h.frequency === 'days' && !h.weekdays.length) h.frequency = 'daily';
+  const tgt = Math.round(Number(raw.target));
+  // Clamp (never fall back to 1 — an over-range target means “a lot per
+  // day”, and silently making it trivially-met would fake a completion).
+  h.target = Number.isFinite(tgt) ? Math.min(99, Math.max(1, tgt)) : 1;
+  h.archived = !!raw.archived;
+  h.remindTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.remindTime || '') ? raw.remindTime : null;
+  const seen = new Map();
+  for (const e of (Array.isArray(raw.history) ? raw.history : [])) {
+    if (e && typeof e === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String(e.d))) {
+      const c = Math.floor(Number(e.c));
+      if (Number.isFinite(c) && c > 0) seen.set(String(e.d), { d: String(e.d), c: Math.min(999, c) });
+    }
+  }
+  h.history = [...seen.values()].sort((a, b) => (a.d < b.d ? -1 : 1)).slice(-730);
+  h.createdAt = Number(raw.createdAt) || now;
+  h.updatedAt = Number(raw.updatedAt) || h.createdAt;
+  return h;
+}
+
 /** Reminder records (schema v5). Lenient like the client: keep unknowns,
- * drop only what can't fire (no id / no taskId / no finite triggerAt). */
+ * drop only what can't fire (no id / no owning taskId-or-habitId / no finite
+ * triggerAt). Habit nudges ride this same store (habitId instead of taskId). */
 const REMINDER_TYPES = ['onTime', 'm5', 'm10', 'm15', 'm30', 'h1', 'h2', 'd1', 'd2', 'custom', 'overdue'];
 const REMINDER_STATUSES = ['pending', 'triggered', 'dismissed', 'skipped', 'failed'];
 function coerceReminder(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   if (typeof raw.id !== 'string' || !raw.id) return null;
-  if (typeof raw.taskId !== 'string' || !raw.taskId) return null;
+  if ((typeof raw.taskId !== 'string' || !raw.taskId) && (typeof raw.habitId !== 'string' || !raw.habitId)) return null;
   const trig = Number(raw.triggerAt);
   if (!Number.isFinite(trig)) return null;
   const now = Date.now();
   const r = { ...raw };
+  r.taskId = typeof raw.taskId === 'string' ? raw.taskId : '';
+  if (typeof raw.habitId === 'string' && raw.habitId) r.habitId = raw.habitId; else delete r.habitId;
   r.triggerAt = trig;
   r.reminderType = REMINDER_TYPES.indexOf(raw.reminderType) >= 0 ? raw.reminderType : 'custom';
   r.status = REMINDER_STATUSES.indexOf(raw.status) >= 0 ? raw.status : (raw.delivered ? 'triggered' : (raw.dismissed ? 'dismissed' : 'pending'));
@@ -357,6 +397,14 @@ function normalizeState(raw) {
       if (rm && !seenR.has(rm.id)) { seenR.add(rm.id); reminders.push(rm); }
     }
   }
+  const habits = [];
+  {
+    const seenH = new Set();
+    for (const r of (Array.isArray(raw.habits) ? raw.habits : [])) {
+      const hh = coerceHabit(r);
+      if (hh && !seenH.has(hh.id)) { seenH.add(hh.id); habits.push(hh); }
+    }
+  }
   return {
     rev: Number.isFinite(Number(raw.rev)) ? Number(raw.rev) : 0,
     savedAt: Number(raw.savedAt) || 0,
@@ -366,6 +414,7 @@ function normalizeState(raw) {
     projects,
     subtasks,
     reminders,
+    habits,
     tombstones,
   };
 }
@@ -489,6 +538,7 @@ function ingest(b, body) {
     projects: (body.state && body.state.projects) || [],
     subtasks: (body.state && body.state.subtasks) || [],
     reminders: (body.state && body.state.reminders) || [],
+    habits: (body.state && body.state.habits) || [],
     tombstones: body.tombstones || {},
   });
 
@@ -511,6 +561,7 @@ function ingest(b, body) {
       projects: incoming.projects,
       subtasks: incoming.subtasks,
       reminders: incoming.reminders,
+      habits: incoming.habits,
       savedAt: Math.max(b.state.savedAt, incoming.savedAt || Date.now()),
     };
   } else {
@@ -519,6 +570,8 @@ function ingest(b, body) {
     const projects = mergeRecords(b.state.projects, incoming.projects);
     const subtasks = mergeRecords(b.state.subtasks, incoming.subtasks);
     const reminders = mergeRecords(b.state.reminders, incoming.reminders);
+    // Habits never enter the trash and have no tombstones — plain LWW merge.
+    const habits = mergeRecords(b.state.habits || [], incoming.habits);
     const alive = applyTombstones(tasks, trash, projects, subtasks, reminders, newTombstones);
     merged = {
       settings: (incoming.savedAt || 0) >= b.state.savedAt ? incoming.settings : b.state.settings,
@@ -527,6 +580,7 @@ function ingest(b, body) {
       projects: alive.projects,
       subtasks: alive.subtasks,
       reminders: alive.reminders,
+      habits,
       savedAt: Math.max(b.state.savedAt, incoming.savedAt || 0) || Date.now(),
     };
     for (const t of merged.tasks) {
@@ -551,8 +605,8 @@ function ingest(b, body) {
     }
   }
 
-  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.projects, b.state.subtasks, b.state.reminders, b.state.settings]);
-  const after = JSON.stringify([merged.tasks, merged.trash, merged.projects, merged.subtasks, merged.reminders, merged.settings]);
+  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.projects, b.state.subtasks, b.state.reminders, b.state.habits, b.state.settings]);
+  const after = JSON.stringify([merged.tasks, merged.trash, merged.projects, merged.subtasks, merged.reminders, merged.habits, merged.settings]);
   const changed = before !== after;
 
   b.state = { ...b.state, ...merged, tombstones: newTombstones, rev: b.state.rev + 1 };

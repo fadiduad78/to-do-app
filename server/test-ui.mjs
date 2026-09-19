@@ -1755,5 +1755,207 @@ await sleep(300);
   ok(true, 'focus-mode section completed without uncaught errors');
 }
 
+/* ==================== 22. Habit Tracking — separate module ==================== */
+{
+  console.log('\n--- 22. habits ---');
+  const E = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+
+  /* ---- A. live UI on the main dom: create → check → undo → archive ---- */
+  $('#calBtn').click(); await sleep(120); // whatever §21 left open, start clean
+  $('#calBtn').click(); await sleep(120);
+  ok(!!$('#habBtn') && /Habits/.test($('#habBtn').textContent), 'toolbar carries the 🔥 Habits control');
+  $('#habBtn').click(); await sleep(200);
+  ok($('#habitsView').hidden === false && $('#taskList').hidden === true && $('#calendar').hidden === true,
+    'habits open as a full view — the task list and calendar are NOT rendered under it');
+  ok($('#habBtn').getAttribute('aria-pressed') === 'true' && $('#habBtn').classList.contains('on'),
+    'the toolbar button reflects pressed state like Calendar/Dashboard do');
+  ok(/No habits yet/.test($('#habitsHost').textContent), 'empty habits view teaches with example habits (Exercise, Read, Study Python…)');
+  const dashSnap0 = (() => { $('#habBtn').click(); $('#dashBtn').click(); const x = $('#dashHost').textContent; $('#dashBtn').click(); return x; })();
+  await sleep(150);
+
+  $('#habBtn').click(); await sleep(140);
+  $('#habitsHost [data-hact="new"]').click(); await sleep(140);
+  const mcard = doc.querySelector('.hab-modal');
+  ok(!!mcard && !!mcard.querySelector('#hh-name'), 'the habit editor renders (name, frequency, target, nudge)');
+  mcard.querySelector('#hh-name').value = 'Drink water';
+  mcard.querySelector('#hh-target').value = '3';
+  const rk = mcard.querySelector('#hh-remind'); rk.checked = true; E(rk, 'change');
+  mcard.querySelector('#hh-remtime-i').value = '21:00';
+  mcard.querySelector('[data-hm="save"]').click(); await sleep(320);
+  ok(!doc.querySelector('.hab-modal'), 'saving closes the dialog');
+  let H0 = remMirror().habits || [];
+  ok(H0.length === 1 && H0[0].name === 'Drink water' && H0[0].target === 3 && H0[0].frequency === 'daily' && H0[0].remindTime === '21:00',
+    'the habit is a SEPARATE record type persisted in its own store (mirrored like everything else)');
+  let hrRow = (remMirror().reminders || []).find((r) => r.habitId);
+  ok(!!hrRow && hrRow.status === 'pending' && hrRow.triggerAt > Date.now() - 1000 && /^21:00$/.test(new Date(hrRow.triggerAt).toTimeString().slice(0, 5)),
+    'the nudge became ONE pending row in the existing reminders store — no second pipeline');
+
+  const bump = async (n, sel) => { for (let i = 0; i < n; i++) { $(sel).click(); await sleep(160); } };
+  await bump(2, '.hab-card [data-hact="plus"]');
+  ok(/2\/3 today/.test($('.hab-card').textContent) && !$('.hab-card').classList.contains('done'),
+    'partial counts show as a fraction — target 3 means three completions before the day is met (Drink water ×3)');
+  await bump(1, '.hab-card [data-hact="plus"]');
+  ok($('.hab-card').classList.contains('done') && /3\/3 today ✓/.test($('.hab-card').textContent),
+    'reaching the target marks today met (✓ state, no task is completed anywhere)');
+  ok(/🔥 1 day/.test($('.hab-card').textContent) && /Best 1/.test($('.hab-card').textContent) && /% done/.test($('.hab-card').textContent),
+    'card shows current streak, longest streak and completion % (all derived, per the brief)');
+  ok(remMirror().habits[0].history.length === 1 && remMirror().habits[0].history[0].c === 3,
+    'history is the single stored source: one dated entry with the count (streaks are NOT stored)');
+  await bump(1, '.hab-card [data-hact="minus"]');
+  ok(!$('.hab-card').classList.contains('done') && /2\/3 today/.test($('.hab-card').textContent),
+    '− undoes one completion (undo is first-class: counts, not a checkbox)');
+  await bump(1, '.hab-card [data-hact="plus"]');
+
+  /* stats isolation: dashboard text identical while habits stay met-but-unmixed */
+  const dashSnap1 = (() => { $('#habBtn').click(); $('#dashBtn').click(); const x = $('#dashHost').textContent; $('#dashBtn').click(); $('#dashBtn').click(); const y = $('#dashHost').textContent; $('#dashBtn').click(); return y; })();
+  await sleep(140);
+  ok(dashSnap1 === dashSnap0,
+    'with habitsInStats OFF (default) a met habit day changes NOTHING in dashboard tiles/chart/streak');
+  $('#habInStats').checked = true; E($('#habInStats'), 'change'); await sleep(260);
+  const dashSnap2 = (() => { $('#dashBtn').click(); const x = $('#dashHost').textContent; $('#dashBtn').click(); $('#dashBtn').click(); const y = $('#dashHost').textContent; $('#dashBtn').click(); return y; })();
+  await sleep(140);
+  ok(remMirror().settings.habitsInStats === true, 'the opt-in is a persisted, synced setting');
+  ok(dashSnap2 !== dashSnap1 && /1/.test(dashSnap2),
+    'explicitly enabling habitsInStats mixes the met habit day into dashboard stats — the ONLY way it mixes');
+  $('#habInStats').checked = false; E($('#habInStats'), 'change'); await sleep(260);
+  $('#habBtn').click(); await sleep(140); // back to the habits view for the archive flow
+  $('.hab-card [data-hact="archive"]').click(); await sleep(260);
+  ok(!doc.querySelector('.hab-card') && /Archived \(1\)/.test($('#habitsHost').textContent),
+    'archive hides the habit WITHOUT touching the trash (history preserved, recoverable)');
+  hrRow = (remMirror().reminders || []).find((r) => r.habitId);
+  ok(hrRow.status === 'skipped', 'archiving retires its pending nudge (skipped, like a task-side safe handling)');
+  $('#habitsHost [data-hact="togglearch"]').click(); await sleep(160);
+  ok(!!doc.querySelector('.hab-card.archived') && !doc.querySelector('.hab-card.archived [data-hact="plus"]'),
+    'the archived section shows a read-only card (no check-in controls)');
+  doc.querySelector('.hab-card.archived [data-hact="unarchive"]').click(); await sleep(260);
+  hrRow = (remMirror().reminders || []).find((r) => r.habitId);
+  ok(hrRow.status === 'pending' && hrRow.triggerAt > Date.now() - 1000,
+    'unarchiving re-arms the nudge to the NEXT due slot automatically (engine-owned, like overdue)');
+
+  /* exclusivity with the other overlays */
+  $('#calBtn').click(); await sleep(140);
+  $('#habBtn').click(); await sleep(160);
+  ok($('#habitsView').hidden === false && $('#calendar').hidden === true, 'opening Habits closes the Calendar');
+  $('#dashBtn').click(); await sleep(160);
+  ok($('#dashboard').hidden === false && $('#habitsView').hidden === true && $('#habBtn').getAttribute('aria-pressed') === 'false',
+    'Dashboard takes over exclusively from Habits');
+  $('#dashBtn').click(); await sleep(140); $('#habBtn').click(); await sleep(140); $('#habBtn').click(); await sleep(140);
+  ok($('#taskList').hidden === false && $('#habitsView').hidden === true, 'closing Habits returns to the task list');
+  ok(true, 'habits live-UI flow completed without uncaught errors');
+
+  /* ---- B. deterministic boot: derivations, re-arm, suppression, coercion ---- */
+  const NOW22 = Date.now();
+  const D = (n) => { const x = new Date(NOW22); x.setDate(x.getDate() - n); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+  const dowMon = (NOW22 / 1000 | 0); void dowMon;
+  const mkHab = (o) => Object.assign({ createdAt: NOW22 - 30 * 864e5, updatedAt: NOW22, archived: false, weekdays: [], remindTime: null, history: [], description: '', target: 1, frequency: 'daily' }, o);
+  const bootH = async (habits, reminders, settings) => {
+    const seed = {
+      app: 'zerotodo', schemaVersion: 5, savedAt: NOW22,
+      settings: settings || {}, tasks: [], trash: [], projects: [], subtasks: [],
+      reminders: reminders || [], habits,
+    };
+    const dm = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+    dm.window.HTMLElement.prototype.scrollIntoView = function () {};
+    dm.window.localStorage.setItem('todo_backup_v1', JSON.stringify(seed));
+    dm.window.eval(storageSrc); dm.window.eval(appSrc);
+    await sleep(900);
+    return dm;
+  };
+  // Study Python: 12-day daily streak ending yesterday → grace keeps it alive today
+  const python12 = (() => { const h = []; for (let i = 1; i <= 12; i++) h.push({ d: D(i), c: 1 }); return h; })();
+  const dmH = await bootH([
+    mkHab({ id: 'hs1', name: 'Study Python', frequency: 'daily', history: python12 }),
+    mkHab({ id: 'hs2', name: 'Exercise', frequency: 'daily', remindTime: '00:30', history: [] }),
+    mkHab({ id: 'hs3', name: 'Gym', frequency: 'daily', remindTime: '00:30', history: [{ d: D(1), c: 1 }, { d: D(0), c: 1 }] }),
+    mkHab({ id: 'hs4', name: 'Meditate', frequency: 'daily', archived: true, remindTime: '07:00', history: [{ d: D(1), c: 1 }] }),
+  ], [
+    { id: 'hr:hs2', taskId: '', habitId: 'hs2', reminderType: 'custom', triggerAt: NOW22 - 36 * 3600e3, enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: 1, updatedAt: 1 },
+    { id: 'hr:hs3', taskId: '', habitId: 'hs3', reminderType: 'custom', triggerAt: NOW22 - 36 * 3600e3, enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: 1, updatedAt: 1 },
+    { id: 'hr:hs4', taskId: '', habitId: 'hs4', reminderType: 'custom', triggerAt: NOW22 + 3600e3, enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: 1, updatedAt: 1 },
+  ]);
+  dmH.window.document.getElementById('habBtn').click();
+  await sleep(200);
+  const $h = (s) => dmH.window.document.querySelector(s);
+  const hTxt = $h('.hab-card') ? $h('.hab-card').textContent : '';
+  ok(/Study Python/.test(hTxt) && /🔥 12 days/.test(hTxt), 'a 12-day run ending yesterday still shows “🔥 12 days” (today-in-progress does not break it — same grace rule as the dashboard streak)');
+  ok(/Best 12/.test(hTxt) && /39% done/.test(hTxt), 'longest streak and completion % derive from the same history (12 met of 31 due days)');
+  const hSnap = () => JSON.parse(dmH.window.localStorage.getItem('todo_backup_v1'));
+  const r2 = hSnap().reminders.find((x) => x.id === 'hr:hs2');
+  ok(r2.status === 'pending' && r2.triggerAt > NOW22 && /^00:30$/.test(new Date(r2.triggerAt).toTimeString().slice(0, 5)),
+    'a STALE stored triggerAt is ignored — the engine re-armed the nudge to the next 00:30 due slot at boot');
+  const r3 = hSnap().reminders.find((x) => x.id === 'hr:hs3');
+  ok(r3.status === 'pending' && r3.triggerAt > NOW22 && r3.delivered === false,
+    'the met-today habit skipped its overdue alert (no nag after you already did it) and simply armed the next slot');
+  ok(!/Habit Reminder/.test(dmH.window.document.getElementById('toastHost').textContent),
+    'suppressed habit check-ins produce NO notification at all (existing delivery, existing dedup rules)');
+  const r4 = hSnap().reminders.find((x) => x.id === 'hr:hs4');
+  ok(r4.status === 'skipped', 'an archived habit leaves its row skipped — the engine never nags for hidden habits');
+  ok(hSnap().habits.length === 4 && hSnap().habits.every((x) => Array.isArray(x.history)),
+    'boot validated + re-mirrored every habit (own store, lenient coerce)');
+  const rBefore = JSON.stringify(hSnap().reminders);
+  await new Promise((rr) => setTimeout(rr, 1200));
+  ok(JSON.stringify(hSnap().reminders) === rBefore,
+    'waiting two ticks changes NOTHING — re-armed triggers are stable, no write storm');
+  dmH.window.close();
+
+  /* weekly + selected-days + history hygiene */
+  const histJunk = [];
+  for (let i = 739; i >= 0; i--) histJunk.push({ d: D(i), c: 1 });
+  histJunk.push({ d: D(3), c: 9 }); // duplicate date, later wins
+  histJunk.push({ d: 'garbage', c: 3 }, { d: D(2), c: 0 }, null);
+  const mondayOf = (off) => { const x = new Date(NOW22); const k = (x.getDay() + 6) % 7; x.setDate(x.getDate() - k + off); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+  const dmI = await bootH([
+    mkHab({ id: 'hw1', name: 'Read', frequency: 'weekly', target: 3, createdAt: NOW22 - 20 * 864e5, history: [{ d: mondayOf(0), c: 1 }, { d: mondayOf(1), c: 1 }, { d: mondayOf(2), c: 1 }] }),
+    mkHab({ id: 'hd1', name: 'Practice IELTS', frequency: 'days', weekdays: [1, 3, 5], history: [{ d: mondayOf(0), c: 1 }, { d: mondayOf(2), c: 1 }] }),
+    mkHab({ id: 'ht1', name: 'Tidy', frequency: 'daily', history: histJunk }),
+  ]);
+  dmI.window.document.getElementById('habBtn').click();
+  await sleep(200);
+  const $i = (s) => dmI.window.document.querySelector(s);
+  const iCards = [...dmI.window.document.querySelectorAll('.hab-card')];
+  const readTxt = iCards.find((c) => /Read/.test(c.textContent)).textContent;
+  ok(/3\/3 this week ✓/.test(readTxt) && /🔥 1 day/.test(readTxt),
+    'weekly habits measure ONE target across the whole Mon–Sun week — met = ✓ with a weekly streak');
+  const ielsTxt = iCards.find((c) => /IELTS/.test(c.textContent)).textContent;
+  ok(/Mon ✓/.test(ielsTxt) && /Wed ✓/.test(ielsTxt), 'selected-days habit shows the brief’s row shape: Mon ✓ Wed ✓ …');
+  const calCells = iCards.find((c) => /IELTS/.test(c.textContent)).querySelectorAll('.hab-cal-cell:not(.head):not(.empty)');
+  ok(calCells.length >= 28, 'calendar history renders as a real month grid (dots per day)');
+  const iSnap = JSON.parse(dmI.window.localStorage.getItem('todo_backup_v1'));
+  const tidy = iSnap.habits.find((x) => x.id === 'ht1');
+  ok(tidy.history.length === 730, 'history is capped at 730 entries on load (oldest roll off, never an unbounded row)');
+  ok(tidy.history.some((e) => e.d === D(3) && e.c === 9) && !tidy.history.some((e) => e.c < 1) && tidy.history.every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.d)),
+    'junk entries are dropped, duplicate dates collapse last-wins (9 kept) — the coerce layer is the guardian');
+  ok(tidy.history.every((e, i2, a) => i2 === 0 || a[i2 - 1].d < e.d), 'history stays strictly sorted by date through the cap');
+  dmI.window.close();
+
+  /* stats isolation at boot: mixed dashboard differs from pure one */
+  const dmJ = await bootH([mkHab({ id: 'hk1', name: 'Kegel-ish', frequency: 'daily', history: [{ d: D(0), c: 1 }] })], [], { habitsInStats: true });
+  dmJ.window.document.getElementById('dashBtn').click();
+  await sleep(200);
+  ok(/1/.test(dmJ.window.document.getElementById('dashHost').textContent) && !dmJ.window.document.getElementById('dashboard').hidden,
+    'with the opt-in ON at boot, the met habit day already shapes the dashboard (explicitly configured mixing)');
+  dmJ.window.close();
+
+  /* ---- C. cross-device: a habit pushed from elsewhere rides backup/import ---- */
+  const dmK = await bootH([mkHab({ id: 'hz', name: 'Stretch', frequency: 'days', weekdays: [6], history: [{ d: D(7), c: 1 }] })]);
+  dmK.window.document.getElementById('habBtn').click(); await sleep(200);
+  ok(JSON.parse(dmK.window.localStorage.getItem('todo_backup_v1')).habits.length === 1,
+    'a HABITS-ONLY account survives restart (recover() counts every record type, not just tasks)');
+  const kMirror = JSON.parse(dmK.window.localStorage.getItem('todo_backup_v1'));
+  ok(kMirror.habits.length === 1 && kMirror.habits[0].weekdays[0] === 6 && kMirror.habits[0].frequency === 'days',
+    'selected-days shape survives the storage round-trip byte-clean (Saturdays only = [6])');
+  const kTxt = dmK.window.document.querySelector('.hab-card').textContent;
+  {
+    const satToday = new Date(NOW22).getDay() === 6;
+    // history entry D(7) lands on a due Saturday only when today IS Saturday —
+    // then the streak/percent are 1 day / 20%; on any other weekday the sole
+    // entry matches no due day and everything must read zero. (No phantom.)
+    ok(satToday ? /🔥 1 day/.test(kTxt) && /20% done/.test(kTxt) : /🔥 0 days/.test(kTxt) && /0% done/.test(kTxt),
+      'day-set habit derives stats ONLY from real due days — streak and % track weekday alignment (no phantom state)');
+  }
+  dmK.window.close();
+  ok(true, 'habits section completed without uncaught errors');
+}
+
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
 process.exit(failed ? 1 : 0);

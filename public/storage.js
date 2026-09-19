@@ -45,12 +45,13 @@
   /* ----------------------------- Constants ------------------------------ */
 
   const DB_NAME = 'zerotodo';
-  const DB_VERSION = 4; // v2 projects, v3 subtasks, v4 reminders (idempotent upgrades below)
+  const DB_VERSION = 5; // v2 projects, v3 subtasks, v4 reminders, v5 habits (idempotent upgrades)
   const STORE_TASKS = 'tasks';
   const STORE_TRASH = 'trash';
   const STORE_PROJECTS = 'projects';
   const STORE_SUBTASKS = 'subtasks';
   const STORE_REMINDERS = 'reminders';
+  const STORE_HABITS = 'habits';
   const STORE_META = 'meta';
 
   // Versioned localStorage keys: a future format can ship a *_v2 key without
@@ -216,6 +217,7 @@
         if (!db.objectStoreNames.contains(STORE_PROJECTS)) db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(STORE_SUBTASKS)) db.createObjectStore(STORE_SUBTASKS, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(STORE_REMINDERS)) db.createObjectStore(STORE_REMINDERS, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains(STORE_HABITS)) db.createObjectStore(STORE_HABITS, { keyPath: 'id' });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB.'));
@@ -459,6 +461,52 @@
     return true;
   }
 
+  /* Habit record — a SEPARATE model from one-off tasks (by design: habits
+     repeat and measure consistency, they don't have due dates). Fields:
+     id, name, description, frequency ('daily'|'weekly'|'days'), weekdays
+     (0=Sun…6=Sat, only for 'days'), target (per day / per week), createdAt,
+     archived, and completion HISTORY ({d:'YYYY-MM-DD', c:count}, capped at
+     730 days, deduped last-wins). Streak/best/percent are ALWAYS derived
+     from history — a stored streak would drift, so it doesn't exist.
+     remindTime ('HH:MM'|null) is the daily nudge the reminder engine
+     (app.js/notify.js) turns into ordinary reminder records — no second
+     notification pipeline. */
+  const HABIT_FREQS = ['daily', 'weekly', 'days'];
+
+  function coerceHabit(raw, into) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    if (typeof raw.id !== 'string' || !raw.id) return false;
+    if (typeof raw.name !== 'string' || !raw.name.trim()) return false;
+    const now = Date.now();
+    const h = { ...raw }; // lenient spread like every coerce*
+    h.name = raw.name.trim().slice(0, 120);
+    h.description = typeof raw.description === 'string' ? raw.description.slice(0, 2000) : '';
+    h.frequency = HABIT_FREQS.indexOf(raw.frequency) >= 0 ? raw.frequency : 'daily';
+    h.weekdays = h.frequency === 'days'
+      ? [...new Set((Array.isArray(raw.weekdays) ? raw.weekdays : []).map(Number)
+          .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))].sort((a, b) => a - b)
+      : [];
+    if (h.frequency === 'days' && !h.weekdays.length) h.frequency = 'daily'; // an empty day-set is daily
+    const tgt = Math.round(Number(raw.target));
+    // Clamp (never fall back to 1 — an over-range target means “a lot per
+    // day”, and silently making it trivially-met would fake a completion).
+    h.target = Number.isFinite(tgt) ? Math.min(99, Math.max(1, tgt)) : 1;
+    h.archived = !!raw.archived;
+    h.remindTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.remindTime || '') ? raw.remindTime : null;
+    const seen = new Map();
+    for (const e of (Array.isArray(raw.history) ? raw.history : [])) {
+      if (e && typeof e === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String(e.d))) {
+        const c = Math.floor(Number(e.c));
+        if (Number.isFinite(c) && c > 0) seen.set(String(e.d), { d: String(e.d), c: Math.min(999, c) });
+      }
+    }
+    h.history = [...seen.values()].sort((a, b) => (a.d < b.d ? -1 : 1)).slice(-730);
+    h.createdAt = Number(raw.createdAt) || now;
+    h.updatedAt = Number(raw.updatedAt) || h.createdAt;
+    into.push(h);
+    return true;
+  }
+
   /* Reminder record (schema v5). NEVER depends on a live JS timer: the
      record IS the schedule — the engine re-arms from it on every boot.
      Fields per spec: id, taskId, triggerAt, reminderType, enabled,
@@ -469,12 +517,13 @@
   function coerceReminder(raw, into) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
     if (typeof raw.id !== 'string' || !raw.id) return false;
-    if (typeof raw.taskId !== 'string' || !raw.taskId) return false;
+    if ((typeof raw.taskId !== 'string' || !raw.taskId) && (typeof raw.habitId !== 'string' || !raw.habitId)) return false; // needs an owner
     const trig = Number(raw.triggerAt);
     if (!Number.isFinite(trig)) return false; // no fire time = not a reminder
     const now = Date.now();
     const r = { ...raw }; // lenient: preserve unknown fields, like the others
-    r.taskId = raw.taskId;
+    r.taskId = typeof raw.taskId === 'string' ? raw.taskId : '';
+    if (typeof raw.habitId === 'string' && raw.habitId) r.habitId = raw.habitId; else delete r.habitId;
     // An unknown type degrades to 'custom' (fires at its stored instant) —
     // never dropped, so an import from a newer build still notifies.
     r.reminderType = REMINDER_TYPES.indexOf(raw.reminderType) >= 0 ? raw.reminderType : 'custom';
@@ -523,12 +572,14 @@
       projects: [],
       subtasks: [],
       reminders: [],
+      habits: [],
       settings: null,
     };
     for (const raw of data.tasks) coerceTask(raw, out.tasks);
     if (Array.isArray(data.trash)) for (const raw of data.trash) coerceTask(raw, out.trash, true);
     if (Array.isArray(data.projects)) for (const raw of data.projects) coerceProject(raw, out.projects);
     if (Array.isArray(data.subtasks)) for (const raw of data.subtasks) coerceSubtask(raw, out.subtasks);
+    if (Array.isArray(data.habits)) for (const raw of data.habits) coerceHabit(raw, out.habits);
     if (Array.isArray(data.reminders)) for (const raw of data.reminders) coerceReminder(raw, out.reminders);
     if (data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) out.settings = data.settings;
     return out;
@@ -569,13 +620,23 @@
       if (coerceTask(raw, trash, true)) seenTrash.add(raw.id);
       else dropped++;
     }
-    // Reminders attach to a task — a live OR trashed one (restore must still
-    // find its schedule). Anything pointing at nothing is stale → dropped.
-    const ownerIds = new Set([...tasks, ...trash].map((t) => t.id));
+    // Reminders attach to an owner: a live/trashed TASK or a HABIT (whose
+    // nudge row is engine-managed). Anything pointing at nothing is stale → dropped.
+    const habits = [];
+    {
+      const seenHab = new Set();
+      for (const raw of (payload && Array.isArray(payload.habits) ? payload.habits : [])) {
+        if (seenHab.has(raw && raw.id)) { dropped++; continue; }
+        if (coerceHabit(raw, habits)) seenHab.add(raw.id);
+        else dropped++;
+      }
+    }
+    const ownerIds = new Set([...tasks, ...trash, ...habits].map((t) => t.id));
     const seenRem = new Set();
     const reminders = [];
     for (const raw of (payload && Array.isArray(payload.reminders) ? payload.reminders : [])) {
-      if (seenRem.has(raw && raw.id) || !ownerIds.has(raw && raw.taskId)) { dropped++; continue; }
+      const owned = raw && (ownerIds.has(raw.taskId) || ownerIds.has(raw.habitId));
+      if (seenRem.has(raw && raw.id) || !owned) { dropped++; continue; }
       if (coerceReminder(raw, reminders)) seenRem.add(raw.id);
       else dropped++;
     }
@@ -585,6 +646,7 @@
       projects,
       subtasks,
       reminders,
+      habits,
       settings: (payload && payload.settings && typeof payload.settings === 'object') ? payload.settings : {},
       dropped,
     };
@@ -646,7 +708,7 @@
     let idbAvailable = null;   // null = unknown, true/false after first attempt
     // The authoritative in-memory state. The UI mutates it directly (via
     // store.state); commit() persists it. A failed write never touches it.
-    const memory = { tasks: [], trash: [], projects: [], subtasks: [], reminders: [], settings: { ...DEFAULT_SETTINGS } };
+    const memory = { tasks: [], trash: [], projects: [], subtasks: [], reminders: [], habits: [], settings: { ...DEFAULT_SETTINGS } };
     let lastSavedAt = 0;
     let dirty = false;         // true while memory is ahead of disk (write failed)
     let resyncing = false;
@@ -674,15 +736,16 @@
 
     async function loadFromIDB() {
       const d = await ensureDB();
-      const data = await readTx(d, [STORE_TASKS, STORE_TRASH, STORE_PROJECTS, STORE_SUBTASKS, STORE_REMINDERS, STORE_META], (tx) => {
+      const data = await readTx(d, [STORE_TASKS, STORE_TRASH, STORE_PROJECTS, STORE_SUBTASKS, STORE_REMINDERS, STORE_HABITS, STORE_META], (tx) => {
         const t = reqToPromise(tx.objectStore(STORE_TASKS).getAll());
         const tr = reqToPromise(tx.objectStore(STORE_TRASH).getAll());
         const pj = reqToPromise(tx.objectStore(STORE_PROJECTS).getAll());
         const sb = reqToPromise(tx.objectStore(STORE_SUBTASKS).getAll());
         const rm = reqToPromise(tx.objectStore(STORE_REMINDERS).getAll());
+        const hb = reqToPromise(tx.objectStore(STORE_HABITS).getAll());
         const m = reqToPromise(tx.objectStore(STORE_META).get('meta'));
-        return Promise.all([t, tr, pj, sb, rm, m]).then(([tasks, trash, projects, subtasks, reminders, meta]) => ({
-          tasks, trash, projects, subtasks, reminders, meta: meta ? meta.value : null,
+        return Promise.all([t, tr, pj, sb, rm, hb, m]).then(([tasks, trash, projects, subtasks, reminders, habits, meta]) => ({
+          tasks, trash, projects, subtasks, reminders, habits, meta: meta ? meta.value : null,
         }));
       });
       return data;
@@ -713,6 +776,7 @@
         projects: memory.projects,
         subtasks: memory.subtasks,
         reminders: memory.reminders,
+        habits: memory.habits,
       });
     }
 
@@ -737,6 +801,7 @@
           projects: shape.projects,
           subtasks: shape.subtasks,
           reminders: shape.reminders || [],
+          habits: shape.habits || [],
           settings: shape.settings || {},
         },
         error: null,
@@ -779,7 +844,7 @@
      */
     function validateOp(op) {
       if (!op || typeof op !== 'object') throw new Error('invalid operation');
-      if (op.store !== STORE_TASKS && op.store !== STORE_TRASH && op.store !== STORE_PROJECTS && op.store !== STORE_SUBTASKS && op.store !== STORE_REMINDERS && op.store !== STORE_META) {
+      if (op.store !== STORE_TASKS && op.store !== STORE_TRASH && op.store !== STORE_PROJECTS && op.store !== STORE_SUBTASKS && op.store !== STORE_REMINDERS && op.store !== STORE_HABITS && op.store !== STORE_META) {
         throw new Error('unknown store: ' + op.store);
       }
       if (op.op === 'put') {
@@ -795,7 +860,10 @@
           if (!coerceSubtask(v, sink)) throw new Error('subtask failed validation (needs string id + parentTaskId + title)');
         } else if (op.store === STORE_REMINDERS) {
           const sink = [];
-          if (!coerceReminder(v, sink)) throw new Error('reminder failed validation (needs string id + taskId + finite triggerAt)');
+          if (!coerceReminder(v, sink)) throw new Error('reminder failed validation (needs string id + taskId or habitId + finite triggerAt)');
+        } else if (op.store === STORE_HABITS) {
+          const sink = [];
+          if (!coerceHabit(v, sink)) throw new Error('habit failed validation (needs string id + name)');
         } else {
           // Reuse the same coercion rules as recovery: no id/title → refuse.
           const sink = [];
@@ -893,6 +961,7 @@
         for (const p of memory.projects) ops.push({ store: STORE_PROJECTS, op: 'put', value: p });
         for (const s of memory.subtasks) ops.push({ store: STORE_SUBTASKS, op: 'put', value: s });
         for (const r of memory.reminders) ops.push({ store: STORE_REMINDERS, op: 'put', value: r });
+        for (const h of memory.habits) ops.push({ store: STORE_HABITS, op: 'put', value: h });
         if (idbAvailable !== false) {
           try {
             const disk = await loadFromIDB();
@@ -907,6 +976,8 @@
             for (const s of disk.subtasks || []) if (!subIds.has(s.id)) ops.push({ store: STORE_SUBTASKS, op: 'delete', key: s.id });
             const remIds = new Set(memory.reminders.map((r) => r.id));
             for (const r of disk.reminders || []) if (!remIds.has(r.id)) ops.push({ store: STORE_REMINDERS, op: 'delete', key: r.id });
+            const habIds = new Set(memory.habits.map((h) => h.id));
+            for (const h of disk.habits || []) if (!habIds.has(h.id)) ops.push({ store: STORE_HABITS, op: 'delete', key: h.id });
           } catch (_) { /* disk unreadable — re-putting everything is still best effort */ }
         }
         return await commit(ops, { isResync: true });
@@ -980,6 +1051,7 @@
             projects: idbData.projects,
             subtasks: idbData.subtasks,
             reminders: idbData.reminders,
+            habits: idbData.habits || [],
             settings: (idbData.meta && idbData.meta.settings) || {},
             savedAt: (idbData.meta && idbData.meta.savedAt) || 0,
           };
@@ -999,6 +1071,7 @@
             projects: backup.state.projects || [],
             subtasks: backup.state.subtasks || [],
             reminders: backup.state.reminders || [],
+            habits: backup.state.habits || [],
             settings: backup.state.settings || {},
             savedAt: backup.state.savedAt,
           };
@@ -1010,8 +1083,10 @@
       }
 
       // -- 3. choose the source of truth ------------------------------------
-      const idbHas = idbState && (idbState.tasks.length || idbState.trash.length || idbState.projects.length || idbState.subtasks.length || idbState.reminders.length);
-      const bakHas = backupState && (backupState.tasks.length || backupState.trash.length || (backupState.projects || []).length || (backupState.subtasks || []).length || (backupState.reminders || []).length);
+      // “Has data” counts EVERY record type — a habits-only account must
+      // survive restart exactly like a tasks-only one.
+      const idbHas = idbState && (idbState.tasks.length || idbState.trash.length || idbState.projects.length || idbState.subtasks.length || idbState.reminders.length || (idbState.habits || []).length);
+      const bakHas = backupState && (backupState.tasks.length || backupState.trash.length || (backupState.projects || []).length || (backupState.subtasks || []).length || (backupState.reminders || []).length || (backupState.habits || []).length);
 
       let payload = null;
       let source = 'fresh';
@@ -1037,12 +1112,13 @@
       // that silently killed recovery for any user reloading with fired
       // reminders in history: blank app until they cleared site data.)
       const now = Date.now();
-      const clean = payload || { tasks: [], trash: [], projects: [], subtasks: [], reminders: [], settings: {} };
+      const clean = payload || { tasks: [], trash: [], projects: [], subtasks: [], reminders: [], habits: [], settings: {} };
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
       memory.projects = clean.projects;
       memory.subtasks = clean.subtasks || [];
       memory.reminders = clean.reminders || [];
+      memory.habits = clean.habits || [];
       // Reminders that already fired (or were dismissed/skipped) lose their
       // meaning after the 30-day window — prune them from history. PENDING
       // ones are NEVER pruned here: the engine owes them a catch-up fire.
@@ -1103,6 +1179,7 @@
         projects: fresh.projects,
         subtasks: fresh.subtasks,
         reminders: fresh.reminders,
+        habits: fresh.habits,
         settings: (fresh.meta && fresh.meta.settings) || {},
       });
       memory.tasks = clean.tasks;
@@ -1110,6 +1187,7 @@
       memory.projects = clean.projects;
       memory.subtasks = clean.subtasks;
       memory.reminders = clean.reminders || [];
+      memory.habits = clean.habits || [];
       memory.settings = { ...DEFAULT_SETTINGS, ...clean.settings };
       lastSavedAt = (fresh.meta && fresh.meta.savedAt) || Date.now();
       dirty = false; // disk is authoritative again
@@ -1196,12 +1274,13 @@
       startSync,
       refreshFromOtherTab,
       /** Adopt an imported dataset (caller then calls resync()). */
-      replaceMemory(tasks, trash, projects, subtasks, reminders) {
+      replaceMemory(tasks, trash, projects, subtasks, reminders, habits) {
         memory.tasks = tasks;
         memory.trash = trash;
         memory.projects = Array.isArray(projects) ? projects : [];
         memory.subtasks = Array.isArray(subtasks) ? subtasks : [];
         memory.reminders = Array.isArray(reminders) ? reminders : [];
+        memory.habits = Array.isArray(habits) ? habits : [];
       },
       /** Serialize the current state as a downloadable backup file. */
       exportData: () => serializeBackup(Date.now()),
@@ -1220,7 +1299,7 @@
       TRASH_RETENTION_MS,
       DEFAULT_SETTINGS,
       SCHEMA_VERSION,
-      STORES: { tasks: STORE_TASKS, trash: STORE_TRASH, projects: STORE_PROJECTS, subtasks: STORE_SUBTASKS, reminders: STORE_REMINDERS, meta: STORE_META },
+      STORES: { tasks: STORE_TASKS, trash: STORE_TRASH, projects: STORE_PROJECTS, subtasks: STORE_SUBTASKS, reminders: STORE_REMINDERS, habits: STORE_HABITS, meta: STORE_META },
     },
     helpers: {
       uuid,
@@ -1232,7 +1311,8 @@
       coerceProject,
       coerceSubtask,
       coerceReminder,
-      REMINDER_TYPES,
+      coerceHabit,
+      HABIT_FREQS,
       REMINDER_STATUSES,
       RECUR_KINDS,
       coerceRecurRule,

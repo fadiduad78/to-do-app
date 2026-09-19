@@ -275,6 +275,22 @@ try {
   r = await fetch(BASE + '/api/state', H('GET'));
   ok(r.status === 200, 'legacy ZT_TOKEN bearer still maps to admin bucket');
 
+  /* ---- habits (v6 module): a separate store riding the SAME state doc ---- */
+  {
+    const hs = (id, upd, extra = {}) => ({ id, name: 'Exercise', frequency: 'daily', target: 1, weekdays: [], archived: false, remindTime: null, history: [], createdAt: upd - 1, updatedAt: upd, ...extra });
+    let s2 = await sync('A', 0, { tasks: [], trash: [], habits: [hs('hh1', ts(40)), { id: 'hh2', updatedAt: ts(40), frequency: 'yearly' }], reminders: [{ id: 'hr:hh1', habitId: 'hh1', taskId: '', triggerAt: ts(41), reminderType: 'custom', status: 'pending', enabled: true, delivered: false, dismissed: false, createdAt: ts(40), updatedAt: ts(40) }] }, {}, 'merge');
+    ok(s2.json.habits.length === 1 && s2.json.habits[0].name === 'Exercise',
+      'habits sync inside the state doc (no second table anywhere) — a habit without a name is refused');
+    ok(s2.json.reminders.some((x) => x.id === 'hr:hh1' && x.habitId === 'hh1'),
+      'a habit-owned reminder row rides the same reminders array (server does NOT require taskId)');
+    s2 = await sync('B', s2.json.rev, { tasks: [], trash: [], habits: [hs('hh1', ts(45), { name: 'Exercise Evening', frequency: 'days', weekdays: [1, 3], remindTime: '07:00' })] }, {}, 'merge');
+    const h1 = s2.json.habits.find((x) => x.id === 'hh1');
+    ok(h1.name === 'Exercise Evening' && h1.frequency === 'days' && h1.remindTime === '07:00',
+      'last-write-wins edit of a habit from another device merges like any record');
+    s2 = await sync('A', s2.json.rev, { tasks: [], trash: [], habits: [hs('hh1', ts(30), { name: 'STALE' })] }, {}, 'merge');
+    ok(s2.json.habits.find((x) => x.id === 'hh1').name === 'Exercise Evening', 'a STALE habit push cannot clobber the newer one');
+  }
+
   rmSync(dataDir, { recursive: true, force: true });
 } catch (e) {
   console.error('TEST CRASH:', e);

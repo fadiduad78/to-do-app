@@ -93,6 +93,17 @@ if the server is unreachable, every original guarantee still holds.
   survives refresh, sleep and sync, ticks with zero storage writes, and
   catches up honestly after being closed early. Pausing mid-day never breaks
   a streak; stopping before a full minute logs nothing.
+- **Habit Tracking (🔥 in the toolbar)** — a separate module for recurring
+  check-ins: **Daily / Weekly / Selected days**, an optional per-day (or
+  per-week) **target** so *Drink water 8×/day* counts instead of toggles, and
+  an editor for description + archive. Every habit card shows **current
+  streak** (`🔥 12 days`), **longest streak**, **completion %** and a
+  **Mon–Sun ✓ row** plus a mini **month calendar** of check-in history.
+  Optional daily nudges **reuse the existing reminder & notification engine**
+  (one re-arming record in the reminders store — snooze/dismiss/dedup/
+  channels all work unchanged), and habit days are **never** mixed into task
+  statistics unless you flip *Settings → Habits → count in dashboard stats*
+  (off by default, like every opt-in here).
 - **Installable as a PWA** (`manifest.webmanifest` + generated launcher icons
   + theme-color): on Android (and iOS when added to Home Screen) the installed
   app keeps the service worker alive for notification delivery, and the
@@ -255,12 +266,68 @@ settings, deterministic boot catch-up, long-break parity, both opt-in sides,
 one-timer rule, trash honesty, zero-per-second writes) and
 `server/test-storage.mjs` (coerce/cap/default-clamp cases).
 
+## Habit Tracking (a separate module by design)
+
+A habit is NOT a task with a recurrence rule: it never expires, it is *counted*
+rather than completed (multiple times a day when `target > 1`), it can never be
+“overdue”, and it lives in its own IndexedDB store (`habits`, DB v5) with its
+own record:
+
+```js
+{ id, name, description,
+  frequency: 'daily' | 'weekly' | 'days',   // 'days' = selected weekdays
+  weekdays:  [1, 3, 5],                     // 0 = Sun … 6 = Sat (same as recurrence)
+  target:    1..99,                          // per DAY (daily/days) or per WEEK (weekly)
+  remindTime: 'HH:MM' | null,                // optional daily nudge
+  archived:  false,                          // soft hide — history survives
+  createdAt, updatedAt,
+  history:   [{ d: 'YYYY-MM-DD', c: count }] // capped at 730 entries, deduped last-wins
+}
+```
+
+- **Streak, best and % are derived, never stored.** `habitStats()` recomputes
+  them from `history` at render: streak = consecutive met due-days (daily) /
+  met due-days on due days (days) / met weeks (weekly); today (or the current
+  week) still in progress does NOT break the run — the same grace rule as the
+  dashboard streak. `pct` = met ÷ due since creation, over the last 730 days
+  (weeks, for weekly). A stored streak could drift from its history; that is
+  why it doesn't exist (the brief's `streak` field is a *display*, not a field).
+- **The nudge reuses the reminder engine — no second pipeline.**
+  `remReconcile()` keeps exactly **one** engine-managed row per habit
+  (`id: 'hr:' + habitId`) in the ordinary `reminders` store; `coerceReminder`
+  simply also accepts `habitId` as the owner (`taskId: ''`). It re-arms to the
+  next due slot (weekly habits nudge Mondays — start of week), fires through
+  the existing channels/dedup/snooze/in-app fallback (`ZTNotify.habitAlert`
+  only changes the copy), is **skipped when the day's target is already
+  met** (no nagging after you did it), and is retired (`skipped`) while the
+  habit is archived. Delivery, storage and sync therefore ride code that was
+  already tested for tasks.
+- **Stats stay separate unless you say otherwise** — the brief’s one hard
+  rule. `S.settings.habitsInStats` (default **off**) is the only gate: with it
+  off, dashboard text is *byte-identical* no matter how many habits you check
+  (pinned by §22); with it on, met habit days merge into the tiles, the
+  Mon–Sun chart and the streak. Habit days **never** enter the overdue bucket
+  or the backlog in either mode.
+- **History is the single source and is bounded** — 730 dated entries,
+  last-write-wins dedupe, counts clamped 1..999; invalid dates/types are
+  dropped by `coerceHabit` (client and server hold identical rules).
+
+Tests: `server/test-ui.mjs` **§22** (43 checks — toolbar view + overlay
+exclusivity, live create/bump/undo with a fraction target, streak/best/%
+derivation incl. the grace rule, archive ↔ nudge retire/re-arm, dashboard
+isolation both directions, boot re-arm of a stale trigger, met-day
+suppression with zero notification, 730-cap/junk-drop coercion, the
+day-alignment-stable day-set case), plus habit cases in
+`server/test-storage.mjs`, `server/test.mjs`, `server/test-client.mjs` and
+`server/test-supabase.mjs` (single state doc, LWW + stale-push rejection,
+nudge row persistence across restart).
+
 ## Where your data is stored
 
 | Location | Key / store | Contents |
 |---|---|---|
-| **IndexedDB** (primary) | db `zerotodo` → stores `tasks`, `trash`, `meta` | All live tasks — recurrence included, since a recurring task is one record that rolls forward — soft-deleted tasks, and `{schemaVersion, savedAt, settings}` |
-| **localStorage** (redundant mirror) | `todo_backup_v1` | A full JSON copy of tasks + trash + settings, rewritten after *every* successful IndexedDB write |
+| **IndexedDB** (primary) | db `zerotodo` (v5) → stores `tasks`, `trash`, `projects`, `subtasks`, `reminders`, `habits`, `meta` | All live tasks — recurrence included, since a recurring task is one record that rolls forward — soft-deleted tasks, schedules, habits, and `{schemaVersion, savedAt, settings}` |
+| **localStorage** (redundant mirror) | `todo_backup_v1` | A full JSON copy of every store (tasks, trash, projects, subtasks, reminders, habits) + settings, rewritten after *every* successful IndexedDB write |
 | **localStorage** (drafts) | `todo_draft_v1` | Your in-progress form text, auto-saved ~1.2 s after you stop typing |
 
 ## How the safety mechanisms work

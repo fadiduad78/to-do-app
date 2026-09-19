@@ -130,6 +130,7 @@
 
   <section class="toolbar">
     <input id="searchInput" type="search" placeholder="Search title or description…" autocomplete="off" aria-label="Search tasks">
+    <button id="habBtn" class="btn btn-ghost" aria-pressed="false" title="Habits: recurring check-ins, kept separate from one-time tasks">🔥 Habits</button>
     <button id="dashBtn" class="btn btn-ghost" aria-pressed="false" title="Dashboard: your productivity state, computed live from the same data">📊 Dashboard</button>
     <button id="calBtn" class="btn btn-ghost" aria-pressed="false" title="Calendar: a view over the same tasks">📅 Calendar</button>
     <button id="newTaskBtn" class="btn btn-primary">＋ New task</button>
@@ -165,6 +166,12 @@
        state — it stores nothing; every number is derived at render time. -->
   <section id="dashboard" class="dashboard" hidden aria-label="Productivity dashboard">
     <div id="dashHost" class="dash-grid"></div>
+  </section>
+
+  <!-- Habits: a separate module (its own store in storage.js). Nudges ride
+       the existing reminders engine; stats only mix in if opted in. -->
+  <section id="habitsView" class="habits-view" hidden aria-label="Habits">
+    <div id="habitsHost"></div>
   </section>
 
   <div id="trashBar" class="trash-bar" hidden>
@@ -208,6 +215,10 @@
     <label class="setting-row setting-check"><span>Notify when a session finishes</span><input type="checkbox" id="fzNotify"></label>
     <label class="setting-row setting-check"><span>Mark the task complete when a session ends</span><input type="checkbox" id="fzAuto"></label>
     <p class="muted small">Start a session from any task's 🍅 button — presets 25/5, 50/10 or Custom. Focus time is tracked per task and project; a task is never completed automatically unless the option above is on.</p>
+
+    <h2 style="margin-top:14px">Habits</h2>
+    <label class="setting-row setting-check"><span>Count habit check-ins in dashboard stats (tiles, week chart, streak)</span><input type="checkbox" id="habInStats"></label>
+    <p class="muted small">Off by default — habits are a separate module: task statistics stay pure unless you turn this on. Habit days never count as overdue.</p>
 
     <h2 style="margin-top:14px">Notifications</h2>
     <div id="notifBox" class="notif-box">

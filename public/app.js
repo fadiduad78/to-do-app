@@ -41,6 +41,7 @@
     projectBar: $('projectBar'), projectDetail: $('projectDetail'),
     calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
     dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
+    habBtn: $('habBtn'), habitsView: $('habitsView'), habitsHost: $('habitsHost'), habInStats: $('habInStats'),
     focusBar: $('focusBar'),
     fRecurrence: $('f-recurrence'), remRows: $('remRows'), addRemBtn: $('addRemBtn'),
     recurPanel: $('recurPanel'), rcEvery: $('rcEvery'), rcUnit: $('rcUnit'), rcDays: $('rcDays'), rcHint: $('rcHint'),
@@ -106,7 +107,7 @@
     S = rec.state;
     S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null,
                cal: { open: false, view: 'month', anchor: '' },
-               dash: { open: false }, focus: { taskId: null } };
+               dash: { open: false }, hab: { open: false, showArch: false }, focus: { taskId: null } };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
@@ -126,6 +127,7 @@
     // load — the explicit control in Settings → Notifications does that.
     S.settings.notify = window.ZTNotify ? ZTNotify.sanitize(S.settings.notify) : {};
     S.reminders = S.reminders || []; // v5 — the engine guarantees the array
+    S.habits = S.habits || []; // v6 habits store — same guarantee, additive
 
     store.startSync();
 
@@ -476,16 +478,21 @@
     // are views over the SAME in-memory state — no duplicate data anywhere.
     const calOn = !!(S.ui && S.ui.cal.open);
     const dashOn = !!(S.ui && S.ui.dash && S.ui.dash.open);
-    els.calendar.hidden = !calOn || dashOn;
-    els.calBtn.classList.toggle('on', calOn && !dashOn);
-    els.calBtn.setAttribute('aria-pressed', String(calOn && !dashOn));
-    els.dashboard.hidden = !dashOn;
-    els.dashBtn.classList.toggle('on', dashOn);
-    els.dashBtn.setAttribute('aria-pressed', String(dashOn));
-    if (calOn || dashOn) {
+    const habOn = !!(S.ui && S.ui.hab && S.ui.hab.open);
+    els.calendar.hidden = !calOn || dashOn || habOn;
+    els.calBtn.classList.toggle('on', calOn && !dashOn && !habOn);
+    els.calBtn.setAttribute('aria-pressed', String(calOn && !dashOn && !habOn));
+    els.dashboard.hidden = !dashOn || habOn;
+    els.dashBtn.classList.toggle('on', dashOn && !habOn);
+    els.dashBtn.setAttribute('aria-pressed', String(dashOn && !habOn));
+    els.habitsView.hidden = !habOn;
+    els.habBtn.classList.toggle('on', habOn);
+    els.habBtn.setAttribute('aria-pressed', String(habOn));
+    if (calOn || dashOn || habOn) {
       for (const el of [els.filterTabs, els.tagChips, els.projectBar, els.projectDetail, els.trashBar, els.taskList, els.emptyState]) el.hidden = true;
-      if (dashOn) renderDashboard();
-      if (calOn && !dashOn) renderCalendar();
+      if (habOn) renderHabits();
+      if (dashOn && !habOn) renderDashboard();
+      if (calOn && !dashOn && !habOn) renderCalendar();
     } else {
       els.taskList.hidden = false;
     }
@@ -689,6 +696,7 @@
     els.reminderSelect.value = String(S.settings.exportReminderDays || 0);
     els.subtaskAuto.checked = !!S.settings.subtaskAutoComplete;
     if (els.fzWork) { const c = focusCfg(); els.fzWork.value = c.work; els.fzShort.value = c.short; els.fzLong.value = c.long; els.fzEvery.value = c.longEvery; els.fzNotify.checked = c.notify; els.fzAuto.checked = c.autoComplete; }
+    if (els.habInStats) els.habInStats.checked = S.settings.habitsInStats === true;
     if (window.ZTNotify) ZTNotify.renderControls(); // the Notifications section owns itself
   }
 
@@ -2004,10 +2012,17 @@
   function wireCalendar() {
     els.calBtn.onclick = () => {
       S.ui.cal.open = !S.ui.cal.open;
-      if (S.ui.cal.open) { S.ui.cal.anchor = ymd(new Date()); S.ui.dash.open = false; }
+      if (S.ui.cal.open) { S.ui.cal.anchor = ymd(new Date()); S.ui.dash.open = false; S.ui.hab.open = false; }
       renderAll();
       if (S.ui.cal.open) els.calendar.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
+    els.habBtn.onclick = () => {
+      S.ui.hab.open = !S.ui.hab.open;
+      if (S.ui.hab.open) { S.ui.cal.open = false; S.ui.dash.open = false; }
+      renderAll();
+      if (S.ui.hab.open) els.habitsView.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    els.habitsHost.addEventListener('click', onHabClick);
     els.calBar.addEventListener('click', onCalBarClick);
     els.calBar.addEventListener('change', (e) => {
       const sel = e.target.closest('[data-cfilter]');
@@ -2216,6 +2231,28 @@
     const alerts = [];
     const odPol = window.ZTNotify ? ZTNotify.policy() : null;
     for (const r of dueList) {
+      if (r.habitId && !r.taskId) { // habit nudge — same fire path, then re-arm to the next due slot
+        const h = habitOf(r.habitId);
+        if (!h || h.archived || !h.remindTime) {
+          r.status = 'skipped'; r.updatedAt = now;
+          ops.push({ store: STORES.reminders, op: 'put', value: r });
+          continue;
+        }
+        const slotDay = ymd(new Date(r.triggerAt));
+        const alreadyMet = h.frequency === 'weekly' ? habitWeekMet(h, habitWeekMon(slotDay)) : habitMetOn(h, slotDay);
+        const fk = r.id + '@' + r.triggerAt;
+        if (!alreadyMet && !ledger[fk]) {
+          remLedgerMark(fk); // mark BEFORE notifying — same at-most-once rule
+          alerts.push({ r, t: { id: h.id, title: h.name }, habit: true, lateMs: now - r.triggerAt });
+        }
+        r.delivered = true; r.firedAt = now; r.pinned = false;
+        const ns = habitNextSlot(h, now); // today is done (or was nagged): next due slot only
+        if (ns != null) { r.status = 'pending'; r.delivered = false; r.triggerAt = ns; }
+        else r.status = alreadyMet ? 'skipped' : 'triggered';
+        r.updatedAt = now;
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+        continue;
+      }
       const t = remTaskOf(r.taskId);
       if (!t || t.status === 'completed' || (S.trash || []).some((x) => x.id === r.taskId)) {
         r.status = 'skipped'; r.updatedAt = now; // safe handling: never nag for finished/deleted work
@@ -2245,14 +2282,19 @@
     }
     if (!ops.length) return false;
     await store.commit(ops);
-    for (const al of alerts) remNotify(al.r, al.t, al.lateMs);
+    for (const al of alerts) remNotify(al.r, al.t, al.lateMs, al.habit);
     renderAll();
     return true;
   }
 
-  function remNotify(r, t, lateMs) {
+  function remNotify(r, t, lateMs, isHabit) {
     // Delivery, OS channels, actions and dedup all belong to notify.js —
     // the task UI just hands over the fired alert.
+    if (isHabit) {
+      if (window.ZTNotify && ZTNotify.habitAlert) { ZTNotify.habitAlert(r, t, lateMs); return; }
+      toast('🔥 ' + t.title + ' — time for your habit check-in.');
+      return;
+    }
     if (window.ZTNotify && ZTNotify.reminderAlert) {
       ZTNotify.reminderAlert(r, t, lateMs);
       return;
@@ -2309,6 +2351,7 @@
     const now = Date.now();
     const ops = [];
     for (const r of S.reminders) {
+      if (r.habitId && !r.taskId) continue; // habit nudges: own pass below (engine-owned like 'overdue')
       if (r.status !== 'pending' || !r.enabled) continue;
       if (r.pinned) continue; // user-snoozed: the adjusted time stands until it fires (then clears)
       if (r.reminderType === 'overdue') {
@@ -2337,6 +2380,39 @@
       if (nt !== r.triggerAt) {
         r.triggerAt = nt; r.updatedAt = now;
         ops.push({ store: STORES.reminders, op: 'put', value: r });
+      }
+    }
+    // Habit nudges: ONE engine-managed row per habit (id 'hr:'+habitId) in
+    // this same store — created, repaired and re-armed here exactly like the
+    // overdue record's policy. A habit with no time (or archived) retires its
+    // row as 'skipped'; a met check-in day is skipped at fire time instead.
+    for (const h of (S.habits || [])) {
+      const rid = 'hr:' + h.id;
+      const row = S.reminders.find((r) => r.id === rid);
+      const slot = (!h.archived && h.remindTime) ? habitNextSlot(h, now) : null;
+      if (slot == null) {
+        if (row && row.status === 'pending' && !row.pinned) {
+          row.status = 'skipped'; row.updatedAt = now;
+          ops.push({ store: STORES.reminders, op: 'put', value: row });
+        }
+        continue;
+      }
+      if (!row) {
+        const nr = {
+          id: rid, habitId: h.id, taskId: '', reminderType: 'custom',
+          triggerAt: slot, enabled: true, delivered: false, dismissed: false,
+          status: 'pending', createdAt: now, updatedAt: now,
+        };
+        S.reminders.push(nr);
+        ops.push({ store: STORES.reminders, op: 'put', value: nr });
+      } else if (row.pinned && row.status === 'pending' && row.triggerAt > now) {
+        // user snoozed this instance — the adjusted time stands until it fires
+      } else {
+        let touch = false;
+        if (row.triggerAt !== slot) { row.triggerAt = slot; touch = true; }
+        if (row.status !== 'pending') { row.status = 'pending'; row.delivered = false; row.dismissed = false; row.pinned = false; touch = true; }
+        if (!row.enabled) { row.enabled = true; touch = true; }
+        if (touch) { row.updatedAt = now; ops.push({ store: STORES.reminders, op: 'put', value: row }); }
       }
     }
     // Overdue alerts are ENGINE-MANAGED records (reminderType 'overdue') so
@@ -2852,6 +2928,339 @@
     renderAll();
   }
 
+  /* ================================ Habits ==================================
+     A habit is NOT a task, by design: it repeats forever (daily / weekly /
+     selected days), can be checked off several times before the day's target
+     is met, and has no due date — so it can never be "overdue". The record
+     carries name/description/frequency/weekdays(0=Sun)/target/archived + a
+     capped check-in history [{d:'YYYY-MM-DD', c}] as the SINGLE source of
+     truth: streak, best and completion% are derived at render (habitStats),
+     never stored, so nothing can drift out of sync with the history.
+     Nudges reuse the REMINDER ENGINE: remReconcile keeps one pending row per
+     habit in the reminders store (re-armed to the next due slot), and
+     notify.js delivers through the existing reminder channel — zero new
+     notification machinery. Dashboard mixing is opt-in: settings.habitsInStats. */
+
+  function habitOf(id) { return (S.habits || []).find((h) => h.id === id) || null; }
+
+  function ymdShift(ds, n) { const d = ymdParse(ds); d.setDate(d.getDate() + n); return ymd(d); }
+
+  function habitDueOn(h, d) { // d: Date at local midnight
+    if (h.frequency === 'daily' || h.frequency === 'weekly') return true;
+    return h.weekdays.indexOf(d.getDay()) >= 0;
+  }
+  function habitCountOn(h, ds) { for (const e of h.history) if (e.d === ds) return e.c; return 0; }
+  function habitMetOn(h, ds) { return habitCountOn(h, ds) >= h.target; }
+  function habitWeekMon(ds) { const d = ymdParse(ds); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return ymd(d); }
+  function habitWeekCount(h, monDs) {
+    const endDs = ymdShift(monDs, 6);
+    let c = 0;
+    for (const e of h.history) if (e.d >= monDs && e.d <= endDs) c += e.c;
+    return c;
+  }
+  function habitWeekMet(h, monDs) { return habitWeekCount(h, monDs) >= h.target; }
+
+  /** Next local ms the habit's nudge should fire — or null (no nudge set).
+   *  weekly habits nudge on Mondays (start-of-week), daily/selected-days on
+   *  their due days; the time is the habit's remindTime. */
+  function habitNextSlot(h, fromMs) {
+    if (!h.remindTime) return null;
+    const t0 = new Date(fromMs);
+    for (let i = 0; i < 15; i++) {
+      const d = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() + i);
+      const anchor = h.frequency === 'weekly' ? d.getDay() === 1 : habitDueOn(h, d);
+      if (!anchor) continue;
+      const hm = h.remindTime.split(':').map(Number);
+      d.setHours(hm[0], hm[1], 0, 0);
+      if (d.getTime() > fromMs) return d.getTime();
+    }
+    return null;
+  }
+
+  /** {cur, best, pct, dueN} — always derived from history at render time.
+   *  Streak rule mirrors the dashboard's: today (or the current week) still
+   *  in progress does NOT break the run — it expires at midnight, not at
+   *  breakfast. pct = met / due since creation over the last 730 days
+   *  (days for daily/'days', weeks for weekly). */
+  function habitStats(h, nowMs) {
+    const now = nowMs || Date.now();
+    const today = ymd(new Date(now));
+    let cur = 0; let best = 0; let metN = 0; let dueN = 0;
+    if (h.frequency === 'weekly') {
+      const sums = {};
+      for (const e of h.history) { const k = habitWeekMon(e.d); sums[k] = (sums[k] || 0) + e.c; }
+      const startMon = habitWeekMon(ymd(new Date(h.createdAt)));
+      const earliest = ymdShift(today, -363);
+      const first = startMon < earliest ? earliest : startMon;
+      const weeks = [];
+      for (let m = (first < earliest ? earliest : first); m <= today; m = ymdShift(m, 7)) { weeks.push(habitWeekMon(m)); if (weeks.length > 60) break; }
+      const list = [...new Set(weeks)];
+      dueN = list.length;
+      let run = 0;
+      for (const w of list) {
+        if ((sums[w] || 0) >= h.target) { run++; metN++; if (run > best) best = run; } else run = 0;
+      }
+      cur = 0;
+      for (let i = list.length - 1; i >= 0; i--) {
+        if ((sums[list[i]] || 0) >= h.target) cur++;
+        else if (i === list.length - 1 && today >= list[i]) continue; // current week in progress
+        else break;
+      }
+    } else {
+      const startD = ymd(new Date(h.createdAt));
+      const floor = ymdShift(today, -729);
+      let from = startD > floor ? startD : floor;
+      const list = [];
+      for (let d = from; d <= today; d = ymdShift(d, 1)) list.push(d);
+      let run = 0;
+      for (const ds of list) {
+        if (h.frequency === 'days' && !habitDueOn(h, ymdParse(ds))) continue;
+        dueN++;
+        if (habitMetOn(h, ds)) { run++; metN++; if (run > best) best = run; } else run = 0;
+      }
+      cur = 0;
+      for (let i = list.length - 1; i >= 0; i--) {
+        const ds = list[i];
+        if (h.frequency === 'days' && !habitDueOn(h, ymdParse(ds))) continue;
+        if (habitMetOn(h, ds)) cur++;
+        else if (ds === today) continue;
+        else break;
+      }
+    }
+    return { cur, best, pct: dueN ? Math.round((metN / dueN) * 100) : 0, dueN };
+  }
+
+  /** One check-in (+1) or undo (−1) on today, then persist. Reaching the
+   * target flips the day to met; nothing here touches task stores. */
+  async function habitBump(h, delta) {
+    const now = Date.now();
+    const ds = ymd(new Date(now));
+    const i = h.history.findIndex((e) => e.d === ds);
+    const c = (i >= 0 ? h.history[i].c : 0) + delta;
+    if (i >= 0) { if (c > 0) h.history[i] = { d: ds, c }; else h.history.splice(i, 1); }
+    else if (c > 0) { h.history.push({ d: ds, c }); h.history.sort((a, b) => (a.d < b.d ? -1 : 1)); }
+    h.updatedAt = now;
+    await store.commit([{ store: STORES.habits, op: 'put', value: h }]);
+    await remReconcile(); // the nudge row may retire/re-arm as the target is met
+    renderAll();
+  }
+
+  function habitFreqLabel(h) {
+    if (h.frequency === 'daily') return h.target > 1 ? 'Daily ×' + h.target : 'Daily';
+    if (h.frequency === 'weekly') return h.target > 1 ? h.target + '\u00d7/week' : 'Weekly';
+    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return h.weekdays.map((d) => names[d]).join(' ') + (h.target > 1 ? ' ×' + h.target : '');
+  }
+
+  const HAB_DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  /** The brief's row: Mon ✓ Tue ✓ Wed ✓ … for the current week (Mon–Sun). */
+  function habitWeekStrip(h, today) {
+    const mon = habitWeekMon(today);
+    let out = '';
+    for (let i = 0; i < 7; i++) {
+      const ds = ymdShift(mon, i);
+      const d = ymdParse(ds);
+      const isToday = ds === today;
+      const future = ds > today;
+      let cls; let mark;
+      if (h.frequency === 'weekly') {
+        const active = habitCountOn(h, ds) > 0;
+        cls = active ? 'met' : (isToday ? 'todo' : ''); mark = active ? '✓' : '·';
+      } else {
+        const due = habitDueOn(h, d);
+        const met = habitMetOn(h, ds);
+        const partial = !met && habitCountOn(h, ds) > 0;
+        if (met) { cls = 'met'; mark = '✓'; }
+        else if (partial) { cls = 'part'; mark = String(habitCountOn(h, ds)); }
+        else if (!due) { cls = 'off'; mark = '·'; }
+        else if (future) { cls = 'future'; mark = '·'; }
+        else if (isToday) { cls = 'todo'; mark = '·'; }
+        else { cls = 'miss'; mark = '✗'; }
+      }
+      out += '<span class="hab-day ' + cls + (isToday ? ' today' : '') + '" title="' + ds + '">' +
+        HAB_DAY_NAMES[i] + ' <b>' + mark + '</b></span>';
+    }
+    return out;
+  }
+
+  /** Calendar history: the current month as a Mon-first mini grid — ● met,
+   *  ◐ partial (amber), ✗ missed due-day in the past (muted red), empty =
+   *  nothing to do. Older months stay in the record (history is capped at
+   *  730 entries) and still feed streak/best/percent. */
+  function habitMonthCal(h, today, nowMs) {
+    const base = ymdParse(today);
+    const y = base.getFullYear(); const m = base.getMonth();
+    const lead = (new Date(y, m, 1).getDay() + 6) % 7;
+    const nDays = new Date(y, m + 1, 0).getDate();
+    const title = new Date(y, m, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    let cells = HAB_DAY_NAMES.map((d) => '<span class="hab-cal-cell head">' + d[0] + '</span>').join('');
+    for (let i = 0; i < lead; i++) cells += '<span class="hab-cal-cell empty"></span>';
+    for (let day = 1; day <= nDays; day++) {
+      const ds = y + '-' + String(m + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+      const dObj = new Date(y, m, day);
+      const c = habitCountOn(h, ds);
+      let cls; let dot = '';
+      if (h.frequency === 'weekly') { cls = c > 0 ? 'met' : ''; }
+      else if (habitMetOn(h, ds)) { cls = 'met'; dot = '●'; }
+      else if (c > 0) { cls = 'part'; dot = '◐'; }
+      else if (!habitDueOn(h, dObj)) { cls = 'off'; }
+      else if (ds > today) { cls = 'future'; }
+      else { cls = 'miss'; dot = '✗'; }
+      cells += '<span class="hab-cal-cell ' + cls + (ds === today ? ' today' : '') +
+        '" title="' + ds + (c ? ' · ' + c + '/' + h.target : '') + '">' + day + (dot ? '<i>' + dot + '</i>' : '') + '</span>';
+    }
+    return '<div class="hab-cal"><div class="hab-cal-title">' + esc(title) +
+      '</div><div class="hab-cal-grid">' + cells + '</div></div>';
+  }
+
+  function habitCardHtml(h, today, now, archived) {
+    const st = habitStats(h, now);
+    const isWeek = h.frequency === 'weekly';
+    const cnt = isWeek ? habitWeekCount(h, habitWeekMon(today)) : habitCountOn(h, today);
+    const done = cnt >= h.target;
+    const per = isWeek ? 'this week' : 'today';
+    return '<div class="hab-card' + (archived ? ' archived' : '') + (done ? ' done' : '') + '">' +
+      '<div class="hab-top"><span class="hab-name">' + esc(h.name) + '</span>' +
+      '<span class="hab-streak' + (st.cur > 0 ? ' hot' : '') + '">🔥 ' + st.cur + (st.cur === 1 ? ' day' : ' days') + '</span></div>' +
+      (h.description ? '<div class="hab-desc">' + esc(truncate(h.description, 140)) + '</div>' : '') +
+      '<div class="hab-stats"><span>' + esc(habitFreqLabel(h)) + '</span>' +
+      '<span>Best ' + st.best + (st.best === 1 ? ' day' : ' days') + '</span>' +
+      '<span>' + st.pct + '% done</span>' +
+      '<span>' + (h.remindTime ? '⏰ ' + h.remindTime : '🔕 quiet') + '</span></div>' +
+      '<div class="hab-week">' + habitWeekStrip(h, today) + '</div>' +
+      '<div class="hab-actions"><span class="hab-count">' + cnt + '/' + h.target + ' ' + per + (done ? ' ✓' : '') + '</span>' +
+      (archived ? '' : '<button type="button" class="btn btn-sm btn-primary" data-hact="plus" data-hid="' + esc(h.id) + '" title="One more completion today">✓ +1</button>' +
+        '<button type="button" class="btn btn-sm btn-ghost" data-hact="minus" data-hid="' + esc(h.id) + '"' + (cnt > 0 ? '' : ' disabled') + ' title="Undo one">−</button>') +
+      '<button type="button" class="btn btn-sm btn-ghost" data-hact="edit" data-hid="' + esc(h.id) + '">✎ Edit</button>' +
+      '<button type="button" class="btn btn-sm btn-ghost" data-hact="' + (archived ? 'unarchive' : 'archive') + '" data-hid="' + esc(h.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button></div>' +
+      habitMonthCal(h, today, now) +
+      '</div>';
+  }
+
+  function renderHabits() {
+    if (!els.habitsHost) return;
+    const now = Date.now();
+    const today = ymd(new Date(now));
+    const act = (S.habits || []).filter((h) => !h.archived);
+    const arch = (S.habits || []).filter((h) => h.archived);
+    let html = '<div class="hab-head"><h2>🔥 Habits</h2>' +
+      '<button type="button" class="btn btn-primary" data-hact="new">＋ New habit</button></div>';
+    html += '<p class="muted small">Repeating check-ins kept separate from one-time tasks. Hit ✓ every time you do it — the day is met when the target is reached. Stats only join the dashboard if you allow it in Settings.</p>';
+    if (!act.length) html += '<div class="hab-empty">No habits yet. Try <i>Exercise</i>, <i>Read</i>, <i>Study Python</i>, <i>Practice IELTS</i>, or <i>Drink water ×8/day</i>.</div>';
+    for (const h of act) html += habitCardHtml(h, today, now, false);
+    if (arch.length) {
+      html += '<button type="button" class="hab-arch-toggle" data-hact="togglearch">' +
+        (S.ui.hab.showArch ? '▾' : '▸') + ' Archived (' + arch.length + ')</button>';
+      if (S.ui.hab.showArch) for (const h of arch) html += habitCardHtml(h, today, now, true);
+    }
+    els.habitsHost.innerHTML = html;
+  }
+
+  /** Create/edit dialog — same modal-overlay contract as the rest of the app
+   * (card appended to the overlay; click outside closes). */
+  function habitModal(existing) {
+    return new Promise((resolve) => {
+      const editing = !!existing;
+      const d = editing
+        ? { name: existing.name, description: existing.description, frequency: existing.frequency, weekdays: existing.weekdays.slice(), target: existing.target, remind: !!existing.remindTime, remindTime: existing.remindTime || '09:00' }
+        : { name: '', description: '', frequency: 'daily', weekdays: [1, 2, 3, 4, 5], target: 1, remind: false, remindTime: '09:00' };
+      const ov = document.createElement('div');
+      ov.className = 'modal-overlay';
+      const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      ov.innerHTML = '<div class="modal-card hab-modal" role="dialog" aria-modal="true" aria-label="' + (editing ? 'Edit habit' : 'New habit') + '">' +
+        '<h3>' + (editing ? 'Edit habit' : 'New habit') + '</h3>' +
+        '<label>Name<input type="text" id="hh-name" maxlength="120" placeholder="e.g. Study Python" value="' + esc(d.name) + '"></label>' +
+        '<label>Description<input type="text" id="hh-desc" maxlength="300" placeholder="optional" value="' + esc(d.description) + '"></label>' +
+        '<label>Frequency<select id="hh-freq">' +
+          '<option value="daily"' + (d.frequency === 'daily' ? ' selected' : '') + '>Daily</option>' +
+          '<option value="weekly"' + (d.frequency === 'weekly' ? ' selected' : '') + '>Weekly (count completions toward one weekly target)</option>' +
+          '<option value="days"' + (d.frequency === 'days' ? ' selected' : '') + '>Selected days</option>' +
+        '</select></label>' +
+        '<div id="hh-days" class="hab-days"' + (d.frequency === 'days' ? '' : ' hidden') + '>' +
+          [0, 1, 2, 3, 4, 5, 6].map((i) => '<button type="button" class="rp-day' + (d.weekdays.indexOf(i) >= 0 ? ' on' : '') + '" data-d="' + i + '">' + names[i][0] + '</button>').join('') +
+        '</div>' +
+        '<label>Target per ' + '<span id="hh-per">' + (d.frequency === 'weekly' ? 'week' : 'day') + '</span><input type="number" id="hh-target" min="1" max="99" step="1" value="' + d.target + '"></label>' +
+        '<label class="setting-row setting-check"><span>Nudge me (existing reminders engine)</span><input type="checkbox" id="hh-remind"' + (d.remind ? ' checked' : '') + '></label>' +
+        '<label id="hh-remtime" class="setting-row"' + (d.remind ? '' : ' hidden') + '><span>At</span><input type="time" id="hh-remtime-i" value="' + d.remindTime + '"></label>' +
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" data-hm="cancel">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" data-hm="save">' + (editing ? 'Save' : 'Create habit') + '</button></div></div>';
+      const close = (saved) => { ov.remove(); document.removeEventListener('keydown', onKey); resolve(saved); };
+      function onKey(e) { if (e.key === 'Escape') close(false); }
+      document.addEventListener('keydown', onKey);
+      const $ = (id) => ov.querySelector('#' + id);
+      $('hh-freq').onchange = () => {
+        d.frequency = $('hh-freq').value;
+        $('hh-days').hidden = d.frequency !== 'days';
+        $('hh-per').textContent = d.frequency === 'weekly' ? 'week' : 'day';
+      };
+      $('hh-days').onclick = (e) => {
+        const b = e.target.closest('[data-d]'); if (!b) return;
+        const i = Number(b.dataset.d);
+        const at = d.weekdays.indexOf(i);
+        if (at >= 0) d.weekdays.splice(at, 1); else d.weekdays.push(i);
+        b.classList.toggle('on');
+      };
+      $('hh-remind').onchange = () => { $('hh-remtime').hidden = !$('hh-remind').checked; };
+      ov.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-hm]');
+        if (!b) { if (e.target === ov) close(false); return; }
+        if (b.dataset.hm === 'cancel') { close(false); return; }
+        const name = $('hh-name').value.trim();
+        if (!name) { toast('Give the habit a name first.'); $('hh-name').focus(); return; }
+        const freq = $('hh-freq').value;
+        if (freq === 'days' && !d.weekdays.length) { toast('Pick at least one day — or switch to Daily.'); return; }
+        const tgt = Math.round(Number($('hh-target').value));
+        const remind = $('hh-remind').checked;
+        const remTime = remind ? (/^([01]\d|2[0-3]):[0-5]\d$/.test($('hh-remtime-i').value) ? $('hh-remtime-i').value : '09:00') : null;
+        const now = Date.now();
+        const rec = {
+          id: editing ? existing.id : helpers.uuid(),
+          name, description: $('hh-desc').value.trim(),
+          frequency: freq, weekdays: freq === 'days' ? d.weekdays.slice().sort((a, b2) => a - b2) : [],
+          target: tgt >= 1 && tgt <= 99 ? tgt : 1,
+          archived: editing ? !!existing.archived : false,
+          remindTime: remTime,
+          history: editing ? existing.history : [],
+          createdAt: editing ? existing.createdAt : now,
+          updatedAt: now,
+        };
+        if (editing) Object.assign(existing, rec);
+        else S.habits.push(rec);
+        store.commit([{ store: STORES.habits, op: 'put', value: editing ? existing : rec }]);
+        close(true);
+      });
+      document.body.appendChild(ov);
+      const inp = $('hh-name'); if (inp && !editing) inp.focus();
+    });
+  }
+
+  async function onHabClick(e) {
+    const b = e.target.closest('[data-hact]');
+    if (!b) return;
+    const act2 = b.dataset.hact;
+    if (act2 === 'new') {
+      if (await habitModal(null)) { await remReconcile(); renderAll(); toast('Habit created — check it off any day you do it.'); }
+      return;
+    }
+    if (act2 === 'togglearch') { S.ui.hab.showArch = !S.ui.hab.showArch; renderAll(); return; }
+    const h = habitOf(b.dataset.hid);
+    if (!h) return;
+    if (act2 === 'plus') { await habitBump(h, 1); return; }
+    if (act2 === 'minus') { await habitBump(h, -1); return; }
+    if (act2 === 'edit') { if (await habitModal(h)) { await remReconcile(); renderAll(); } return; }
+    if (act2 === 'archive' || act2 === 'unarchive') {
+      h.archived = act2 === 'archive';
+      h.updatedAt = Date.now();
+      await store.commit([{ store: STORES.habits, op: 'put', value: h }]);
+      await remReconcile(); // archived → its nudge retires; unarchived → it re-arms
+      renderAll();
+      toast(h.archived
+        ? 'Habit “' + truncate(h.name, 30) + '” archived — history kept, nudge silenced.'
+        : 'Habit “' + truncate(h.name, 30) + '” is active again.');
+    }
+  }
+
   /* ------------------------- Productivity dashboard -------------------------
    * NOT a data source. Every tile, bar and row is derived at render time from
    * the same S.tasks / S.projects / S.reminders arrays the list and calendar
@@ -2904,6 +3313,25 @@
         if (ds === today) completedToday++;
         stampDays.add(ds);
         if (ts >= wkStart && weekDays[ds] !== undefined) weekDays[ds]++;
+      }
+    }
+    // Habit check-ins live in a separate module — they touch dashboard
+    // numbers ONLY when the user explicitly opts in (Settings → Habits).
+    // They never enter overdue/backlog; only met days are mixed in.
+    if (S.settings && S.settings.habitsInStats === true && Array.isArray(S.habits)) {
+      const monDs = ymd(new Date(wkStart));
+      for (const h of S.habits) {
+        if (h.archived) continue;
+        if (h.frequency === 'weekly') {
+          if (habitWeekMet(h, monDs)) { stampDays.add(today); weekDays[today]++; completedToday++; }
+        } else {
+          for (const e of h.history) {
+            if (e.c < h.target) continue;
+            stampDays.add(e.d);
+            if (weekDays[e.d] !== undefined) weekDays[e.d]++;
+            if (e.d === today) completedToday++;
+          }
+        }
       }
     }
     let completedWeek = 0;
@@ -3102,7 +3530,7 @@
   function wireDashboard() {
     els.dashBtn.onclick = () => {
       S.ui.dash.open = !S.ui.dash.open;
-      if (S.ui.dash.open) S.ui.cal.open = false; // the two overlays are exclusive
+      if (S.ui.dash.open) { S.ui.cal.open = false; S.ui.hab.open = false; } // the overlays are exclusive
       renderAll();
       if (S.ui.dash.open) {
         els.dashboard.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -3181,7 +3609,8 @@
     try {
       migrated = helpers.migratePayload({
         schemaVersion: v.schemaVersion, tasks: v.tasks,
-        trash: v.trash, settings: v.settings || {},
+        trash: v.trash, projects: v.projects, subtasks: v.subtasks,
+        reminders: v.reminders, habits: v.habits, settings: v.settings || {},
       });
     } catch (e) {
       showBanner({ kind: 'error', message: 'Import failed: data migration error — ' + e.message });
@@ -3207,7 +3636,7 @@
 
     // Adopt the imported dataset, then make disk converge to it (full
     // read-modify-write resync: put all, delete orphans, mirror, broadcast).
-    store.replaceMemory(clean.tasks, clean.trash, clean.projects, clean.subtasks, clean.reminders);
+    store.replaceMemory(clean.tasks, clean.trash, clean.projects, clean.subtasks, clean.reminders, clean.habits);
     // Local settings (theme, reminder cadence) are device preferences — keep
     // them; the imported tasks/trash replace ours entirely.
     const okc = await store.resync();
@@ -3474,6 +3903,14 @@
       toast(e.target.checked
         ? '⚠ A finished session will complete the task automatically.'
         : 'Tasks will only be completed by you — sessions just record focus time.');
+    });
+    if (els.habInStats) els.habInStats.addEventListener('change', (e) => {
+      S.settings.habitsInStats = e.target.checked;
+      commitSettings();
+      renderAll();
+      toast(e.target.checked
+        ? 'Habit check-ins now count in dashboard stats.'
+        : 'Dashboard stats are task-only again — habits stay their own module.');
     });
     els.subtaskAuto.addEventListener('change', (e) => {
       S.settings.subtaskAutoComplete = e.target.checked;

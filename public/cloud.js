@@ -101,6 +101,7 @@
       projects: st.projects,
       subtasks: st.subtasks,
       reminders: st.reminders,
+      habits: st.habits,
       settings: { theme: st.settings.theme, exportReminderDays: st.settings.exportReminderDays },
     });
   }
@@ -267,6 +268,7 @@
     let projects = mergeList(st.projects || [], remote.projects || []);
     let subtasks = mergeList(st.subtasks || [], remote.subtasks || []);
     let reminders = mergeList(st.reminders || [], remote.reminders || []);
+    const habits = mergeList(st.habits || [], remote.habits || []);
     // Store-scoped tombstones: a `tasks:id` delete must not remove the
     // trash copy of the same id (soft delete), and vice versa.
     tasks = tasks.filter((t) => !(tombstones['tasks:' + t.id] >= (t.updatedAt || 0)));
@@ -274,9 +276,10 @@
     projects = projects.filter((p) => !(tombstones['projects:' + p.id] >= (p.updatedAt || 0)));
     subtasks = subtasks.filter((s) => !(tombstones['subtasks:' + s.id] >= (s.updatedAt || 0)));
     reminders = reminders.filter((r) => !(tombstones['reminders:' + r.id] >= (r.updatedAt || 0)));
-    // A reminder whose task no longer exists anywhere is meaningless — drop
-    // it (the task's own tombstone may be pruned already, so check liveness).
-    { const owners = new Set([...tasks, ...trash].map((t) => t.id)); reminders = reminders.filter((r) => owners.has(r.taskId)); }
+    // A reminder whose owner (task — live or trashed — or habit) no longer
+    // exists anywhere is meaningless — drop it (the owner's own tombstone may
+    // be pruned already, so check liveness).
+    { const owners = new Set([...tasks, ...trash, ...habits].map((t) => t.id)); reminders = reminders.filter((r) => owners.has(r.taskId) || owners.has(r.habitId)); }
     // App invariant (storage.js cleanPayload): a record lives in one store; live wins.
     { const live = new Set(tasks.map((t) => t.id)); trash = trash.filter((t) => !live.has(t.id)); }
     // Prune redundant tombstones (a live record newer than the deletion has
@@ -304,8 +307,8 @@
     }
     if (tombChanged) saveJSON(TOMBS_KEY, tombstones);
 
-    const before = JSON.stringify({ t: st.tasks, r: st.trash, p: st.projects, s: st.subtasks, m: st.reminders });
-    const after = JSON.stringify({ t: tasks, r: trash, p: projects, s: subtasks, m: reminders });
+    const before = JSON.stringify({ t: st.tasks, r: st.trash, p: st.projects, s: st.subtasks, m: st.reminders, h: st.habits });
+    const after = JSON.stringify({ t: tasks, r: trash, p: projects, s: subtasks, m: reminders, h: habits });
     const changed = before !== after;
 
     if (changed) {
@@ -314,6 +317,7 @@
       st.projects = projects;
       st.subtasks = subtasks;
       st.reminders = reminders;
+      st.habits = habits;
     }
     if (remote.savedAt && (!st.lastSavedAt || remote.savedAt > st.lastSavedAt) && remote.settings) {
       Object.assign(st.settings, remote.settings);
@@ -376,7 +380,7 @@
           clientId: CLIENT_ID,
           baseRev: serverRev,
           mode,
-          state: { savedAt: Date.now(), settings: st.settings, tasks: st.tasks, trash: st.trash, projects: st.projects, subtasks: st.subtasks, reminders: st.reminders },
+          state: { savedAt: Date.now(), settings: st.settings, tasks: st.tasks, trash: st.trash, projects: st.projects, subtasks: st.subtasks, reminders: st.reminders, habits: st.habits },
           tombstones,
         }),
       });

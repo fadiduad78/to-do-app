@@ -163,13 +163,19 @@ try {
   const rpush = await (await fetch(BASE + '/api/sync', { method: 'POST', headers: bearer(alice), body: JSON.stringify({ clientId: 'test', baseRev: aState.rev, mode: 'merge', state: { savedAt: Date.now(), settings: {}, tasks: [], trash: [], reminders: [srem, sod] }, tombstones: {} }) })).json();
   ok(rpush.reminders && rpush.reminders.length === 2, 'reminders synced into alice\'s state doc (no new table)');
   ok((rpush.reminders || []).some((x) => x.id === 'sod1' && x.reminderType === 'overdue'), 'server keeps the “overdue” reminder type (not degraded to custom)');
+  const hb1 = { id: 'hb1', name: 'Exercise', frequency: 'daily', target: 1, weekdays: [], archived: false, remindTime: null, history: [{ d: '2026-09-19', c: 1 }], createdAt: Date.now(), updatedAt: Date.now() };
+  const hpush = await (await fetch(BASE + '/api/sync', { method: 'POST', headers: bearer(alice), body: JSON.stringify({ clientId: 'test', baseRev: rpush.rev, mode: 'merge', state: { savedAt: Date.now(), settings: {}, tasks: [], trash: [], habits: [hb1], reminders: [{ id: 'hr:hb1', habitId: 'hb1', taskId: '', triggerAt: Date.now() + 7200e3, reminderType: 'custom', status: 'pending', enabled: true, delivered: false, dismissed: false, createdAt: Date.now(), updatedAt: Date.now() }] }, tombstones: {} }) })).json();
+  ok(hpush.habits && hpush.habits.length === 1 && hpush.habits[0].history[0].c === 1,
+    'habits ride alice\'s single state doc — separate store on the client, zero new tables (Postgres or file)');
+  ok((hpush.reminders || []).some((x) => x.id === 'hr:hb1'), 'the engine-managed habit nudge row persists like any reminder');
   ok(await poll(() => db.byuser.alice && (db.byuser.alice.reminders || []).some((x) => x.id === 'sr1'), 45000), 'reminder persisted to the Postgres row');
   await stopApp(app.child);
   rmSync(path.join(dir, 'state.json'), { force: true });
   app = await startApp(dir); await app.ready;
   const afterR = await getState(alice);
-  ok(afterR.reminders.length === 2 && afterR.reminders.some((x) => x.id === 'sr1') && afterR.tasks.length === aState.tasks.length,
-    'restart with empty disk: reminders restored from Postgres still attached to their task');
+  ok(afterR.habits && afterR.habits.some((x) => x.id === 'hb1'), 'habit survives the restart (state-doc round-trip through Postgres)');
+  ok(afterR.reminders.length === 3 && afterR.reminders.some((x) => x.id === 'sr1') && afterR.reminders.some((x) => x.id === 'hr:hb1') && afterR.tasks.length === aState.tasks.length,
+    'restart with empty disk: reminders (task-owned AND the habit nudge row) restored from Postgres intact');
 
   r = await push(alice, 'alice secret', 'a1', (await getState(alice)).rev);
   ok(r.status === 200, 'alice push ok');

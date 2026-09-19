@@ -308,6 +308,17 @@
     deliver(kind, { id, title, body, taskId: t.id, reminderId: r.id, force: true });
   }
 
+  /* Habit nudges reuse the REMINDER channel and the reminder record itself
+     (app.js keeps one engine-managed row per habit) — this only shapes the
+     copy and the dedup key. No new channel, no new storage. */
+  function habitAlert(r, h, lateMs) {
+    const id = 'habit:' + r.id + '@' + r.triggerAt;
+    const body = lateMs > 60000
+      ? h.title + ' — habit check-in was due ' + fmtShort(r.triggerAt) + '.'
+      : h.title + ' — time for your habit check-in.';
+    deliver('reminder', { id, title: 'Habit Reminder', body, habitId: h.id, reminderId: r.id, force: true });
+  }
+
   /* ------------------------- periodic schedules: tick ----------------------- */
 
   function buildSummary(days) {
@@ -507,7 +518,7 @@
 
   global.ZTNotify = {
     attach, sanitize, renderControls, status, requestEnable,
-    deliver, reminderAlert, tick,
+    deliver, reminderAlert, habitAlert, tick,
     policy: () => { const n = cfg(); return { odMode: n.odMode, odHours: n.odHours, odGraceMin: n.odGraceMin, snoozeMin: n.snoozeMin }; },
     wantsOverdue: () => { const n = cfg(); return n.master && n.overdue; },
     focusNotice,

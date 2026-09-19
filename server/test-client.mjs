@@ -294,6 +294,28 @@ console.log('10. reminders (v5): the schedule IS a record — synced, tombstoned
   ok(stR.reminders.length === 0 && stR.tombstones['reminders:rem1'] > 0, 'reminder deletion = store-scoped tombstone on the server (all devices drop it)');
 }
 
+console.log('11. habits: a separate store on the client, the same state doc on the wire');
+{
+  const hh = { id: 'hc1', name: 'Read', frequency: 'weekly', target: 3, weekdays: [], archived: false, remindTime: '08:00', history: [{ d: '2026-09-14', c: 2 }], createdAt: Date.now() - 5000, updatedAt: Date.now() };
+  memory.habits = (memory.habits || []).concat([hh]);
+  await store.commit([{ store: 'habits', op: 'put', value: hh }]);
+  await wait(1400);
+  st = await serverState();
+  ok(st.habits.length === 1 && st.habits[0].frequency === 'weekly' && st.habits[0].history.length === 1,
+    'habit pushed through the ordinary commit→sync path lands on the server with its history intact');
+  const hr = { id: 'hr:hc1', habitId: 'hc1', taskId: '', reminderType: 'custom', triggerAt: Date.now() + 3600e3, enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: Date.now(), updatedAt: Date.now() };
+  memory.reminders = (memory.reminders || []).concat([hr]);
+  await store.commit([{ store: 'reminders', op: 'put', value: hr }]);
+  await wait(1400);
+  st = await serverState();
+  ok(st.reminders.some((x) => x.id === 'hr:hc1' && x.habitId === 'hc1'),
+    'the habit nudge syncs as a REMINDER record — one pipeline, one dedup ledger, no new plumbing');
+  ok((memory.habits || []).length === 1, 'echo adoption keeps exactly ONE habit record (no duplication)');
+  await store.commit([{ store: 'habits', op: 'delete', key: 'hc1' }, { store: 'reminders', op: 'delete', key: 'hr:hc1' }]);
+  memory.habits = []; memory.reminders = memory.reminders.filter((x) => x.id !== 'hr:hc1');
+  await wait(1400);
+}
+
 child.kill('SIGKILL');
 console.log(failed ? `\nFAILED: ${failed} check(s)` : '\nAll client integration tests passed.');
 process.exit(failed ? 1 : 0);

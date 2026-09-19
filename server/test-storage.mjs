@@ -423,5 +423,66 @@ ok(fzOf('fC').focusLog.length === 128 && fzOf('fC').focusLog[127].at === 1000 + 
 ok(fzOf('fB').focusActive.durMin === 25 && fzOf('fB').focusActive.breakMin === 5 && fzOf('fB').focusActive.longEvery === 4 && fzOf('fB').focusActive.pausedAt === null,
   'out-of-range session snapshot fields fall back to sane defaults — a corrupt record can never wedge the timer');
 
+console.log('\n--- habits (coerce layer) ---');
+{
+  let sk = [];
+  const CH = ZT.helpers.coerceHabit;
+  const dd = (n) => new Date(Date.UTC(2025, 0, 1 + n)).toISOString().slice(0, 10);
+  ok(CH({ id: 'h1', name: 'Exercise' }, sk = []) === true && sk[0].frequency === 'daily' && sk[0].target === 1
+    && sk[0].archived === false && sk[0].remindTime === null && Array.isArray(sk[0].history) && Number.isFinite(sk[0].createdAt),
+    'minimal habit coerces with sane defaults (daily ×1, quiet, empty history)');
+  ok(CH(null, sk = []) === false && CH({ name: 'x' }, sk) === false && CH({ id: 'h' }, sk = []) === false,
+    'habit reject: non-object / missing id / missing name');
+  ok(CH({ id: 'h', name: 'Read', frequency: 'yearly', weekdays: [1], target: '4.6' }, sk = []) && sk.length === 1
+    && sk[0].frequency === 'daily' && sk[0].weekdays.length === 0 && sk[0].target === 5,
+    'bogus frequency → daily (weekdays only mean something for day-sets); fractional target rounds');
+  ok(CH({ id: 'h', name: 'Read', frequency: 'days', weekdays: [5, 'x', 9, -3, 5.5, 1, 1] }, sk = []) && JSON.stringify(sk[0].weekdays) === '[1,5]',
+    'day-set filters to ints 0–6 and dedupes (0=Sun convention, same as task recurrence)');
+  ok(CH({ id: 'h', name: 'Read', frequency: 'days', weekdays: [] }, sk = []) && sk[0].frequency === 'daily',
+    'an EMPTY day-set falls back to daily rather than being un-meetable forever');
+  ok(CH({ id: 'h', name: 'R', target: 0 }, sk = []) && sk[0].target === 1
+    && (CH({ id: 'h2', name: 'R', target: 100 }, sk = []) && sk[0].target === 99),
+    'target clamps to 1…99 (0 can never be met; absurd values can’t ride in)');
+  ok(CH({ id: 'h', name: 'R', remindTime: '25:00' }, sk = []) && sk[0].remindTime === null
+    && (CH({ id: 'h2', name: 'R', remindTime: '7:30' }, sk = []) && sk[0].remindTime === null)
+    && (CH({ id: 'h3', name: 'R', remindTime: '07:30' }, sk = []) && sk[0].remindTime === '07:30'),
+    'remindTime is the strict HH:MM the reminder engine needs — anything else means “no nudge”');
+  {
+    const hist = []; for (let i = 0; i < 800; i++) hist.push({ d: dd(i), c: 1 });
+    hist.push({ d: dd(799), c: 9 }, { d: 'garbage', c: 3 }, { d: dd(5), c: 0 }, null, 42);
+    CH({ id: 'h', name: 'R', history: hist }, sk = []);
+    const h2 = sk[0];
+    ok(h2.history.length === 730 && h2.history[0].d === dd(70) && h2.history[h2.history.length - 1].c === 9
+      && h2.history.every((e, i, a) => i === 0 || a[i - 1].d < e.d),
+      'history: invalid entries dropped, duplicate dates last-wins, capped to the newest 730, sorted');
+  }
+  ok(CH({ id: 'h', name: 'R', history: [{ d: dd(1), c: 5000 }] }, sk = []) && sk[0].history[0].c === 999,
+    'per-day count clamps to 999 (a habit can log 8 glasses, not the integer ceiling)');
+  ok(CH({ id: 'h', name: 'R', futureField: { ok: 1 } }, sk = []) && sk[0].futureField.ok === 1,
+    'lenient spread keeps unknown fields (forward-compatible, like every coerce*)');
+  const CR = ZT.helpers.coerceReminder;
+  ok(CR({ id: 'r1', habitId: 'h9', triggerAt: 5 }, sk = []) === true && sk[0].taskId === '' && sk[0].habitId === 'h9',
+    'a reminder row may be owned by a HABIT instead of a task (nudge rides the same store)');
+  ok(CR({ id: 'r2', triggerAt: 5 }, sk = []) === false, 'but a row with NO owner at all is refused');
+  const cp = ZT.helpers.cleanPayload({
+    tasks: [{ id: 't', title: 'T', status: 'active', createdAt: 1, updatedAt: 1 }],
+    habits: [{ id: 'h', name: 'N', frequency: 'daily', target: 1, history: [] }],
+    reminders: [{ id: 'a', habitId: 'h', triggerAt: 5 }, { id: 'b', habitId: 'ghost', triggerAt: 5 }, { id: 'c', taskId: 't', triggerAt: 5 }],
+  });
+  ok(cp.reminders.length === 2 && !cp.reminders.some((x) => x.id === 'b') && cp.dropped === 1,
+    'nudge rows attach to live habits — a reminder for a missing habit is stale (dropped and counted)');
+  ok(ZT.helpers.validatePayload({ tasks: [] }).habits.length === 0, 'older payloads simply default to no habits');
+  mem.set('todo_backup_v1', JSON.stringify({
+    app: 'zerotodo', schemaVersion: 5, savedAt: Date.now(), settings: {},
+    tasks: [], trash: [], projects: [], subtasks: [], reminders: [],
+    habits: [{ id: 'only', name: 'Walk', frequency: 'daily', target: 1, weekdays: [], history: [{ d: dd(0), c: 1 }] }],
+  }));
+  const HS = ZT.createStore({});
+  const recH = await HS.recover();
+  ok(recH.source === 'backup' && recH.state.habits.length === 1 && recH.state.habits[0].history[0].c === 1,
+    'a HABITS-ONLY account is real data: recovery adopts it (bakHas counts every record type)');
+  ok(recH.state.reminders.length === 0, 'no phantom reminder rows created by recovery (engine owns those)');
+}
+
 console.log(failed ? `\n${failed} storage check(s) FAILED` : '\nall storage checks green');
 process.exit(failed ? 1 : 0);
