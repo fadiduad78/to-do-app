@@ -294,6 +294,30 @@ ok(G.state.subtasks.some((x) => x.id === 'sOrph'), 'orphaned subtask survives (n
 ok(await ZT.createStore({ onError() {} }).commit([{ store: 'subtasks', op: 'put', value: { id: 'x' } }]) === false,
   'subtask without parentTaskId/title refused by validateOp');
 
+/* -------------- reload with FIRED reminders in history (TDZ guard) --------
+   A past shipped bug: recover()'s reminder-retention prune referenced the
+   `now2` clock before its `const` — a TDZ ReferenceError thrown on EVERY
+   reload where a non-pending reminder existed, leaving users with a blank
+   app until site data was cleared. Pending-only reloads short-circuited and
+   survived, which is why no earlier test caught it. */
+const DAY = 864e5;
+const R_OLD  = { id: 'rOld',  taskId: 'n1', triggerAt: now - 40 * DAY, reminderType: 'h1', status: 'triggered', delivered: true, updatedAt: now - 31 * DAY - 10 };
+const R_NEW  = { id: 'rNew',  taskId: 'n1', triggerAt: now - 2 * DAY,  reminderType: 'h1', status: 'triggered', delivered: true, updatedAt: now - DAY };
+const R_PEND = { id: 'rPend', taskId: 'n1', triggerAt: now + DAY,      reminderType: 'h1', status: 'pending', updatedAt: now - 45 * DAY };
+G.state.reminders.push(R_OLD, R_NEW, R_PEND);
+await G.commit([
+  { store: 'reminders', op: 'put', value: R_OLD },
+  { store: 'reminders', op: 'put', value: R_NEW },
+  { store: 'reminders', op: 'put', value: R_PEND },
+]);
+const H = ZT.createStore({});
+let recH = null, recHThrew = null;
+try { recH = await H.recover(); } catch (e) { recHThrew = e; }
+ok(recHThrew === null, 'reload with fired reminders does not throw (recovery-clock TDZ regression)');
+ok(!!recH && recH.state.reminders.some((r) => r.id === 'rNew'), 'recent fired reminder survives recovery');
+ok(!!recH && !recH.state.reminders.some((r) => r.id === 'rOld'), 'fired reminder past the 30-day window is pruned');
+ok(!!recH && recH.state.reminders.some((r) => r.id === 'rPend'), 'pending reminder never pruned on recovery (catch-up still owed)');
+
 // delete-op validation: the projects store accepts deletes (tombstone path)
 ok(await D.commit([{ store: 'projects', op: 'delete', key: 'pZ' }]) === true, 'project delete op accepted');
 const rejected = await ZT.createStore({ onError() {} }).commit([{ store: 'projects', op: 'put', value: { junk: true } }]);

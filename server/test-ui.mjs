@@ -919,5 +919,203 @@ await sleep(300);
   domN.window.close();
 }
 
+/* ============ 16. REAL-BROWSER mobile layout (headless Chromium; skips if absent) ============ */
+{
+  const boot = '  – ';
+  let browser = null;
+  const cssSrc = readFileSync(PUB + '/styles.css', 'utf8');
+  // structural guarantees first — no browser needed
+  ok(/touch-action: manipulation/.test(cssSrc) && /font-size: 16px;/.test(cssSrc) && /safe-area-inset/.test(cssSrc),
+    'styles.css carries the mobile pass (touch-action, 16px input rule, safe-area padding)');
+  ok(/viewport-fit=cover/.test(html) && /apple-mobile-web-app-capable/.test(html),
+    'index.html viewport/meta wired for notches + iOS standalone (viewport-fit=cover + web-app metas)');
+
+  try {
+    let puppeteer, execPath = null, preArgs = [];
+    try {
+      const core = await import('puppeteer-core');
+      const sp = (await import('@sparticuz/chromium')).default;
+      puppeteer = core.default; execPath = await sp.executablePath(); preArgs = sp.args || [];
+    } catch {
+      puppeteer = (await import('puppeteer')).default;
+    }
+    browser = await puppeteer.launch({
+      executablePath: execPath || undefined,
+      headless: 'shell',
+      args: [...preArgs, '--no-sandbox', '--disable-dev-shm-usage'],
+      defaultViewport: null,
+      env: { ...process.env }, // LD_LIBRARY_PATH passthrough for exotic sandboxes
+    });
+  } catch (e) {
+    console.log(boot + 'real-browser layout checks skipped (no launchable chromium: ' + String(e.message).split('\n')[0] + ')');
+  }
+
+  if (browser) {
+   let srv = null;
+   try {
+    const http = await import('node:http');
+    const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
+    const srv = http.createServer((req, res) => {
+      let p = decodeURIComponent(req.url.split('?')[0]); if (p === '/') p = '/index.html';
+      const f = path.join(PUB, p);
+      try {
+        const data = readFileSync(f);
+        res.writeHead(200, { 'Content-Type': TYPES[path.extname(f)] || 'application/octet-stream' });
+        res.end(data);
+      } catch { res.writeHead(404); res.end('nf'); }
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const BASEURL = 'http://127.0.0.1:' + srv.address().port + '/';
+
+    const page = await browser.newPage();
+    const pclick = (sel) => page.evaluate((s) => {
+      const e = document.querySelector(s);
+      if (!e) throw new Error('no element: ' + s);
+      e.scrollIntoView({ block: 'nearest' });
+      e.click(); // DOM click — immune to the fixed toast layer swallowing hit-tested clicks
+    }, sel);
+    let curVw = 0;
+    const wait = async (name, predicate) => {
+      try {
+        await page.waitForFunction(predicate, { timeout: 15000, pollInterval: 100 });
+      } catch (e) {
+        const st = await page.evaluate(() => ({
+          composerHidden: document.getElementById('composer').hidden,
+          settingsHidden: document.getElementById('settingsPanel').hidden,
+          calHidden: document.getElementById('calendar').hidden,
+          modal: (document.querySelector('#modalHost .modal') || {}).textContent ? document.querySelector('#modalHost .modal').textContent.slice(0, 90) : null,
+          marker: (() => { const n = document.getElementById('newTaskBtn'); return !!(n && typeof n.onclick === 'function'); })(),
+          barHidden: (() => { const b = document.querySelector('#projectBar'); return b ? b.hidden : 'no-bar'; })(),
+          barNew: !!document.querySelector('#projectBar [data-act="new"]'),
+          html: document.body.textContent.slice(0, 120),
+        }));
+        console.log('WAITFAIL', name, '@', curVw, JSON.stringify(st));
+        throw e;
+      }
+    };
+    const scan = (vw) => page.evaluate(() => {
+      const vwNow = window.innerWidth;
+      const offenders = [];
+      const inScroller = (el) => {
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          const s = getComputedStyle(n);
+          if (/(auto|scroll)/.test(s.overflowX) && n.scrollWidth > n.clientWidth + 2) return true;
+        }
+        return false;
+      };
+      for (const el of document.querySelectorAll('body *')) {
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        const s = getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') continue;
+        if ((r.right > vwNow + 1.5 || r.left < -1.5) && !inScroller(el)) {
+          offenders.push((el.id ? '#' + el.id : el.className && typeof el.className === 'string' ? el.className.split(' ')[0] : el.tagName) + '@' + Math.round(r.right));
+        }
+      }
+      return { docScroll: document.documentElement.scrollWidth, vw: vwNow, offenders: offenders.slice(0, 6) };
+    });
+
+    let layoutFails = 0, lastVw = 0;
+    for (const vw of [320, 360, 375, 414]) {
+      curVw = vw;
+      await page.setViewport({ width: vw, height: 700, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      await page.goto(BASEURL + (BASEURL.includes('?') ? '&' : '?') + 'v=mobile' + vw, { waitUntil: 'load' });
+      // boot-complete gate: handler attached AND async recover() finished (project bar populated)
+      await wait('boot-gate', () => {
+        const nb = document.getElementById('newTaskBtn');
+        return nb && typeof nb.onclick === 'function'
+          && document.querySelector('#projectBar')
+          && !document.querySelector('#projectBar').hidden
+          && !!document.querySelector('#projectBar [data-act="new"]');
+      });
+      const checks = [];
+
+      // state: seeded data (task with tags/due/priority + a fired-reminder toast card)
+      await pclick('#newTaskBtn');
+      await wait('composer-open-1', () => !document.getElementById('composer').hidden);
+      await page.type('#f-title', 'Finish Python project');
+      await page.evaluate(() => {
+        const d = new Date(); d.setDate(d.getDate() + 1);
+        document.querySelector('#f-due').value = d.toISOString().slice(0, 10);
+        document.querySelector('#f-tags').value = 'python, urgent-next';
+        document.querySelector('#addRemBtn').click();
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      await page.evaluate(() => {
+        const row = document.querySelector('#remRows .rem-row');
+        const sel = row.querySelector('select'); sel.value = 'custom';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        // the app re-renders rows synchronously on change — re-query before touching inputs
+        const fresh = document.querySelector('#remRows .rem-row').querySelectorAll('input');
+        fresh[0].value = new Date().toISOString().slice(0, 10);
+        fresh[0].dispatchEvent(new Event('change', { bubbles: true }));
+        const past = new Date(Date.now() - 3600e3);
+        const fresh2 = document.querySelector('#remRows .rem-row').querySelectorAll('input');
+        fresh2[1].value = String(past.getHours()).padStart(2, '0') + ':' + String(past.getMinutes()).padStart(2, '0');
+        fresh2[1].dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await new Promise((r) => setTimeout(r, 150));
+      await pclick('#saveTaskBtn');
+      await new Promise((r) => setTimeout(r, 800));
+      checks.push(['data+toast', await scan(vw)]);
+
+      // state: composer open on a small screen
+      await pclick('#newTaskBtn');
+      await wait('composer-open-2', () => !document.getElementById('composer').hidden);
+      checks.push(['composer', await scan(vw)]);
+      // iOS zoom guard: every typable control renders ≥ 16px
+      const smallFonts = await page.evaluate(() => ['searchInput', 'f-title', 'f-due', 'f-time', 'f-tags', 'f-priority']
+        .filter((id) => { const e = document.getElementById(id); return e && parseFloat(getComputedStyle(e).fontSize) < 16; }));
+      checks.push(['fonts', smallFonts]);
+      await pclick('#cancelTaskBtn');
+      await wait('composer-close', () => document.getElementById('composer').hidden);
+
+      // state: settings panel (notification section)
+      await pclick('#settingsBtn');
+      await wait('settings-open', () => !document.getElementById('settingsPanel').hidden);
+      checks.push(['settings', await scan(vw)]);
+      await pclick('#settingsBtn');
+
+      // state: calendar month
+      await pclick('#calBtn');
+      await wait('calendar-open', () => !document.getElementById('calendar').hidden).catch(() => {});
+      checks.push(['calendar', await scan(vw)]);
+      await pclick('#calBtn');
+      await new Promise((r) => setTimeout(r, 150));
+
+      // state: project modal (bottom sheet)
+      await pclick('#projectBar [data-act="new"]');
+      await wait('modal-open', () => !!document.querySelector('#modalHost .modal'));
+      checks.push(['project-modal', await scan(vw)]);
+      await pclick('#modalHost [data-m="cancel"]');
+      await wait('modal-close', () => !document.querySelector('#modalHost .modal'));
+
+      // tap targets + touch action
+      const targets = await page.evaluate(() => {
+        const h = (sel) => Math.min(...[...document.querySelectorAll(sel)].filter((e) => e.offsetParent !== null || getComputedStyle(e).position === 'fixed').map((e) => e.getBoundingClientRect().height).concat([999]));
+        return { check: h('#taskList .check'), btn: h('#taskList .btn-sm'), filter: h('.filter-btn'), fcount: document.querySelectorAll('.filter-btn').length, ta: getComputedStyle(document.querySelector('#taskList .check')).touchAction };
+      });
+      checks.push(['targets', targets]);
+
+      const overflow = checks.filter((c) => c[1] && typeof c[1].docScroll === 'number' && (c[1].docScroll > c[1].vw + 1 || c[1].offenders.length));
+      const fontFail = (checks.find((c) => c[0] === 'fonts') || [])[1] || [];
+      const tFail = !(targets.check >= 29 && targets.filter >= 30 && targets.ta === 'manipulation');
+      if (overflow.length || fontFail.length || tFail) {
+        layoutFails++; lastVw = vw;
+        console.log(`  ✗ mobile layout @${vw}px — overflow: ${overflow.map((o) => o[0] + ' ' + JSON.stringify(o[1].offenders && o[1].offenders.length ? o[1].offenders : o[1].docScroll)).join('; ') || 'none'} | <16px inputs: ${JSON.stringify(fontFail)} | targets: ${JSON.stringify(targets)}`);
+      } else {
+        console.log(`  ✓ mobile layout @${vw}px: all 8 states overflow-free, inputs ≥16px, tap targets ok`);
+      }
+    }
+    ok(layoutFails === 0, `real Chromium @320/360/375/414: no horizontal overflow in any state, no iOS-zoom inputs, touch targets sized${layoutFails ? ' (failed at ' + lastVw + 'px — see log above)' : ''}`);
+    srv.close();
+   } catch (e) {
+    ok(false, 'mobile layout section failed cleanly: ' + String(e && e.message).split('\n')[0]);
+    try { srv.close(); } catch (_) {}
+   }
+   await browser.close();
+  }
+}
+
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
 process.exit(failed ? 1 : 0);

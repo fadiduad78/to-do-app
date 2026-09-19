@@ -919,6 +919,11 @@
       }
 
       // -- 4. adopt into memory + prune expired trash -----------------------
+      // One recovery clock for every retention prune below. (This used to be
+      // declared AFTER the reminder prune referenced it — a TDZ ReferenceError
+      // that silently killed recovery for any user reloading with fired
+      // reminders in history: blank app until they cleared site data.)
+      const now = Date.now();
       const clean = payload || { tasks: [], trash: [], projects: [], subtasks: [], reminders: [], settings: {} };
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
@@ -928,7 +933,7 @@
       // Reminders that already fired (or were dismissed/skipped) lose their
       // meaning after the 30-day window — prune them from history. PENDING
       // ones are NEVER pruned here: the engine owes them a catch-up fire.
-      const remExpired = memory.reminders.filter((r) => r.status !== 'pending' && now2 - r.updatedAt > TRASH_RETENTION_MS);
+      const remExpired = memory.reminders.filter((r) => r.status !== 'pending' && now - r.updatedAt > TRASH_RETENTION_MS);
       if (remExpired.length) {
         const goneR = new Set(remExpired.map((r) => r.id));
         memory.reminders = memory.reminders.filter((r) => !goneR.has(r.id));
@@ -937,8 +942,6 @@
       memory.settings = { ...DEFAULT_SETTINGS, ...(clean.settings || {}) };
       lastSavedAt = clean.savedAt || Date.now();
 
-      const now = Date.now();
-      const now2 = now;
       const expired = memory.trash.filter((t) => now - (t.trashedAt || 0) > TRASH_RETENTION_MS);
       if (expired.length) {
         memory.trash = memory.trash.filter((t) => (t.trashedAt || 0) > now - TRASH_RETENTION_MS);
@@ -951,9 +954,6 @@
         memory.projects = memory.projects.filter((p) => !gone.has(p.id));
         notices.push({ kind: 'info', message: 'Removed ' + expiredProj.length + ' project(s) that had been in the trash for more than 30 days.' });
       }
-
-      // -- 4b. reminder history pruning used the recovery clock --------------
-      // (now2 defined above where the prune runs)
 
       // -- 5. make disk agree with the recovered state ----------------------
       try {

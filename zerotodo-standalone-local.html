@@ -3,7 +3,11 @@
 <html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="ZeroTodo">
   <title>ZeroTodo — a to-do list that never loses your data</title>
   <meta name="description" content="A zero-data-loss to-do list. Your tasks live in your browser (IndexedDB + redundant localStorage backup) and sync online to your own server, so they survive cleared browser data and follow you across devices.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Crect%20width='100'%20height='100'%20rx='22'%20fill='%234f46e5'/%3E%3Cpath%20d='M28%2052l16%2016%2028-32'%20stroke='white'%20stroke-width='10'%20fill='none'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
@@ -66,6 +70,7 @@ body {
   color: var(--text);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   min-height: 100vh;
+  -webkit-tap-highlight-color: transparent;
   display: flex;
   flex-direction: column;
   transition: background .25s, color .25s;
@@ -465,7 +470,7 @@ body {
 
 .toast-host {
   position: fixed;
-  bottom: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
@@ -751,6 +756,94 @@ body {
 .toast-notify .rem-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 5px; }
 .toast-notify .rem-snoozes { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; color: var(--muted); }
 .toast-notify { max-width: 520px; }
+
+/* ========================== Mobile / touch responsiveness ==========================
+   What this fixes on phones:
+   • iOS auto-zoom on focus: Safari zooms the WHOLE page when a focused control's
+     font is < 16px — every text-like input/select therefore jumps to 16px on
+     small screens (labels stay compact; only what you type into grows).
+   • Tap targets: checks, chips and buttons grow to ~38-40px hit areas.
+   • Toast/alert cards stack instead of squeezing side-by-side rows.
+   • Notch/home-indicator: viewport-fit=cover + env(safe-area-inset-*) padding
+     on the top bar, containers, toasts and bottom-sheet modals.
+   • Project chips scroll horizontally instead of stacking a wall of pills.
+   • No 300ms double-tap-zoom delay on primary controls (touch-action).
+   ============================================================================== */
+
+button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
+.cal-more, .banner-close, .pc-menu, .task-main { touch-action: manipulation; }
+
+@supports (min-height: 100svh) { body { min-height: 100svh; } }
+
+@media (max-width: 640px) {
+  .topbar {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    padding-left: calc(16px + env(safe-area-inset-left, 0px));
+    padding-right: calc(16px + env(safe-area-inset-right, 0px));
+  }
+  .container, .banners {
+    padding-left: calc(14px + env(safe-area-inset-left, 0px));
+    padding-right: calc(14px + env(safe-area-inset-right, 0px));
+  }
+  .banners { padding-top: 8px; }
+
+  /* iOS zoom guard — keep in sync with test-ui (it measures this) */
+  .composer input, .composer textarea, .composer select,
+  .toolbar input, .toolbar input[type="search"], .setting-row input, .setting-row select,
+  .modal-form input, .modal-form textarea, .modal-form select,
+  .sub-add-input, .sub-edit-input,
+  .rem-row select, .rem-row input,
+  .notif-timing select, .notif-timing input,
+  .cal-filter select { font-size: 16px; }
+
+  .toolbar { flex-wrap: wrap; }
+  .toolbar input { flex: 1 1 160px; min-width: 0; }
+
+  /* modals become bottom sheets: taller viewport, thumb-reachable, scrollable */
+  .modal-overlay { padding: 0; align-items: flex-end; }
+  .modal {
+    max-width: none;
+    border-radius: 16px 16px 0 0;
+    border-left: 0; border-right: 0; border-bottom: 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+    max-height: 86vh;
+    overflow: auto;
+  }
+  @supports (max-height: 86svh) { .modal { max-height: 86svh; } }
+
+  /* alert + toast stack full-width instead of squeezing rows */
+  .toast-host { left: 10px; right: 10px; width: auto; transform: none; align-items: stretch; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .toast { max-width: none; }
+  .toast-rem { flex-direction: column; align-items: stretch; }
+  .toast-notify .rem-snoozes { display: flex; flex-wrap: wrap; row-gap: 4px; }
+  .toast-notify .rem-snoozes .btn { flex: none; }
+  .toast-notify .btn-sm { min-height: 36px; }
+
+  /* touch targets */
+  .check { width: 30px; height: 30px; }
+  .sub-check { width: 24px; height: 24px; }
+  .btn, .btn-sm { min-height: 38px; padding-top: 8px; padding-bottom: 8px; }
+  .btn-icon { min-height: 40px; min-width: 40px; }
+  .filter-btn { padding: 8px 14px; }
+  .tag-chip { padding: 6px 12px; }
+  .pc-menu { min-width: 34px; min-height: 34px; }
+  .pf-color, .pf-icon { min-width: 38px; min-height: 38px; }
+
+  /* denser controls in the new settings/notification UI */
+  .notif-timing { padding-left: 2px; }
+  .notif-timing select, .notif-timing input { padding: 8px 9px; }
+  .notif-timing input[type="number"] { width: 72px; }
+  .rem-row select { min-width: 0; flex: 1 1 150px; }
+  .rem-row input { min-width: 0; flex: 1 1 120px; }
+
+  /* horizontal chip rail beats a wrapped wall of project cards */
+  .project-cards { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+  .project-card { flex: none; }
+
+  .task { padding: 10px 12px; }
+  .cal-cell { min-height: 54px; }
+  .empty-state { padding: 36px 12px; }
+}
 
   </style>
 </head>
@@ -1900,6 +1993,11 @@ body {
       }
 
       // -- 4. adopt into memory + prune expired trash -----------------------
+      // One recovery clock for every retention prune below. (This used to be
+      // declared AFTER the reminder prune referenced it — a TDZ ReferenceError
+      // that silently killed recovery for any user reloading with fired
+      // reminders in history: blank app until they cleared site data.)
+      const now = Date.now();
       const clean = payload || { tasks: [], trash: [], projects: [], subtasks: [], reminders: [], settings: {} };
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
@@ -1909,7 +2007,7 @@ body {
       // Reminders that already fired (or were dismissed/skipped) lose their
       // meaning after the 30-day window — prune them from history. PENDING
       // ones are NEVER pruned here: the engine owes them a catch-up fire.
-      const remExpired = memory.reminders.filter((r) => r.status !== 'pending' && now2 - r.updatedAt > TRASH_RETENTION_MS);
+      const remExpired = memory.reminders.filter((r) => r.status !== 'pending' && now - r.updatedAt > TRASH_RETENTION_MS);
       if (remExpired.length) {
         const goneR = new Set(remExpired.map((r) => r.id));
         memory.reminders = memory.reminders.filter((r) => !goneR.has(r.id));
@@ -1918,8 +2016,6 @@ body {
       memory.settings = { ...DEFAULT_SETTINGS, ...(clean.settings || {}) };
       lastSavedAt = clean.savedAt || Date.now();
 
-      const now = Date.now();
-      const now2 = now;
       const expired = memory.trash.filter((t) => now - (t.trashedAt || 0) > TRASH_RETENTION_MS);
       if (expired.length) {
         memory.trash = memory.trash.filter((t) => (t.trashedAt || 0) > now - TRASH_RETENTION_MS);
@@ -1932,9 +2028,6 @@ body {
         memory.projects = memory.projects.filter((p) => !gone.has(p.id));
         notices.push({ kind: 'info', message: 'Removed ' + expiredProj.length + ' project(s) that had been in the trash for more than 30 days.' });
       }
-
-      // -- 4b. reminder history pruning used the recovery clock --------------
-      // (now2 defined above where the prune runs)
 
       // -- 5. make disk agree with the recovered state ----------------------
       try {
@@ -3381,18 +3474,6 @@ body {
 
     store.startSync();
 
-    // Cloud layer (see cloud.js): attaches after local recovery, LWW-merges
-    // with the server, then mirrors every commit upstream. If the server is
-    // unreachable the app keeps working fully local-only. Never blocks boot:
-    // failures are caught inside and surfaced via the ☁ pill.
-    if (window.ZTCloud) {
-      try {
-        await window.ZTCloud.attach({ store, getState: () => S, onChange: () => { renderAll(); remReconcile(); } });
-      } catch (e) {
-        console.warn('[zerotodo] cloud attach failed (staying local-only):', e);
-      }
-    }
-
     if (window.ZTNotify) {
       try {
         ZTNotify.attach({
@@ -3443,6 +3524,19 @@ body {
     checkExportReminder();
     startRelativeClock();
     remInit(); // load → detect overdue → catch up safely → reschedule (persisted schedule)
+
+    // Cloud layer (see cloud.js): LWW-merges with the server only AFTER the app
+    // is rendered and interactive, then mirrors every commit upstream. A slow
+    // or unreachable server affects nothing but the ☁ pill. (This await used to
+    // sit before the first renderAll — on flaky mobile networks the whole UI
+    // stayed skeleton-empty until cloud gave up.)
+    if (window.ZTCloud) {
+      try {
+        await window.ZTCloud.attach({ store, getState: () => S, onChange: () => { renderAll(); remReconcile(); } });
+      } catch (e) {
+        console.warn('[zerotodo] cloud attach failed (staying local-only):', e);
+      }
+    }
   }
 
   let noticesSeq = 0;

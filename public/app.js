@@ -123,18 +123,6 @@
 
     store.startSync();
 
-    // Cloud layer (see cloud.js): attaches after local recovery, LWW-merges
-    // with the server, then mirrors every commit upstream. If the server is
-    // unreachable the app keeps working fully local-only. Never blocks boot:
-    // failures are caught inside and surfaced via the ☁ pill.
-    if (window.ZTCloud) {
-      try {
-        await window.ZTCloud.attach({ store, getState: () => S, onChange: () => { renderAll(); remReconcile(); } });
-      } catch (e) {
-        console.warn('[zerotodo] cloud attach failed (staying local-only):', e);
-      }
-    }
-
     if (window.ZTNotify) {
       try {
         ZTNotify.attach({
@@ -185,6 +173,19 @@
     checkExportReminder();
     startRelativeClock();
     remInit(); // load → detect overdue → catch up safely → reschedule (persisted schedule)
+
+    // Cloud layer (see cloud.js): LWW-merges with the server only AFTER the app
+    // is rendered and interactive, then mirrors every commit upstream. A slow
+    // or unreachable server affects nothing but the ☁ pill. (This await used to
+    // sit before the first renderAll — on flaky mobile networks the whole UI
+    // stayed skeleton-empty until cloud gave up.)
+    if (window.ZTCloud) {
+      try {
+        await window.ZTCloud.attach({ store, getState: () => S, onChange: () => { renderAll(); remReconcile(); } });
+      } catch (e) {
+        console.warn('[zerotodo] cloud attach failed (staying local-only):', e);
+      }
+    }
   }
 
   let noticesSeq = 0;

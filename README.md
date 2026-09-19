@@ -58,6 +58,12 @@ if the server is unreachable, every original guarantee still holds.
 - Filters: All / Active / Completed / Trash, plus **by tag**, plus full-text
   search over title + description.
 - Reordering: drag-and-drop (desktop) **and** ↑/↓ buttons (touch-friendly).
+- **Mobile web is a first-class layout**: 16px form inputs (so iOS never
+  zoom-jumps on focus), thumb-sized tap targets, modals as bottom sheets,
+  notch/home-indicator safe-area padding, a horizontally swipeable project
+  rail, and toasts stacked above the keyboard/home bar. Verified in real
+  Chromium at 320/360/375/414 px by `server/test-ui.mjs` (overflow, font
+  sizes, touch targets across 8 app states each).
 - Dark mode (auto/light/dark), responsive layout, live "Saving… / All changes
   saved" indicator.
 
@@ -143,6 +149,14 @@ tasks, trash }`. You can also hand-edit it (carefully) and re-import.
 - **Clearing site data** erases both IndexedDB and localStorage. That is the
   one event the app cannot survive on its own — which is exactly why the
   export habit exists.
+- **App stuck on "Loading…" / blank after reload** (fixed Sept 2026): two boot
+  bugs compounded. Cloud sync was `await`ed *before* the first render, so a
+  slow mobile network starved the whole UI; and the reminder-history prune in
+  `storage.js` read its clock constant before declaration — a TDZ crash on the
+  first reload *after any reminder had fired* (the very first one, then always).
+  Boot now paints from local data first, cloud merges in when it arrives, and
+  the prune shares one hoisted recovery clock. A reload-with-fired-reminders
+  case is pinned in `server/test-storage.mjs`.
 
 ## Development notes
 
