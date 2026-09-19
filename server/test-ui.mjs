@@ -7,6 +7,7 @@
  * ==========================================================================*/
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -832,6 +833,72 @@ await sleep(300);
 
   ok(nReqs.length === 1, 'the ENTIRE session produced exactly ONE permission request — from the explicit control only');
   $('#settingsBtn').click(); await sleep(80); // close panel; leave app state neutral
+}
+
+/* ============ 15. Single-file standalone build (regression: it went stale) ============ */
+{
+  const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const STANDALONE = REPO + '/zerotodo-standalone-local.html';
+  const committed = readFileSync(STANDALONE, 'utf8');
+  execFileSync('node', [REPO + '/scripts/build-standalone.mjs'], { stdio: 'pipe' });
+  const rebuilt = readFileSync(STANDALONE, 'utf8');
+  ok(committed === rebuilt, 'committed standalone == fresh build of public/ (README promise: the single file IS the same app — no drift)');
+
+  const sReqs = [];
+  const sCalls = [];
+  const domS = new JSDOM(committed, {
+    runScripts: 'dangerously', url: 'http://localhost/', pretendToBeVisual: true,
+    beforeParse(win) {
+      win.HTMLElement.prototype.scrollIntoView = function () {};
+      if (!win.crypto || !win.crypto.randomUUID) {
+        let k = 0;
+        Object.defineProperty(win, 'crypto', { value: { randomUUID: () => 'su-' + (++k) + '-' + Date.now() } });
+      }
+      win.fetch = () => Promise.reject(new TypeError('offline')); // file://-like: sync must stay off WITHOUT breaking boot
+      const SN = function (title, opts) { sCalls.push({ title, opts }); this.onclick = null; this.close = function () {}; };
+      SN.permission = 'granted';
+      SN.requestPermission = function () { sReqs.push(1); return Promise.resolve(SN.permission); };
+      win.Notification = SN;
+    },
+  });
+  await sleep(600);
+  const ds = domS.window.document;
+  const byId = (id) => ds.getElementById(id);
+  ok(!!window && !!ds.querySelector('#taskList'), 'standalone boots (scripts run inline, no external files)');
+  ok(!!ds.defaultView.ZTNotify, 'standalone ships the notification module');
+  ok(sReqs.length === 0, 'standalone boot: ZERO permission requests here too');
+  ok(!!byId('notifBox') && !!byId('nMaster') && !!byId('nOverdue'), 'standalone carries the Settings → Notifications section');
+  ok(/wireCalendar/.test(committed) && /projectBar/.test(committed), 'standalone carries every other current feature (calendar, projects) — full rebuild, not a patch');
+
+  /* one real end-to-end cycle inside the single file: create → past custom
+     reminder → save → alert card (the file:// degradation path) → persistence */
+  byId('newTaskBtn').click(); await sleep(140);
+  byId('f-title').value = 'Standalone task';
+  byId('f-due').value = new Date().toISOString().slice(0, 10);
+  byId('addRemBtn').click(); await sleep(80);
+  const srow = ds.querySelector('#remRows .rem-row');
+  const ssel = srow.querySelector('select');
+  ssel.value = 'custom'; ssel.dispatchEvent(new domS.window.Event('change', { bubbles: true }));
+  await sleep(60);
+  const sins = ds.querySelectorAll('#remRows .rem-row input');
+  const dNow = new Date();
+  const hm = String(dNow.getHours()).padStart(2, '0') + ':' + String(Math.max(0, dNow.getMinutes() - 5)).padStart(2, '0');
+  sins[0].value = new Date().toISOString().slice(0, 10);
+  sins[0].dispatchEvent(new domS.window.Event('change', { bubbles: true }));
+  sins[1].value = hm;
+  sins[1].dispatchEvent(new domS.window.Event('change', { bubbles: true }));
+  await sleep(80);
+  byId('taskForm').dispatchEvent(new domS.window.Event('submit', { bubbles: true, cancelable: true }));
+  await sleep(600);
+  ok([...ds.querySelectorAll('.toast-notify')].some((x) => /Standalone task/.test(x.textContent)),
+    'standalone: fired reminder shows the in-app alert card (graceful degradation with no SW/no origin)');
+  {
+    const mirror = JSON.parse(domS.window.localStorage.getItem('todo_backup_v1') || '{}');
+    const tk = (mirror.tasks || []).find((x) => x.title === 'Standalone task');
+    ok(!!tk && (mirror.reminders || []).some((r) => r.taskId === tk.id && r.reminderType === 'custom' && r.status === 'triggered'),
+      'standalone: task + fired reminder persist in the localStorage mirror (record, not a timer)');
+  }
+  domS.window.close();
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

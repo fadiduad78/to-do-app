@@ -158,6 +158,13 @@ it just doesn't sync projects until both sides upgrade.
 
 ## 7. Process
 
+- **Any change under `public/` must be followed by `npm run build:standalone`
+  and the rebuilt `zerotodo-standalone-local.html` committed with it.** The
+  single-file build is an advertised artifact (README), and it silently went
+  stale once before this rule existed — test-ui §15 now byte-compares the
+  committed file against a fresh build and fails the suite on drift, then
+  boots the actual file and drives a notification through it.
+
 * `node --check` every touched file, then run **all four suites**
   (`for f in test test-storage test-supabase test-client; do node server/$f.mjs; done`).
 * No unrelated refactors. Additive patches with exact-match anchors beat

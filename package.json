@@ -2,12 +2,13 @@
   "name": "zerotodo-online",
   "version": "1.0.0",
   "private": true,
-  "description": "ZeroTodo — zero-data-loss to-do list, now synced online to your own Node server.",
+  "description": "ZeroTodo \u2014 zero-data-loss to-do list, now synced online to your own Node server.",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "test": "node server/test.mjs"
+    "test": "node server/test.mjs",
+    "build:standalone": "node scripts/build-standalone.mjs"
   },
   "engines": {
     "node": ">=18"

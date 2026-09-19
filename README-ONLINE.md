@@ -215,10 +215,12 @@ node server/test-storage.mjs  # 81 checks: the real public/storage.js in Node �
 node server/test-supabase.mjs # 26 checks: mock PostgREST — free-plan restart survival, per-user rows, adoption, reminder-type round-trip
 node server/test-client.mjs   # 33 checks: the real public/cloud.js against a live server (project/subtask/dueTime/reminder sync semantics)
 npm i --no-save jsdom && node server/test-ui.mjs
-                              # 165 checks: the real index.html + storage.js + notify.js + app.js in a headless DOM —
+                              # 173 checks: the real index.html + storage.js + notify.js + app.js in a headless DOM —
                               # subtask + project + calendar behavior, the reminder editor, overdue catch-up on boot,
                               # duplicate-proofing, dismiss, recurrence re-arming, and the full notification layer
                               # against a stubbed Notification API + service worker: never-on-load permission,
                               # persistent sends with actions, per-instance dedup, snooze re-arm, overdue policy,
                               # summaries/habits/deadline warnings, pomodoro, in-app fallback, unsupported browsers
+                              # + §15: boots the COMMITTED standalone single-file build byte-identical to a
+                              # fresh `npm run build:standalone` and drives a notification through it
 ```

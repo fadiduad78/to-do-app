@@ -15,8 +15,14 @@ if the server is unreachable, every original guarantee still holds.
   browsers), or
 - **Served locally (recommended):** `python3 -m http.server 8080` (or
   `npx serve`) in this folder, then open `http://localhost:8080`.
-- `zerotodo-standalone.html` is a single-file build of the same app
-  (everything inlined) — handy if you want to keep one file.
+- `zerotodo-standalone-local.html` is a single-file build of the same app
+  (styles + storage + sync + notifications + UI, everything inlined) — handy
+  if you want to keep one file. It is generated: after changing anything in
+  `public/`, run `npm run build:standalone` (the UI test suite boots the
+  committed file and fails if it was left stale). From `file://` there is no
+  permission-able origin, so notifications degrade to the same in-app alert
+  cards with Open/Complete/Snooze; hosted (or installed PWA) builds get full
+  OS notifications.
 
 ## Features
 
