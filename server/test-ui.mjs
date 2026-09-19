@@ -2185,21 +2185,23 @@ await sleep(300);
   /* ---- B. the confirmation-gated flow in the MAIN dom ---- */
   const mir = () => JSON.stringify(JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks);
   const remMir = () => JSON.parse(window.localStorage.getItem('todo_backup_v1'));
-  $('#newTaskBtn').click(); await sleep(120);
-  ok(!$('#nlBox').hidden, 'the composer opens WITH the natural-language input (“Create a task…”) front and center');
-  $('#nlInput').value = 'Finish assignment tomorrow, high priority, remind me one hour before';
+  ok(!$('#qaWrap').hidden && $('#qaInput').placeholder.startsWith('Create a task'), 'the natural-language input is ALWAYS on the main screen — no composer to open first (placeholder: “Create a task…”)');
+  ok($('#composer').hidden, '…and the plain list stays in front of it (this is quick-add, not a hidden form)');
+  $('#qaInput').value = 'Finish assignment tomorrow, high priority, remind me one hour before';
   const beforeEnter = mir();
-  $('#nlInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  $('#qaInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   await sleep(220);
-  ok($('#nlCard') && !$('#nlCard').hidden, 'Enter shows the “I understood” card — it does NOT submit the form');
+  ok($('#qaCard') && !$('#qaCard').hidden, 'Enter shows the “I understood” card — it does NOT create the task');
+  ok(/September \d|\(\d{4}-\d{2}-\d{2}\)/.test($('#qaCard').textContent), 'the Date line reads like the brief (“September 20 (Tomorrow)” + iso)');
   ok(mir() === beforeEnter, 'ZERO writes on understand: the task store is byte-identical while suggestions wait for you');
-  const cardTxt = $('#nlCard').textContent;
+  const cardTxt = $('#qaCard').textContent;
   ok(/I understood/.test(cardTxt) && /Finish assignment/.test(cardTxt) && /Tomorrow/.test(cardTxt) && /High/.test(cardTxt) && /1 hour before/.test(cardTxt),
     'the card reads like the brief: “I understood: Task / Date / Time / Priority / Reminder …”');
   ok(/nothing saved yet/.test(cardTxt) && /Create task/.test(cardTxt) && /Edit/.test(cardTxt),
     'the card shows [Create task] and [Edit], and says nothing is saved yet');
-  $('#nlCard [data-nl="create"]').click();
+  $('#qaCard [data-nl="create"]').click();
   await sleep(420);
+  ok($('#composer').hidden, 'Create ran through the ordinary composer submit and closed it again — one pipeline, no lingering editor');
   const t24 = tsk().find((x) => x.title === 'Finish assignment');
   ok(!!t24, 'Create task → the task exists (exactly one, via the composer’s own submit pipeline)');
   ok(t24.dueDate === NLdue24() && t24.priority === 'high', 'the confirmed date + priority landed on the real task');
@@ -2207,13 +2209,13 @@ await sleep(300);
   const rw = remMir().reminders.filter((x) => x.taskId === t24.id);
   ok(rw.length === 1 && rw[0].reminderType === 'h1', 'the “one hour before” reminder became a real reminder record on the task');
   // the Edit path: parsed values land in the FORM, nothing is written, user saves manually
-  $('#newTaskBtn').click(); await sleep(120);
-  $('#nlInput').value = 'Exercise every Monday Wednesday and Friday at 6 PM';
-  $('#nlInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  $('#qaInput').value = 'Exercise every Monday Wednesday and Friday at 6 PM';
+  $('#qaInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   await sleep(200);
   const beforeEdit = mir();
-  $('#nlCard [data-nl="edit"]').click(); await sleep(250);
+  $('#qaCard [data-nl="edit"]').click(); await sleep(250);
   ok(mir() === beforeEdit, 'Edit writes NOTHING either — it only moves the interpretation into the form');
+  ok(!$('#composer').hidden, '…and Edit is what OPENS the composer (from the main screen) with the values applied');
   ok($('#f-title').value === 'Exercise' && $('#f-time').value === '18:00' && $('#f-recurrence').value === 'custom',
     'the form was pre-filled for editing: title, time, recurrence kind');
   ok(S_uiRecur24(), '…including the Mon/Wed/Fri day set in the custom repeat panel');
@@ -2223,20 +2225,19 @@ await sleep(300);
   ok(ex && ex.recurrence === 'custom' && ex.recurRule && ex.recurRule.weekdays.join() === '1,3,5',
     'after the user pressed “Add task”, the edited recurrence is saved — ordinary task, ordinary editor, no special case');
   // low confidence → the card flags it loudly
-  $('#newTaskBtn').click(); await sleep(100);
-  $('#nlInput').value = 'Organize the garage someday no rush';
-  $('#nlInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  $('#qaInput').value = 'Organize the garage someday no rush';
+  $('#qaInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   await sleep(180);
-  ok($('#nlCard').className.includes('low'), 'ambiguous input → the card turns LOW-CONFIDENCE styled (amber, solid border) — confirmation is not optional-look-and-feel');
-  ok(/no date found/.test($('#nlCard').textContent), '…and the note tells the user what it could not find');
+  ok($('#qaCard').className.includes('low'), 'ambiguous input → the card turns LOW-CONFIDENCE styled (amber, solid border) — confirmation is not optional-look-and-feel');
+  ok(/no date found/.test($('#qaCard').textContent), '…and the note tells the user what it could not find');
   const lowBefore = mir();
-  $('#nlCard [data-nl="close"]').click(); await sleep(120);
-  ok($('#nlCard').hidden && mir() === lowBefore, 'dismissing the card abandons the interpretation — again zero writes');
-  // edit mode must NOT show the NL bar (explicit editing has no interpretation layer)
-  const row0 = $('#taskList .task');
-  row0.querySelector('[data-act="edit"]').click(); await sleep(200);
-  ok($('#nlBox').hidden, 'the NL input hides itself in Edit mode — it is a creation affordance only');
-  $('#cancelTaskBtn').click(); await sleep(120);
+  $('#qaCard [data-nl="close"]').click(); await sleep(120);
+  ok($('#qaCard').hidden && mir() === lowBefore, 'dismissing the card abandons the interpretation — again zero writes');
+  // other views step the quick-add aside (it belongs to the list, not the calendar)
+  $('#calBtn').click(); await sleep(160);
+  ok($('#qaWrap').hidden, 'the quick-add bar steps aside in Calendar view — views still rule their screen');
+  $('#calBtn').click(); await sleep(160);
+  ok(!$('#qaWrap').hidden, '…and returns to the list');
   ok(true, 'natural-language add section completed without uncaught errors');
 }
 

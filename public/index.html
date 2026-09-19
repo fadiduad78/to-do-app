@@ -48,16 +48,6 @@
   <section id="composer" class="composer" hidden>
     <h2 id="composerTitle">New task</h2>
     <form id="taskForm" novalidate>
-      <!-- Natural-language quick add: one sentence in, a CONFIRMED task out.
-           The parser (public/nl.js) only ever interprets — nothing here can
-           create a task before you press “Create task” or save the form. -->
-      <div class="nl-box" id="nlBox">
-        <div class="nl-row">
-          <input id="nlInput" type="text" maxlength="300" placeholder="Create a task… e.g. “Study Python tomorrow at 7 PM”" autocomplete="off" spellcheck="false" aria-label="Create a task from natural language">
-          <button type="button" class="btn btn-ghost" id="nlParseBtn" title="Understand this sentence — nothing is created until you confirm">✨ Understand</button>
-        </div>
-        <div id="nlCard" class="nl-card" hidden></div>
-      </div>
       <input id="f-title" type="text" maxlength="200" placeholder="What needs to be done?" autocomplete="off" required>
       <textarea id="f-desc" rows="2" maxlength="2000" placeholder="Description (optional)"></textarea>
       <div class="form-row">
@@ -137,6 +127,19 @@
       </div>
     </form>
   </section>
+
+  <!-- Natural-language quick add: THE input the brief asks for — always on the
+       main screen, before any composer. Enter parses into structured data and
+       shows the “I understood” card; nothing is created until [Create task] is
+       pressed or the prefilled form is saved. Parser: public/nl.js (local,
+       deterministic, no network). -->
+  <div class="qa-wrap" id="qaWrap">
+    <div class="qa-row">
+      <input id="qaInput" type="text" maxlength="300" placeholder="Create a task… e.g. “Study Python tomorrow at 7 PM”" autocomplete="off" spellcheck="false" aria-label="Create a task from natural language">
+      <button type="button" class="btn btn-ghost qa-btn" id="qaBtn" title="Understand this sentence — nothing is created until you confirm">✨ Understand</button>
+    </div>
+    <div id="qaCard" class="nl-card" hidden></div>
+  </div>
 
   <section class="toolbar">
     <input id="searchInput" type="search" placeholder="Search title or description…" autocomplete="off" aria-label="Search tasks">

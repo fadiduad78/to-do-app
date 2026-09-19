@@ -1020,11 +1020,12 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
 @media (max-width: 560px) { .ai-l1 { gap: 4px; } .ai-title { flex-basis: 130px; } .ai-cta { display: block; margin: 4px 0 0; } }
 
 /* ========================= Natural-language quick add ========================= */
-.nl-box { margin: 2px 0 10px; }
-.nl-row { display: flex; gap: 8px; align-items: stretch; }
-#nlInput { flex: 1 1 auto; font-size: 16px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); }
-#nlInput:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
-.nl-row .btn { flex: none; }
+.qa-wrap { margin: 4px 0 10px; }
+.qa-row { display: flex; gap: 8px; align-items: stretch; }
+#qaInput { flex: 1 1 auto; font-size: 16px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+#qaInput:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.qa-row .btn { flex: none; }
+.qa-btn { border: 1px solid var(--accent); color: var(--accent); background: var(--accent-soft); border-radius: 12px; font-weight: 600; }
 .nl-card { margin-top: 8px; border: 1px dashed var(--border); border-radius: 10px; background: var(--panel); padding: 10px 12px; }
 .nl-card.low { border-color: #d97706; border-style: solid; background: var(--warn-soft, #fff7ed); }
 .nl-head { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; margin-bottom: 6px; }

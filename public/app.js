@@ -43,7 +43,7 @@
     dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
     habBtn: $('habBtn'), habitsView: $('habitsView'), habitsHost: $('habitsHost'), habInStats: $('habInStats'),
     aiMode: $('aiMode'),
-    nlBox: $('nlBox'), nlInput: $('nlInput'), nlParseBtn: $('nlParseBtn'), nlCard: $('nlCard'),
+    qaWrap: $('qaWrap'), qaInput: $('qaInput'), qaBtn: $('qaBtn'), qaCard: $('qaCard'),
     focusBar: $('focusBar'),
     fRecurrence: $('f-recurrence'), remRows: $('remRows'), addRemBtn: $('addRemBtn'),
     recurPanel: $('recurPanel'), rcEvery: $('rcEvery'), rcUnit: $('rcUnit'), rcDays: $('rcDays'), rcHint: $('rcHint'),
@@ -491,12 +491,13 @@
     els.habBtn.classList.toggle('on', habOn);
     els.habBtn.setAttribute('aria-pressed', String(habOn));
     if (calOn || dashOn || habOn) {
-      for (const el of [els.filterTabs, els.tagChips, els.projectBar, els.projectDetail, els.trashBar, els.taskList, els.emptyState]) el.hidden = true;
+      for (const el of [els.qaWrap, els.filterTabs, els.tagChips, els.projectBar, els.projectDetail, els.trashBar, els.taskList, els.emptyState]) el.hidden = true;
       if (habOn) renderHabits();
       if (dashOn && !habOn) renderDashboard();
       if (calOn && !dashOn && !habOn) renderCalendar();
     } else {
       els.taskList.hidden = false;
+      if (els.qaWrap) els.qaWrap.hidden = !window.ZTNL;
     }
     renderFocus(); // the session bar re-derives from t.focusActive like everything else
     if (els.savePill.classList.contains('saved')) setPill('saved');
@@ -755,8 +756,6 @@
     S.ui.composerOpen = true;
     els.composer.hidden = false;
     els.composerTitle.textContent = editing ? 'Edit task' : 'New task';
-    if (els.nlBox) els.nlBox.hidden = !!editing || !window.ZTNL;
-    if (!editing && !S.ui.editingId) nlHide();
     els.saveTaskBtn.textContent = editing ? 'Save changes' : 'Add task';
     els.fTitle.value = prefill && prefill.title != null ? prefill.title : (editing ? editing.title : '');
     els.fDesc.value = prefill && prefill.description != null ? prefill.description : (editing ? editing.description : '');
@@ -806,8 +805,6 @@
   }
 
   function closeComposer() {
-    if (els.nlInput) els.nlInput.value = '';
-    nlHide();
     S.ui.composerOpen = false;
     S.ui.editingId = null;
     els.composer.hidden = true;
@@ -3295,19 +3292,19 @@
      the user to fix and save. Ambiguous output therefore can never silently
      become a task — there is literally no other creation route from here. */
   let nlLast = null;
-  function nlHide() { nlLast = null; if (els.nlCard) { els.nlCard.hidden = true; els.nlCard.innerHTML = ''; } }
+  function nlHide() { nlLast = null; if (els.qaCard) { els.qaCard.hidden = true; els.qaCard.innerHTML = ''; } }
   function nlProjectsForParse() {
     return (S.projects || []).filter((pr) => !pr.archived && !pr.deletedAt).map((pr) => ({ id: pr.id, name: pr.name }));
   }
   function nlUnderstand() {
     if (!window.ZTNL) { toast('Language parser module is missing.'); return; }
-    const text = (els.nlInput && els.nlInput.value || '').trim();
-    if (!text) { els.nlInput && els.nlInput.focus(); return; }
+    const text = (els.qaInput && els.qaInput.value || '').trim();
+    if (!text) { els.qaInput && els.qaInput.focus(); return; }
     nlLast = ZTNL.parse(text, { projects: nlProjectsForParse() });
     nlRender();
   }
   function nlRender() {
-    if (!els.nlCard || !nlLast) return;
+    if (!els.qaCard || !nlLast) return;
     const r = nlLast;
     const P_LABEL = { low: 'Low', med: 'Normal', high: 'High' };
     const item = (label, val, guessed) =>
@@ -3316,7 +3313,7 @@
       '<span class="nl-via">local parser · nothing saved yet</span></div>';
     html += item('Task', esc(truncate(r.title, 120)));
     if (r.description) html += item('Description', esc(truncate(r.description, 160)));
-    html += item('Date', r.dueDate ? esc(ZTNL.fmtDay(r.dueDate) || r.dueDate) + ' <small class="muted">(' + esc(r.dueDate) + ')</small>' : '<span class="muted">none — no due date</span>');
+    html += item('Date', r.dueDate ? esc((ZTNL.fmtDayFull ? ZTNL.fmtDayFull(r.dueDate) : (ZTNL.fmtDay(r.dueDate) || r.dueDate))) + ' <small class="muted">(' + esc(r.dueDate) + ')</small>' : '<span class="muted">none — no due date</span>');
     html += item('Time', r.dueTime ? esc(ZTNL.fmtTime(r.dueTime)) + ' <small class="muted">(' + esc(r.dueTime) + ', your timezone)</small>' : '<span class="muted">any time</span>');
     html += item('Priority', P_LABEL[r.priority] || 'Normal');
     if (r.projectName) html += item('Project', esc(r.projectName));
@@ -3332,9 +3329,9 @@
       '<button type="button" class="btn btn-ghost" data-nl="edit">Edit</button>' +
       '<span class="nl-gap"></span><span class="nl-hint">or press Enter — I will never create without you</span>' +
       '<button type="button" class="btn btn-sm btn-ghost" data-nl="close" aria-label="Dismiss">✕</button></div>';
-    els.nlCard.className = 'nl-card' + (r.confidence === 'low' ? ' low' : '');
-    els.nlCard.innerHTML = html;
-    els.nlCard.hidden = false;
+    els.qaCard.className = 'nl-card' + (r.confidence === 'low' ? ' low' : '');
+    els.qaCard.innerHTML = html;
+    els.qaCard.hidden = false;
   }
   function nlPrefillFrom(r) {
     return {
@@ -3965,28 +3962,27 @@
       e.preventDefault();
       saveTask();
     });
-    if (els.nlParseBtn) els.nlParseBtn.addEventListener('click', () => nlUnderstand());
-    if (els.nlInput) els.nlInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); nlUnderstand(); } // NEVER submit the form raw
+    if (els.qaBtn) els.qaBtn.addEventListener('click', () => nlUnderstand());
+    if (els.qaInput) els.qaInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); nlUnderstand(); } // Enter = understand, NEVER create
     });
-    if (els.nlCard) els.nlCard.addEventListener('click', (e) => {
+    if (els.qaCard) els.qaCard.addEventListener('click', (e) => {
       const b = e.target.closest('[data-nl]');
       if (!b || !nlLast) return;
       const a = b.dataset.nl;
       if (a === 'close') { nlHide(); return; }
       if (a === 'edit') {
-        const keep = els.nlInput.value;
         openComposer({ mode: 'new' }, nlPrefillFrom(nlLast));
-        els.nlInput.value = keep;
+        els.qaInput.value = '';
+        nlHide();
         els.fTitle.focus();
-        toast('Applied to the form below — fix anything, then press “Add task”.');
+        toast('Applied to the form — fix anything, then press “Add task”.');
         return;
       }
       if (a === 'create') {
-        const r = nlLast;
-        openComposer({ mode: 'new' }, nlPrefillFrom(r));
+        openComposer({ mode: 'new' }, nlPrefillFrom(nlLast));
+        els.qaInput.value = '';
         nlHide();
-        els.nlInput.value = '';
         // the ONE creation path: the composer’s own submit, with its validation
         els.taskForm.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
       }

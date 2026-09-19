@@ -419,6 +419,14 @@ therefore never be born from a bad parse: press ✕, close the composer, or
 ignore the card, and nothing was written (there is a byte-equality test pinning
 this).
 
+**Where it lives.** The `Create a task…` input is a **quick-add bar on the main
+screen, above the list** — always ready, no composer to open first (it steps
+aside in Calendar/Dashboard/Habits views, which own their screens). Enter (or
+✨ Understand) parses into the “I understood” card; **[Create task]** creates
+through the *existing* composer submit pipeline, **[Edit]** opens the ordinary
+add-form pre-filled. The card's Date line reads like the sentence it came from
+(`September 20 (Tomorrow)`), with the exact `YYYY-MM-DD` beside it.
+
 - **Grammar covered** — relative days (today/tonight/tomorrow/the day after
   tomorrow, `in N days/weeks`), weekday names (`on Friday`, `next Friday`),
   calendar dates (`March 3`, `3 March`, `2027-01-15`, `12/5` with a stated
@@ -451,8 +459,8 @@ this).
   local-zone midnight case, determinism, plus the whole UI gate: Enter shows
   the card, store byte-identical until [Create task], reminder records born
   with the task, Edit pre-fills the form (incl. the Mon/Wed/Fri chips in the
-  repeat panel) with zero writes, ✕ abandons cleanly, and the bar hides
-  itself in edit mode.
+  repeat panel) with zero writes, and ✕
+  abandons cleanly.
 
 ## Where your data is stored
 

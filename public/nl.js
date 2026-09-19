@@ -415,6 +415,19 @@
       return (diff > 1 && diff < 7 ? wd + ', ' : '') +
         d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() !== t0.getFullYear() ? 'numeric' : undefined });
     },
+    fmtDayFull: function (ymdStr, now) {
+      if (!ymdStr) return null;
+      var d = new Date(+ymdStr.slice(0, 4), +ymdStr.slice(5, 7) - 1, +ymdStr.slice(8, 10));
+      var t0 = day0(now || new Date());
+      var diff = Math.round((day0(d) - t0) / 86400000);
+      var rel = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff === -1 ? 'Yesterday' : null;
+      var opts = { month: 'long', day: 'numeric' };
+      if (d.getFullYear() !== t0.getFullYear()) opts.year = 'numeric';
+      var base = d.toLocaleDateString(undefined, opts);
+      if (rel) base += ' (' + rel + ')';
+      else if (diff > 1 && diff < 7) base = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()] + ', ' + base;
+      return base;
+    },
     fmtTime: function (t) {
       if (!t) return null;
       var h = +t.slice(0, 2), m = t.slice(3, 5);
