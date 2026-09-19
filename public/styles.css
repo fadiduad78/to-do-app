@@ -681,6 +681,15 @@ body {
 .cal-chip.is-done { opacity: .6; text-decoration: line-through; }
 .cal-chip.is-over { border-color: var(--danger); }
 .cal-chip.dragging { opacity: .4; }
+/* 🔔 N — reminder indicator on calendar chips (click opens the reminder config) */
+.cal-chip .cal-rem {
+  flex: none; font-size: 10px; font-weight: 700; line-height: 1.5;
+  padding: 0 5px; border-radius: 999px; cursor: pointer;
+  background: rgba(230, 162, 60, .16); border: 1px solid rgba(230, 162, 60, .45);
+  color: inherit;
+}
+.cal-chip .cal-rem:hover { background: rgba(230, 162, 60, .32); }
+.cal-chip .cal-rem:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cal-more { background: none; border: 0; color: var(--accent); font-size: 10.5px; cursor: pointer; padding: 0; text-align: left; }
 .cal-scroll { max-height: 62vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
 .cal-row { display: grid; grid-template-columns: 64px repeat(7, 1fr); gap: 4px; padding: 2px 6px; border-top: 1px solid var(--border); align-items: stretch; }
@@ -828,4 +837,6 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
   .task { padding: 10px 12px; }
   .cal-cell { min-height: 54px; }
   .empty-state { padding: 36px 12px; }
+  /* reminder badge stays tappable at chip scale */
+  .cal-chip .cal-rem { padding: 2px 7px; font-size: 10.5px; }
 }

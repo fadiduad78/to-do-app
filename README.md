@@ -31,6 +31,8 @@ if the server is unreachable, every original guarantee still holds.
 - Subtasks (checklists) per task, projects with progress, and a **📅 Calendar**
   (Month / Week / Day) — all *views over the same task records*: rescheduling
   by drag-and-drop updates the task's own `dueDate`/`dueTime`, never a copy.
+  Calendar chips carry a live **🔔 N** indicator (pending reminder count, next
+  fire in the tooltip); clicking it opens the task's reminder configuration.
 - **Reminders** per task (any number): at time of task, 5/10/15/30 min, 1/2 h,
   1/2 days before, or a custom date+time — persisted as records (not
   `setTimeout`), so they catch up after a refresh or closed tab, never fire
@@ -66,6 +68,31 @@ if the server is unreachable, every original guarantee still holds.
   sizes, touch targets across 8 app states each).
 - Dark mode (auto/light/dark), responsive layout, live "Saving… / All changes
   saved" indicator.
+
+## Unified scheduling (task ⇄ calendar ⇄ reminders ⇄ notifications)
+
+One contract ties the four layers together — **the task is the single source of
+truth**. The calendar *displays* the task, the reminder engine *derives* its
+schedules from the task, and the notification system *delivers* what the engine
+produced. No layer stores its own copy of a date.
+
+| Event on a task | Calendar | Reminder engine |
+| --- | --- | --- |
+| Due changed | chip moves to the new day | relative reminders (d1/h1/…) recalculate against the new due; an absolute `custom` reminder intentionally does not move; no stale future slot survives because triggers are derived, not copied |
+| Trashed (soft delete) | its day empties | pending schedules are **cancelled immediately** in the same commit — a task in the trash can never surface a notification |
+| Restored / undo | reappears | *valid future* reminders re-arm in place — same record ids, zero duplicates; ones that went stale while trashed stay skipped |
+| Completed | shown struck-through | future reminders are skipped (no nagging for finished work); delivered ones remain in history (record + fire ledger) |
+| Snoozed (from any alert) | untouched | the same record re-arms at the chosen time and the task's due date is **never** modified |
+| Deleted forever | fully removed | the task's reminder records are purged in the same commit — nothing survives to fire |
+
+Duplicate-proofing: the composer edits the existing pending records in place
+(by id, so re-saving never forks copies), the engine keeps at most one
+auto-managed overdue record per task, and storage dedupes by id on import and
+recovery. The whole contract is pinned by **§17 of `server/test-ui.mjs`**,
+which replays the "Submit assignment" scenario end-to-end (create with 3
+reminders → due change → trash → restore → fire → snooze → complete →
+purge) asserting record ids, statuses, derived trigger instants and the
+rendered calendar DOM at every step.
 
 ## Where your data is stored
 

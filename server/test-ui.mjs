@@ -1117,5 +1117,152 @@ await sleep(300);
   }
 }
 
+/* ========= 17. Unified scheduling: task ⇄ calendar ⇄ engine ⇄ notify ========= */
+{
+  // The integration contract: the TASK is the single source of truth; the
+  // calendar displays it; the engine schedules against it; delivery rides on
+  // top. Due changes recalculate, trash cancels, restore re-arms, completion
+  // skips the future while keeping history, snooze never touches the due —
+  // and no path may ever fork a duplicate reminder record.
+  if ($('#calBtn').classList.contains('on')) { $('#calBtn').click(); await sleep(160); }
+  window.Notification.permission = 'default'; // in-app card path — no OS grant needed
+  const ck = async (id, on) => { const e = $(id); if (e.checked !== !!on) { e.checked = !!on; e.dispatchEvent(new window.Event('change', { bubbles: true })); } await sleep(90); };
+  await ck('#nMaster', true); await ck('#nReminders', true);
+  await ck('#nOverdue', false); // engine-managed 'overdue' records would join the count — keep the ledger clean
+  await sleep(140); // let the reconcile that strips them finish
+  const dOff = (n) => ymdS(new Date(Date.now() + n * 864e5));
+  const D3 = dOff(3), D4 = dOff(4);
+  const ymdBits = (ds) => [+ds.slice(0, 4), +ds.slice(5, 7), +ds.slice(8, 10)];
+  const dueAt = async (d, tm) => { $('#f-due').value = d; $('#f-due').dispatchEvent(new window.Event('input', { bubbles: true })); $('#f-time').value = tm; $('#f-time').dispatchEvent(new window.Event('input', { bubbles: true })); await sleep(40); };
+  const rowOf = (title) => $$('#taskList .task').find((x) => x.textContent.includes(title));
+  const save = async () => { $('#saveTaskBtn').click(); await sleep(380); };
+  const remsById = (id) => remMirror().reminders.filter((r) => r.taskId === id);
+  const idsOf = (title) => remsFor(title).map((r) => r.id).sort().join('|');
+
+  /* ---- 1. the spec scenario: 'Submit assignment', due D3 23:59, 3 reminders ---- */
+  $('#newTaskBtn').click(); await sleep(90);
+  $('#f-title').value = 'Submit assignment';
+  await dueAt(D3, '23:59');
+  $('#addRemBtn').click(); await sleep(60); await setRowType(0, 'd1');
+  $('#addRemBtn').click(); await sleep(60); await setRowType(1, 'h1');
+  $('#addRemBtn').click(); await sleep(60); await setRowType(2, 'custom'); await setCustom(2, D3, '22:00');
+  await save();
+  const assignId = tskOf('Submit assignment').id;
+  {
+    const rs = remsFor('Submit assignment');
+    const by = Object.fromEntries(rs.map((r) => [r.reminderType, r]));
+    const [y, mo, d] = ymdBits(D3);
+    ok(rs.length === 3 && rs.every((r) => r.status === 'pending' && r.enabled), 'create: exactly 3 derived reminder records, all pending + enabled');
+    ok(by.d1 && by.d1.triggerAt === locEpoch(y, mo, d - 1, 23, 59), 'd1 = 1 day before the due instant (spec: 24th 11:59 PM)');
+    ok(by.h1 && by.h1.triggerAt === locEpoch(y, mo, d, 22, 59), 'h1 = 1 hour before an 11:59 PM due (spec: 25th, on the day)');
+    ok(by.custom && by.custom.triggerAt === locEpoch(y, mo, d, 22, 0), 'custom fires at the picked wall-clock (spec: 25th 10:00 PM)');
+  }
+
+  /* ---- 2+3. calendar indicator 🔔 N, click → reminder configuration ---- */
+  $('#calBtn').click(); await sleep(180);
+  const mBtn = doc.querySelector('#calBar [data-cview="month"]');
+  if (mBtn && !mBtn.classList.contains('on')) { mBtn.click(); await sleep(160); }
+  // earlier sections persist calendar filters into settings — clear them
+  for (const sel of $$('#calBar select')) if (sel.value !== '') { sel.value = ''; sel.dispatchEvent(new window.Event('change', { bubbles: true })); }
+  await sleep(160);
+  const badge = () => doc.querySelector('#calHost [data-cdate="' + D3 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem');
+    ok(!!badge() && /🔔\s*3/.test(badge().textContent), 'calendar chip carries a live 🔔 3 reminder indicator');
+  ok(/next:/.test(badge().getAttribute('title') || ''), 'the indicator names the next scheduled fire in its tooltip');
+  badge().click(); await sleep(160);
+  ok(!$('#composer').hidden && $('#composerTitle').textContent === 'Edit task', 'clicking the indicator opens the task editor');
+  ok(mrow().length === 3, '…with all 3 reminder rows editable (the reminder configuration)');
+  ok(doc.activeElement && doc.activeElement.id === 'addRemBtn', 'focus lands inside the Reminders block, not at the form top');
+  $('#cancelTaskBtn').click(); await sleep(140);
+
+  /* ---- 4. due-date change: recalc relative, keep absolute, no duplicates ---- */
+  const before = idsOf('Submit assignment');
+  doc.querySelector('#calHost [data-cdate="' + D3 + '"] .cal-chip[data-tid="' + assignId + '"]').click(); await sleep(160);
+  await dueAt(D4, '23:59');
+  await save(); await sleep(200);
+  {
+    const rs = remsFor('Submit assignment');
+    const by = Object.fromEntries(rs.map((r) => [r.reminderType, r]));
+    const [y4, mo4, d4] = ymdBits(D4);
+    const [y3, mo3, d3] = ymdBits(D3);
+    ok(rs.length === 3 && idsOf('Submit assignment') === before, 'due change re-uses the SAME records — zero duplicates');
+    ok(by.d1.triggerAt === locEpoch(y3, mo3, d3, 23, 59), 'd1 recalculated against the new due (now D4 → D3 23:59)');
+    ok(by.h1.triggerAt === locEpoch(y4, mo4, d4, 22, 59), 'h1 recalculated against the new due');
+    ok(by.custom.triggerAt === locEpoch(y3, mo3, d3, 22, 0), 'absolute custom reminder untouched by a due change (it was never "obsolete")');
+    ok(!doc.querySelector('#calHost [data-cdate="' + D3 + '"] .cal-chip[data-tid="' + assignId + '"]')
+      && !!doc.querySelector('#calHost [data-cdate="' + D4 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem'),
+      'calendar moved the chip to the new day — the 🔔 indicator rides along');
+  }
+
+  /* ---- 5. trash: cancel NOW, leave the calendar, never notify ---- */
+  $('#calBtn').click(); await sleep(160); // back to the list for the row action
+  rowOf('Submit assignment').querySelector('[data-act="delete"]').click(); await sleep(280);
+  ok(remsById(assignId).length === 3 && remsById(assignId).every((r) => r.status === 'skipped'),
+    'deleting cancels every pending reminder in the same action (nothing left armed to fire)');
+  $('#calBtn').click(); await sleep(180);
+  ok(!doc.querySelector('#calHost [data-tid="' + assignId + '"]'), 'trashed task removed from the calendar');
+
+  /* ---- 6. restore: calendar presence + valid future reminders come back ---- */
+  // (calendar is still open from step 5 — renderAll repainted it under the undo)
+  $('#undoBtn').click(); await sleep(340);
+  {
+    const rs = remsById(assignId);
+    ok(rs.length === 3 && remsFor('Submit assignment').map((r) => r.id).sort().join('|') === before, 'restore re-uses the same records — still no duplicates');
+    ok(rs.every((r) => r.status === 'pending'), 'valid future reminders re-armed on restore');
+    ok(!!doc.querySelector('#calHost [data-cdate="' + D4 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem'), 'calendar presence restored with the indicator');
+  }
+
+  /* ---- 7. fire → snooze (due untouched) → complete (history kept) ---- */
+  $('#calBtn').click(); await sleep(160);
+  const past = new Date(Date.now() - 3600e3);
+  const pastD = ymdS(past);
+  const pastT = String(past.getHours()).padStart(2, '0') + ':' + String(past.getMinutes()).padStart(2, '0');
+  $('#newTaskBtn').click(); await sleep(90);
+  $('#f-title').value = 'Assignment note';
+  await dueAt(D4, '23:59');
+  $('#addRemBtn').click(); await sleep(60); await setRowType(0, 'custom'); await setCustom(0, pastD, pastT);
+  await save(); await sleep(320);
+  {
+    const rs = remsFor('Assignment note');
+    ok(rs.length === 1 && rs[0].status === 'triggered' && rs[0].delivered === true, 'a reminder already past fires immediately on save (the record IS the schedule)');
+    const origTrig = rs[0].triggerAt;
+    const noteId = rs[0].id;
+    let card = null; // the notify card can land a beat after the fire — poll, don't sleep
+    for (let i = 0; i < 15 && !card; i++) {
+      card = [...doc.querySelectorAll('.toast-notify')].find((x) => /Assignment note/.test(x.textContent));
+      if (!card) await sleep(100);
+    }
+    ok(!!card, 'the fired alert surfaces in-app without any OS permission');
+    card.querySelector('[data-snooze="30"]').click(); await sleep(600);
+    const r2 = remsFor('Assignment note')[0];
+    ok(remsFor('Assignment note').length === 1 && r2.id === noteId, 'snooze updates the SAME record — no duplicate created');
+    ok(r2.status === 'pending' && r2.triggerAt >= Date.now() + 28 * 60e3 && r2.triggerAt <= Date.now() + 32 * 60e3, '…and re-arms it ~30 minutes ahead');
+    ok(tskOf('Assignment note').dueDate === D4 && tskOf('Assignment note').dueTime === '23:59', 'snooze left the task due date/time untouched');
+    const led = JSON.parse(window.localStorage.getItem('zt_rem_fired_v1') || '{}');
+    ok(!!led[noteId + '@' + origTrig], 'the delivered instance stays deduped in the ledger (a refresh can never re-ring it)');
+    rowOf('Assignment note').querySelector('.check').click(); await sleep(280);
+    const r3 = remsFor('Assignment note')[0];
+    ok(r3.status === 'skipped', 'completing cancels the snoozed future reminder (the new instance is skipped; the delivered one stays on the ledger + record history)');
+    ok(remsFor('Assignment note').length === 1, 'lifecycle (fire/snooze/complete) never forks copies — still 1 record');
+  }
+
+  /* ---- 8. idempotent re-save + forever-delete purges every trace ---- */
+  rowOf('Submit assignment').querySelector('[data-act="edit"]').click(); await sleep(160);
+  await save();
+  ok(remsFor('Submit assignment').length === 3 && idsOf('Submit assignment') === before, 're-saving without touching reminders neither duplicates nor drops records');
+  const noteId2 = remsFor('Assignment note')[0].taskId;
+  rowOf('Assignment note').querySelector('[data-act="delete"]').click(); await sleep(240);
+  const trashRow = () => $$('#taskList .task').find((x) => x.textContent.includes('Assignment note'));
+  // switch to the Trash filter to reach "Delete forever"
+  const fBtns = $$('.filter-btn').filter((b) => /trash/i.test(b.textContent));
+  if (fBtns.length) { fBtns[0].click(); await sleep(200); }
+  ok(!!trashRow(), 'the note sits in the Trash filter before purging');
+  trashRow().querySelector('[data-act="destroy"]').click(); await sleep(160);
+  const okBtn = doc.querySelector('#modalHost .btn-danger');
+  okBtn.click(); await sleep(280);
+  ok(!remMirror().tasks.some((x) => x.title === 'Assignment note') && !remMirror().trash.some((x) => x.title === 'Assignment note'), 'delete-forever leaves zero task rows anywhere');
+  ok(!remMirror().reminders.some((r) => r.taskId === noteId2), '…and zero reminder records — nothing left that could ever fire');
+  if (fBtns.length) { const all = $$('.filter-btn').find((b) => /^all$/i.test(b.textContent.trim())); if (all) { all.click(); await sleep(140); } }
+}
+
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
 process.exit(failed ? 1 : 0);

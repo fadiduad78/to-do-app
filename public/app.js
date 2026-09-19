@@ -388,17 +388,9 @@
     clearTimeout(undoTimer);
     undoTask = null;
     els.toastHost.innerHTML = '';
-    const i = S.trash.findIndex((x) => x.id === t.id);
-    if (i !== -1) S.trash.splice(i, 1);
-    delete t.trashedAt;
-    t.updatedAt = Date.now(); // the move must beat the soft-delete tombstone during cloud sync
-    S.tasks.push(t);
-    const ok = await store.commit([
-      { store: STORES.trash, op: 'delete', key: t.id },
-      { store: STORES.tasks, op: 'put', value: t },
-    ]);
-    renderAll();
-    if (ok) toast('Restored “' + truncate(t.title, 40) + '”.');
+    // One restore path for undo AND the trash-row button: it re-arms the
+    // future reminders this side of the cancel-on-delete (unified scheduling).
+    await restoreTask(t.id);
   }
 
   function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
@@ -740,7 +732,13 @@
     renderRemRows();
     els.fTitle.classList.remove('invalid');
     els.composer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    setTimeout(() => els.fTitle.focus(), 60);
+    if (opts.focusReminders) {
+      // calendar 🔔 badge entry point: land the user on the reminder config
+      const blk = els.remRows.closest('.rem-block') || els.remRows;
+      blk.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      els.addRemBtn.focus({ preventScroll: true });
+    }
+    setTimeout(() => { if (!opts.focusReminders) els.fTitle.focus(); }, 60);
     refreshDraftResumeUI();
   }
 
@@ -961,12 +959,24 @@
     t.trashedAt = Date.now();
     t.updatedAt = t.trashedAt; // keep LWW ordering sane for the store move (sync)
     S.trash.push(t);
-    const ok = await store.commit([
+    const ops = [
       { store: STORES.trash, op: 'put', value: t },
       { store: STORES.tasks, op: 'delete', key: id },
-    ]);
+    ];
+    // Unified scheduling: trashing CANCELS the task's pending schedules right
+    // now (same atomic commit) — not lazily at fire time. A task that isn't
+    // in any schedule can never surface a notification. Undo/Restore revives
+    // the future ones through remReviveSkipped.
+    for (const r of S.reminders) {
+      if (r.taskId === id && r.status === 'pending') {
+        r.status = 'skipped'; r.pinned = false; r.updatedAt = t.trashedAt;
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+      }
+    }
+    const ok = await store.commit(ops);
     if (S.ui.editingId === id) closeComposer();
     renderAll();
+    remReconcile(); // re-arm the live timer without the cancelled records
     if (ok) showUndoToast(t); // 8-second undo window
   }
 
@@ -984,7 +994,7 @@
     remReviveSkipped(id, ops, Date.now()); // reminders that were skipped while trashed come back
     const ok = await store.commit(ops);
     renderAll();
-    if (ok) toast('Task restored.');
+    if (ok) toast('Restored “' + truncate(t.title, 40) + '”.');
     remReconcile();
   }
 
@@ -1001,7 +1011,8 @@
     // Subtasks die WITH the task forever — deletes + tombstones in the same
     // commit, so every device purges them too. (The soft delete didn't: they
     // sat attached for a possible restore.)
-    const doomed = new Set(subtreeIds(id));
+    const children = subtreeIds(id); // descendants ONLY (historical contract)
+    const doomed = new Set([id].concat(children)); // reminders key off the ROOT id
     S.trash = S.trash.filter((x) => x.id !== id);
     S.subtasks = S.subtasks.filter((x) => !doomed.has(x.id));
     // Reminders die with the task forever — deletes (→ tombstones) ride the
@@ -1009,11 +1020,11 @@
     const doomedRem = S.reminders.filter((r) => doomed.has(r.taskId)).map((r) => r.id);
     S.reminders = S.reminders.filter((r) => !doomed.has(r.taskId));
     await store.commit([{ store: STORES.trash, op: 'delete', key: id }]
-      .concat([...doomed].map((sid) => ({ store: STORES.subtasks, op: 'delete', key: sid })))
+      .concat(children.map((sid) => ({ store: STORES.subtasks, op: 'delete', key: sid })))
       .concat(doomedRem.map((rid) => ({ store: STORES.reminders, op: 'delete', key: rid }))));
     remArm();
     renderAll();
-    toast('Deleted forever' + (doomed.size ? ' — ' + doomed.size + ' subtask(s) with it.' : '.'));
+    toast('Deleted forever' + (children.length ? ' — ' + children.length + ' subtask(s) with it.' : '.'));
   }
 
   async function emptyTrash() {
@@ -1679,10 +1690,17 @@
     const done = t.status === 'completed';
     const due = formatDue(t.dueDate, done);
     const overCls = due && due.cls === 'overdue' ? ' is-over' : '';
+    // 🔔 N — live reminder count straight from the engine's records (pending +
+    // enabled only). Clicking it opens that task's reminder configuration.
+    const nRem = remPendingFor(t.id);
+    const bell = nRem
+      ? '<span class="cal-rem" data-remtid="' + esc(t.id) + '" role="button" tabindex="-1" title="🔔 ' + nRem +
+        ' pending reminder(s) — next: ' + esc(remNextLabel(t.id)) + ' — click to configure">🔔 ' + nRem + '</span>'
+      : '';
     return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + '" data-tid="' + esc(t.id) + '" draggable="true"' +
       ' title="' + esc((t.dueTime ? t.dueTime + ' — ' : '') + t.title) + '">' +
       '<i class="cal-dot" aria-hidden="true"></i>' + (t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') +
-      (remPendingFor(t.id) ? '🔔' : '') + (done ? '✓ ' : '') + esc(truncate(t.title, 22)) + '</span>';
+      bell + (done ? '✓ ' : '') + esc(truncate(t.title, 22)) + '</span>';
   }
   function calMonthCell(ds, dim) {
     const st = calStats(ds);
@@ -1854,6 +1872,8 @@
     });
   }
   function onCalHostClick(e) {
+    const bell = e.target.closest('[data-remtid]');
+    if (bell) { openComposer({ mode: 'edit', taskId: bell.dataset.remtid, focusReminders: true }); return; }
     const chip = e.target.closest('.cal-chip');
     if (chip) { if (chip.dataset.tid) openComposer({ mode: 'edit', taskId: chip.dataset.tid }); return; }
     const more = e.target.closest('[data-cmore]');
