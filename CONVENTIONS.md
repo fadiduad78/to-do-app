@@ -104,7 +104,50 @@ Tombstones are **store-scoped**: `tasks:x` never kills the `trash:x` copy
   `--accent`, `--danger`, `--radius`…); `--pc` carries a per-project colour.
 * All UI strings are injected through `esc()` (there is no framework).
 
-## 5. Compat floor (tested, not aspirational)
+## 5. Notification delivery (notify.js + sw.js)
+
+Delivery belongs to **`public/notify.js`** (+ `public/sw.js`) — never inline it
+in `app.js` or the composer UI. The engine (`app.js`) owns reminder RECORDS,
+trigger computation, the fire pass and the snooze re-arm; notify owns channels,
+settings UI, summaries, and the dedup ledger. Hooks meet at exactly one call
+each way: `ZTNotify.attach({...})` (app→notify) and `ZTNotify.reminderAlert`
+(notify←engine fire). Rules that keep users un-spammed:
+
+- **Permission is requested only from the explicit “Enable Notifications”
+  control** (`status()==='default'` guard inside it). No load-time, no
+  save-task, no sneaky prompts. `denied` ⇒ the blocked sentence, and the
+  Enable button itself is not rendered — asking again is impossible by
+  construction.
+- **Every send is deduped per delivery instance.** Key: `rem:<id>@<triggerAt>`
+  (auto-overdue: `od:` prefix), day-keyed for summaries (`sum:d:`, `sum:w:`,
+  `hab:<taskId>:<day>`, `pd:<projId>:<day>`). The ledger (`localStorage
+  zt_notify_v1`, capped) is written **before** the send; the engine's own
+  `zt_rem_fired_v1` mirrors the same instance key. Snoozing changes
+  `triggerAt` ⇒ new key ⇒ legitimate re-fire; everything else stays silent.
+- **Persistent on mobile/PWA**: when a service worker is registered, sends go
+  through `registration.showNotification` with `requireInteraction` +
+  Complete/Snooze actions; clicks route back via
+  `{type:'zt-notif-action'}` postMessage (or a deep-link `#t=<id>` opens the
+  task if no window is open). SW registration is skipped unless
+  `isSecureContext` — `file://` silently uses in-app cards.
+- **Fallback is never silent**: if the OS channel is unavailable or fails, the
+  same alert renders as an in-app card with the full button set; the record is
+  stamped `notify:{key,at,via:'inapp'}` so a later capable boot won't re-ring.
+- **Overdue is an engine-managed `reminderType:'overdue'` record** (one per
+  task, `forDue` tracks the due date it fired for) — it persists/syncs/dedupes
+  like user reminders. Mode `once` (default) never re-alerts for the same due
+  date; `repeat` re-arms the SAME record `odHours` later. The pending-recompute
+  loop must NEVER touch these (or any `pinned` = snoozed record) or the
+  cadence degenerates into a per-tick loop.
+- User settings live in **`settings.notify`** (free-form object, sanitized by
+  `ZTNotify.sanitize` at boot): no schema bump, rides meta + sync + backups
+  for free. Server-side, `overdue` must stay in BOTH `REMINDER_TYPES` lists
+  (`storage.js`, `server/server.js`) or records silently degrade to `custom`.
+- `pinned` (set by snooze) protects a user-adjusted `triggerAt` from recompute
+  until it fires; every code path that RE-derives `triggerAt` (task edit,
+  recurrence re-arm) clears it.
+
+## 6. Compat floor (tested, not aspirational)
 
 A backup or IDB copy from **schemaVersion 0 or 1** must load, migrate, and
 sync without touching user data. Existing task IDs, titles, tags, due dates
@@ -113,7 +156,7 @@ and trashed items are asserted to survive in `test-storage.mjs`. Old servers
 crashing (server.js normalizes leniently) — a mixed fleet can't corrupt data,
 it just doesn't sync projects until both sides upgrade.
 
-## 6. Process
+## 7. Process
 
 * `node --check` every touched file, then run **all four suites**
   (`for f in test test-storage test-supabase test-client; do node server/$f.mjs; done`).

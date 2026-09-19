@@ -159,14 +159,16 @@ try {
   // v5: reminders are records inside the same state doc — no second store.
   aState = await getState(alice);
   const srem = { id: 'sr1', taskId: aState.tasks[0].id, triggerAt: Date.now() + 3600e3, reminderType: 'onTime', status: 'pending', enabled: true, delivered: false, dismissed: false, createdAt: Date.now(), updatedAt: Date.now() };
-  const rpush = await (await fetch(BASE + '/api/sync', { method: 'POST', headers: bearer(alice), body: JSON.stringify({ clientId: 'test', baseRev: aState.rev, mode: 'merge', state: { savedAt: Date.now(), settings: {}, tasks: [], trash: [], reminders: [srem] }, tombstones: {} }) })).json();
-  ok(rpush.reminders && rpush.reminders.length === 1, 'reminder synced into alice\'s state doc (no new table)');
+  const sod = { id: 'sod1', taskId: aState.tasks[0].id, triggerAt: Date.now() - 60000, reminderType: 'overdue', status: 'pending', enabled: true, delivered: false, dismissed: false, forDue: '2026-09-18', pinned: false, createdAt: Date.now(), updatedAt: Date.now() };
+  const rpush = await (await fetch(BASE + '/api/sync', { method: 'POST', headers: bearer(alice), body: JSON.stringify({ clientId: 'test', baseRev: aState.rev, mode: 'merge', state: { savedAt: Date.now(), settings: {}, tasks: [], trash: [], reminders: [srem, sod] }, tombstones: {} }) })).json();
+  ok(rpush.reminders && rpush.reminders.length === 2, 'reminders synced into alice\'s state doc (no new table)');
+  ok((rpush.reminders || []).some((x) => x.id === 'sod1' && x.reminderType === 'overdue'), 'server keeps the “overdue” reminder type (not degraded to custom)');
   ok(await poll(() => db.byuser.alice && (db.byuser.alice.reminders || []).some((x) => x.id === 'sr1'), 45000), 'reminder persisted to the Postgres row');
   await stopApp(app.child);
   rmSync(path.join(dir, 'state.json'), { force: true });
   app = await startApp(dir); await app.ready;
   const afterR = await getState(alice);
-  ok(afterR.reminders.length === 1 && afterR.reminders[0].id === 'sr1' && afterR.tasks.length === aState.tasks.length,
+  ok(afterR.reminders.length === 2 && afterR.reminders.some((x) => x.id === 'sr1') && afterR.tasks.length === aState.tasks.length,
     'restart with empty disk: reminders restored from Postgres still attached to their task');
 
   r = await push(alice, 'alice secret', 'a1', (await getState(alice)).rev);

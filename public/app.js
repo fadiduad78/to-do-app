@@ -115,6 +115,10 @@
     S.settings.calendarFilters = (S.settings.calendarFilters && typeof S.settings.calendarFilters === 'object') ? S.settings.calendarFilters : {};
     S.ui.cal.view = S.settings.calendarView;
     S.ui.cal.anchor = ymd(new Date());
+    // Notification settings live in settings.notify (persisted + synced with
+    // everything else). The module sanitizes; we never request permission at
+    // load — the explicit control in Settings → Notifications does that.
+    S.settings.notify = window.ZTNotify ? ZTNotify.sanitize(S.settings.notify) : {};
     S.reminders = S.reminders || []; // v5 — the engine guarantees the array
 
     store.startSync();
@@ -131,10 +135,42 @@
       }
     }
 
+    if (window.ZTNotify) {
+      try {
+        ZTNotify.attach({
+          getState: () => S,
+          commitOps: (ops) => store.commit(ops),
+          commitSettings: () => commitSettings(),
+          onChange: () => renderAll(),
+          openTask: (id) => { if (byId(id)) openComposer({ mode: 'edit', taskId: id }); },
+          openProject: (id) => {
+            S.settings.filterProject = S.projects.some((p) => p.id === id && !p.deletedAt) ? id : null;
+            S.ui.projectView = S.settings.filterProject;
+            renderAll();
+          },
+          toast: (m) => toast(m),
+          esc: (s) => esc(s),
+          completeTask: (id) => { const t = byId(id); if (t && t.status !== 'completed') toggleTask(id); },
+          snoozeReminder: (id, opt) => remSnooze(id, opt),
+        });
+      } catch (e) { console.warn('[zerotodo] notify attach failed (alerts stay in-app):', e); }
+    }
+
     applyTheme();
     renderAll();
     // Recovery itself doesn't fire status callbacks, so settle the pill now.
     setPill('saved');
+    // Deep link from a notification tap when no window was open (#t=<task>)
+    try {
+      const mm = /^#(t|p)=([\w-]+)$/.exec(window.location.hash || '');
+      if (mm) {
+        if (mm[1] === 't' && byId(mm[2])) openComposer({ mode: 'edit', taskId: mm[2] });
+        else if (mm[1] === 'p' && S.projects.some((p) => p.id === mm[2] && !p.deletedAt)) {
+          S.settings.filterProject = mm[2]; S.ui.projectView = mm[2]; renderAll();
+        }
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    } catch (_) {}
 
     for (const n of rec.notices) {
       showBanner({ kind: n.kind, message: n.message, sticky: n.kind !== 'info', id: 'notice-' + noticesSeq++ });
@@ -637,6 +673,7 @@
     els.themeSelect.value = S.settings.theme || 'auto';
     els.reminderSelect.value = String(S.settings.exportReminderDays || 0);
     els.subtaskAuto.checked = !!S.settings.subtaskAutoComplete;
+    if (window.ZTNotify) ZTNotify.renderControls(); // the Notifications section owns itself
   }
 
   function renderFooter() {
@@ -691,7 +728,7 @@
     S.ui.remRows = prefill && Array.isArray(prefill.remRows)
       ? prefill.remRows.map((x) => ({ ...x }))
       : (editing
-        ? S.reminders.filter((r) => r.taskId === editing.id && (r.status === 'pending' || r.status === 'skipped'))
+        ? S.reminders.filter((r) => r.taskId === editing.id && (r.status === 'pending' || r.status === 'skipped') && r.reminderType !== 'overdue')
             .map((r) => ({ id: r.id, reminderType: r.reminderType, customDate: r.customDate || '', customTime: r.customTime || '', status: r.status }))
         : []);
     renderRemRows();
@@ -882,7 +919,7 @@
       for (const r of S.reminders) {
         if (r.taskId !== t.id || r.reminderType === 'custom') continue; // custom times are absolute, not per-cycle
         r.status = 'pending'; r.delivered = false; r.dismissed = false;
-        r.triggerAt = remComputeTrigger(r, t);
+        r.triggerAt = remComputeTrigger(r, t); r.pinned = false;
         if (r.triggerAt == null) {
           ops.push({ store: STORES.reminders, op: 'delete', key: r.id });
           S.reminders = S.reminders.filter((x) => x.id !== r.id);
@@ -1898,6 +1935,15 @@
   function dueEpochFor(t) { return t && t.dueDate ? localEpoch(t.dueDate, t.dueTime, '09:00') : null; }
   function remComputeTrigger(r, t) {
     if (r.reminderType === 'custom') return localEpoch(r.customDate, r.customTime, '09:00');
+    if (r.reminderType === 'overdue') {
+      // "passes its due time": timed task → its instant; all-day → 23:59.
+      const base = t && t.dueDate
+        ? (t.dueTime ? dueEpochFor(t) : localEpoch(t.dueDate, '23:59', '23:59'))
+        : null;
+      if (base == null) return null;
+      const grace = window.ZTNotify ? (ZTNotify.policy().odGraceMin || 0) : 0;
+      return base + grace * 60000;
+    }
     const base = dueEpochFor(t);
     return base == null ? null : base - (REM_OFFSET_MIN[r.reminderType] || 0) * 60000;
   }
@@ -1948,6 +1994,10 @@
         '<button type="button" class="btn btn-sm btn-ghost rem-rm" data-rfield="remove" aria-label="Remove reminder" title="Remove reminder">✕</button>' +
         '</div>';
     }).join('') || '<span class="rem-none">No reminder</span>';
+    if (rows.length && window.ZTNotify && ZTNotify.status() !== 'granted') {
+      els.remRows.insertAdjacentHTML('beforeend',
+        '<p class="notif-hint muted small">🔕 OS alerts are off — turn on “Enable notifications” in Settings → Notifications to get these as real notifications.</p>');
+    }
   }
   function remRowEdit(e) {
     const host = e.target.closest('.rem-row');
@@ -1966,7 +2016,7 @@
    *  values; removed pending rows are deleted (→ tombstone → other devices). */
   function remSyncTask(t, rows, ops) {
     const now = Date.now();
-    const editable = S.reminders.filter((r) => r.taskId === t.id && (r.status === 'pending' || r.status === 'skipped'));
+    const editable = S.reminders.filter((r) => r.taskId === t.id && (r.status === 'pending' || r.status === 'skipped') && r.reminderType !== 'overdue');
     const kept = new Set();
     for (const rw of (rows || [])) {
       if (rw.id) kept.add(rw.id);
@@ -2014,6 +2064,7 @@
     const ledger = remLedger();
     const ops = [];
     const alerts = [];
+    const odPol = window.ZTNotify ? ZTNotify.policy() : null;
     for (const r of dueList) {
       const t = remTaskOf(r.taskId);
       if (!t || t.status === 'completed' || (S.trash || []).some((x) => x.id === r.taskId)) {
@@ -2021,15 +2072,26 @@
         ops.push({ store: STORES.reminders, op: 'put', value: r });
         continue;
       }
-      if (ledger[r.id]) { // already notified (this tab or another) — just settle the record
-        r.status = 'triggered'; r.delivered = true; r.updatedAt = now;
+      // Dedup is per DELIVERY INSTANCE (a snooze or overdue re-arm changes
+      // triggerAt and naturally mints a new one) — never per-reminder.
+      const fkey = r.id + '@' + r.triggerAt;
+      if (ledger[fkey]) { // already notified (this tab or another) — just settle the record
+        r.status = 'triggered'; r.delivered = true; r.pinned = false; r.updatedAt = now;
         ops.push({ store: STORES.reminders, op: 'put', value: r });
         continue;
       }
-      r.status = 'triggered'; r.delivered = true; r.firedAt = now; r.updatedAt = now;
-      ops.push({ store: STORES.reminders, op: 'put', value: r });
+      r.status = 'triggered'; r.delivered = true; r.firedAt = now; r.pinned = false; r.updatedAt = now;
+      if (r.reminderType === 'overdue') r.forDue = t.dueDate; // spam guard: one alert per due date
       alerts.push({ r, t, lateMs: now - r.triggerAt });
-      remLedgerMark(r.id); // mark BEFORE notifying — a crash mid-notify must not refire
+      remLedgerMark(fkey); // mark BEFORE notifying — a crash mid-notify must not refire
+      // Overdue policy: 'repeat' re-arms instead of staying fired — bounded by
+      // odHours so it can never turn into spam.
+      if (r.reminderType === 'overdue' && odPol && odPol.odMode === 'repeat') {
+        r.status = 'pending'; r.delivered = false;
+        r.triggerAt = now + Math.max(1, odPol.odHours | 0) * 3600e3;
+        r.updatedAt = now;
+      }
+      ops.push({ store: STORES.reminders, op: 'put', value: r });
     }
     if (!ops.length) return false;
     await store.commit(ops);
@@ -2039,20 +2101,15 @@
   }
 
   function remNotify(r, t, lateMs) {
+    // Delivery, OS channels, actions and dedup all belong to notify.js —
+    // the task UI just hands over the fired alert.
+    if (window.ZTNotify && ZTNotify.reminderAlert) {
+      ZTNotify.reminderAlert(r, t, lateMs);
+      return;
+    }
     const missed = lateMs > 60000;
     const msg = (missed ? '⏰ Missed reminder — ' : '🔔 Reminder — ') + t.title +
       (missed ? ' (was due ' + remFmt(r.triggerAt) + ')' : '');
-    if (window.Notification && Notification.permission === 'granted') {
-      try {
-        const n = new Notification(t.title, { body: msg, tag: 'zt-rem-' + r.id });
-        if (n && n.onclick === null) { try { n.onclick = () => { window.focus && window.focus(); openComposer({ mode: 'edit', taskId: t.id }); }; } catch (_) {} }
-      } catch (_) {
-        r.status = 'failed'; r.updatedAt = Date.now(); // delivery error IS recorded…
-        store.commit([{ store: STORES.reminders, op: 'put', value: r }]);
-        // …but the in-app toast below still informs the user, so nothing is lost.
-      }
-    }
-    // In-app alert with Open / Dismiss — works even with no notification permission.
     const el = document.createElement('div');
     el.className = 'toast show toast-rem';
     el.innerHTML = '<span>' + esc(msg) + '</span>' +
@@ -2060,6 +2117,25 @@
       '<button type="button" class="btn btn-sm btn-ghost" data-remdismiss="' + esc(r.id) + '">Dismiss</button>';
     els.toastHost.appendChild(el);
     setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 10000);
+  }
+
+  /** Snooze an already-fired alert: same record, new instance (new dedup key
+   *  via triggerAt), status back to pending. 5/10/30/60 min or Tomorrow 09:00. */
+  async function remSnooze(id, opt) {
+    const r = S.reminders.find((x) => x.id === id);
+    if (!r) return;
+    const now = Date.now();
+    r.triggerAt = opt === 'tomorrow'
+      ? localEpoch(ymd(new Date(now + 864e5)), null, '09:00')
+      : now + Math.max(1, Number(opt) || 10) * 60000;
+    if (r.triggerAt <= now) r.triggerAt = now + 60000;
+    r.status = 'pending'; r.delivered = false; r.dismissed = false;
+    r.pinned = true; // hold this adjusted instant against recompute until it fires
+    r.updatedAt = now;
+    await store.commit([{ store: STORES.reminders, op: 'put', value: r }]);
+    renderAll();
+    remReconcile();
+    toast('Snoozed to ' + new Date(r.triggerAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + '.');
   }
 
   function remArm() {
@@ -2084,6 +2160,22 @@
     const ops = [];
     for (const r of S.reminders) {
       if (r.status !== 'pending' || !r.enabled) continue;
+      if (r.pinned) continue; // user-snoozed: the adjusted time stands until it fires (then clears)
+      if (r.reminderType === 'overdue') {
+        // Auto-managed: its trigger is owned by the fire/re-arm policy, NOT by
+        // recompute — overwriting it each tick would loop the alert. It only
+        // moves when the task's dueDate actually changes.
+        const tt = remTaskOf(r.taskId);
+        if (tt && r.forDue != null && r.forDue !== tt.dueDate) {
+          const nt2 = remComputeTrigger(r, tt);
+          if (nt2 != null) {
+            r.triggerAt = nt2; r.forDue = tt.dueDate; r.updatedAt = now;
+            r.status = 'pending'; r.delivered = false; r.dismissed = false;
+            ops.push({ store: STORES.reminders, op: 'put', value: r });
+          }
+        }
+        continue;
+      }
       const t = remTaskOf(r.taskId);
       let nt = null;
       if (t) nt = remComputeTrigger(r, t);
@@ -2097,9 +2189,40 @@
         ops.push({ store: STORES.reminders, op: 'put', value: r });
       }
     }
+    // Overdue alerts are ENGINE-MANAGED records (reminderType 'overdue') so
+    // they persist, sync and dedupe exactly like user reminders. One per
+    // task; re-armed automatically when the task's dueDate moves.
+    const wantsOd = window.ZTNotify && ZTNotify.wantsOverdue();
+    if (wantsOd) {
+      for (const t of S.tasks) {
+        if (t.status === 'completed' || !t.dueDate) continue;
+        if (S.reminders.some((r) => r.taskId === t.id && r.reminderType === 'overdue' && r.status === 'pending')) continue;
+        const trig = remComputeTrigger({ reminderType: 'overdue' }, t);
+        if (trig == null) continue;
+        const hist = S.reminders.find((r) => r.taskId === t.id && r.reminderType === 'overdue');
+        if (hist && (hist.status === 'skipped' || hist.status === 'dismissed' || (hist.forDue != null && hist.forDue !== t.dueDate))) {
+          hist.status = 'pending'; hist.delivered = false; hist.dismissed = false;
+          hist.triggerAt = trig; hist.forDue = t.dueDate; hist.updatedAt = now;
+          ops.push({ store: STORES.reminders, op: 'put', value: hist });
+        } else if (!hist) {
+          const r = { id: helpers.uuid(), taskId: t.id, triggerAt: trig, reminderType: 'overdue',
+            enabled: true, delivered: false, dismissed: false, status: 'pending',
+            customDate: null, customTime: null, forDue: t.dueDate, createdAt: now, updatedAt: now };
+          S.reminders.push(r);
+          ops.push({ store: STORES.reminders, op: 'put', value: r });
+        }
+      }
+    } else {
+      for (const r of S.reminders) {
+        if (r.reminderType !== 'overdue') continue;
+        ops.push({ store: STORES.reminders, op: 'delete', key: r.id });
+      }
+      if (ops.length) S.reminders = S.reminders.filter((x) => x.reminderType !== 'overdue');
+    }
     if (ops.length) await store.commit(ops);
     await remFireDue();
     remArm();
+    if (window.ZTNotify) { try { ZTNotify.tick(); } catch (_) {} } // summaries/habits/deadlines/pomodoro
   }
 
   function remReviveSkipped(taskId, ops, now) {

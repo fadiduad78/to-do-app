@@ -350,7 +350,7 @@
      record IS the schedule — the engine re-arms from it on every boot.
      Fields per spec: id, taskId, triggerAt, reminderType, enabled,
      delivered, dismissed, createdAt, updatedAt (+ status/custom/* extras). */
-  const REMINDER_TYPES = ['onTime', 'm5', 'm10', 'm15', 'm30', 'h1', 'h2', 'd1', 'd2', 'custom'];
+  const REMINDER_TYPES = ['onTime', 'm5', 'm10', 'm15', 'm30', 'h1', 'h2', 'd1', 'd2', 'custom', 'overdue'];
   const REMINDER_STATUSES = ['pending', 'triggered', 'dismissed', 'skipped', 'failed'];
 
   function coerceReminder(raw, into) {

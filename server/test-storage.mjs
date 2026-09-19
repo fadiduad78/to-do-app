@@ -159,6 +159,9 @@ ok(r1.out.dismissed === true, 'status dismissed implies dismissed flag');
 ok(!cr({ taskId: 't1', triggerAt: 5 }).ok && !cr({ id: 'x', triggerAt: 5 }).ok && !cr({ id: 'x', taskId: 't' }).ok,
   'reminders without id / taskId / triggerAt are refused (never a half-schedule)');
 ok(!cr({ id: 'x', taskId: 't', triggerAt: 'soon' }).ok, 'non-numeric triggerAt refused');
+r1 = cr({ id: 'r4', taskId: 't1', triggerAt: 9, reminderType: 'overdue', status: 'pending', forDue: '2026-09-18', pinned: true, notify: { key: 'od:r4@9', at: 10, via: 'sw' } });
+ok(r1.out && r1.out.reminderType === 'overdue' && r1.out.forDue === '2026-09-18' && r1.out.pinned === true && r1.out.notify.key === 'od:r4@9' && r1.out.notify.via === 'sw',
+  'auto “overdue” reminder type is first-class: policy + per-delivery extras survive the lenient round-trip');
 r1 = cr({ id: 'x', taskId: 't', triggerAt: 5, reminderType: 'custom', customDate: '2026-13-99', customTime: '25:00' });
 ok(r1.ok && r1.out.customDate === null && r1.out.customTime === null, 'invalid custom date/time strings normalize to null (triggerAt still rules)');
 

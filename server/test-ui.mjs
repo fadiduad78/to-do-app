@@ -14,7 +14,18 @@ import { fileURLToPath } from 'node:url';
 const PUB = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const html = readFileSync(PUB + '/index.html', 'utf8');
 const storageSrc = readFileSync(PUB + '/storage.js', 'utf8');
+const notifySrc = readFileSync(PUB + '/notify.js', 'utf8');
 const appSrc = readFileSync(PUB + '/app.js', 'utf8');
+
+/* OS notification surface, installed BEFORE boot so we can prove the app
+   never asks for permission on load and can inspect every delivery. */
+const nReqs = [];
+const nCalls = []; // Notification-constructor path (no SW)
+const swCalls = []; // service-worker persistent path
+const fakeReg = { showNotification(title, opts) { swCalls.push({ title, opts }); return Promise.resolve({ close() {} }); } };
+function FakeNotification(title, opts) { nCalls.push({ title, opts }); this.onclick = null; this.close = function () {}; }
+FakeNotification.permission = 'denied';
+FakeNotification.requestPermission = function (cb) { nReqs.push(1); const p = Promise.resolve(FakeNotification.permission); if (cb) cb(p); return p; };
 
 let failed = 0;
 const ok = (cond, name) => { console.log((cond ? '  ✓ ' : '  ✗ ') + name); if (!cond) failed++; };
@@ -28,7 +39,14 @@ if (!window.crypto || !window.crypto.randomUUID) {
   let n = 0;
   Object.defineProperty(window, 'crypto', { value: { randomUUID: () => 'uuid-' + (++n) + '-' + Date.now() } });
 }
+window.Notification = FakeNotification;
+Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
+Object.defineProperty(window.navigator, 'serviceWorker', {
+  configurable: true,
+  value: { register() { return new Promise(() => {}); }, ready: Promise.resolve(fakeReg), addEventListener() {} },
+});
 window.eval(storageSrc);   // the very file the browser loads
+window.eval(notifySrc);    // delivery module — loaded before app.js, as in index.html
 window.eval(appSrc);       // boots async init() → recover() → renderAll()
 await sleep(300);
 
@@ -488,9 +506,9 @@ await sleep(450);
 {
   const r = remsFor('Pay tax')[0];
   ok(r.status === 'triggered' && r.delivered === true, 'overdue reminder caught up at save-time: triggered + delivered flag set');
-  ok(!!doc.querySelector('.toast-rem') && /Missed reminder — Pay tax/.test(doc.querySelector('.toast-rem').textContent), 'overdue fires as a "Missed reminder" in-app alert (safe overdue handling)');
+  ok(!!doc.querySelector('.toast-rem') && /Task Reminder/.test(doc.querySelector('.toast-rem').textContent) && /Pay tax/.test(doc.querySelector('.toast-rem').textContent) && /missed/.test(doc.querySelector('.toast-rem').textContent), 'overdue fires as a missed-reminder in-app alert even with notifications off (safe fallback)');
   const ledger = JSON.parse(window.localStorage.getItem('zt_rem_fired_v1') || '{}');
-  ok(!!ledger[r.id], 'localStorage fire-ledger records the id (cross-tab duplicate guard)');
+  ok(!!ledger[r.id + '@' + r.triggerAt], 'fire-ledger records the delivery INSTANCE id (dedup survives snooze/re-arm; cross-tab guard)');
   const firedAt = r.firedAt;
   const taxRow = $$('#taskList .task').find((li) => li.textContent.includes('Pay tax'));
   taxRow.querySelector('[data-act="edit"]').click(); await sleep(120);
@@ -585,7 +603,10 @@ await sleep(300);
   const dom3 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
   dom3.window.HTMLElement.prototype.scrollIntoView = function () {};
   dom3.window.localStorage.setItem('todo_backup_v1', JSON.stringify(seed));
-  dom3.window.localStorage.setItem('zt_rem_fired_v1', JSON.stringify({ br2: Date.now() - 1000 })); // pretend br2 was already handled in another tab
+  // br2 is an onTime reminder whose task is due 2026-09-18 09:00 — the engine re-derives
+  // triggerAt from the DUE date (not the stale seed) before consulting the ledger, so the
+  // "already handled by another tab" entry must be keyed with that same instance id.
+  dom3.window.localStorage.setItem('zt_rem_fired_v1', JSON.stringify({ ['br2@' + locEpoch(2026, 9, 18, 9, 0)]: Date.now() - 1000 }));
   dom3.window.eval(storageSrc); dom3.window.eval(appSrc);
   await sleep(900);
   const m3 = JSON.parse(dom3.window.localStorage.getItem('todo_backup_v1'));
@@ -604,6 +625,201 @@ await sleep(300);
   const m4 = remMirror();
   ok(m4.schemaVersion === 5 && m4.reminders.length >= 6, 'mirror (the refresh source of truth) carries the reminder records at schema v5');
   ok(m4.reminders.every((r) => m4.tasks.some((t) => t.id === r.taskId)), 'no orphan reminders persist — cleanup on every path held');
+}
+
+/* ============ 14. Notification system (notify.js) ============ */
+{
+  const N = window.ZTNotify;
+  ok(!!N, 'notify module loads as its own file (window.ZTNotify) — delivery logic is separate from the task UI');
+  ok(nReqs.length === 0, 'ZERO permission requests during boot (never on load)');
+
+  const pad2 = (x) => String(x).padStart(2, '0');
+  const iso = (d) => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  const shift = (days) => { const d = new Date(); d.setDate(d.getDate() + days); return iso(d); };
+  const todayS = iso(new Date()); const yestS = shift(-1); const twoAgoS = shift(-2); const tmrS = shift(1);
+  const setCk = async (id, on) => { const e = $(id); if (e.checked !== !!on) { e.checked = !!on; e.dispatchEvent(new window.Event('change', { bubbles: true })); } await sleep(90); };
+  const setVal = async (id, v) => { const e = $(id); e.value = v; e.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(60); };
+  const nTitle = (s) => swCalls.filter((c) => c.title === s).length;
+  const taskOf = (title) => remMirror().tasks.find((x) => x.title === title);
+  const mkTask = async (title, extra) => {
+    $('#newTaskBtn').click(); await sleep(90);
+    $('#f-title').value = title;
+    if (extra) await extra();
+    $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await sleep(380);
+  };
+  const pastCustomRem = async () => { $('#addRemBtn').click(); await sleep(60); await setRowType(0, 'custom'); await setCustom(0, todayS, '00:00'); };
+  const resave = async (title) => {
+    const li = $$('#taskList .task').find((x) => x.textContent.includes(title));
+    li.querySelector('[data-act="edit"]').click(); await sleep(140);
+    $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); await sleep(380);
+  };
+  const cntShip = () => swCalls.filter((c) => c.title === 'Task Reminder' && /Ship report/.test(c.opts.body || '')).length;
+
+  /* -------- permission UX -------- */
+  $('#settingsBtn').click(); await sleep(120);
+  ok($('#notifBox') && $('#nMaster') && $('#nReminders') && $('#nOverdue') && $('#nDaily') && $('#nWeekly')
+    && $('#nHabits') && $('#nPomo') && $('#nProj'),
+    'Settings → Notifications: all 8 spec switches present (master/reminders/overdue/daily/weekly/habits/pomodoro/project)');
+  ok($('#nOdMode') && $('#nDailyAt') && $('#nWeeklyAt') && $('#nHabitAt') && $('#nPomoFocus') && $('#nProjDays'),
+    'each channel has its own timing/policy controls');
+  ok(/Notifications are blocked\. Enable them in browser settings\./.test($('#notifPermRow').textContent),
+    'denied permission → exactly the spec’s blocked sentence');
+  ok(!$('#notifPermRow').querySelector('[data-notif="enable"]'), 'denied → NO “ask again” affordance anywhere in the app');
+  FakeNotification.permission = 'default'; N.renderControls(); await sleep(30);
+  ok(/Enable Notifications/.test($('#notifPermRow').textContent) && nReqs.length === 0,
+    'default permission → shows an explicit “Enable Notifications” control (still zero requests)');
+  $('#notifPermRow').querySelector('[data-notif="enable"]').click(); await sleep(120);
+  ok(nReqs.length === 1, 'permission requested ONLY from the explicit control (exactly one request so far)');
+  FakeNotification.permission = 'granted'; N.renderControls(); await sleep(30);
+  ok(N.status() === 'granted' && N.isPersistent() === true, 'granted + service worker → persistent (mobile/PWA) channel active');
+
+  /* -------- master + channels (settings UI drives them, persisted) -------- */
+  await setCk('#nMaster', true); await setCk('#nReminders', true); await setCk('#nDaily', true);
+  await setVal('#nDailyAt', '00:01');
+  await setCk('#nWeekly', true); await setVal('#nWeeklyDay', ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()]); await setVal('#nWeeklyAt', '00:01');
+  await setCk('#nHabits', true); await setVal('#nHabitAt', '00:01'); await setCk('#nProj', true);
+
+  /* -------- task reminder through the OS persistent channel -------- */
+  await mkTask('Ship report', pastCustomRem);
+  const shipCall = swCalls.find((c) => c.title === 'Task Reminder' && /Ship report/.test(c.opts.body || ''));
+  ok(!!shipCall && cntShip() === 1 && nCalls.length === 0, 'task reminder delivered once via registration.showNotification (no constructor fallback, no dupes)');
+  ok(shipCall && /^rem:.+@\d+$/.test(shipCall.opts.tag), 'delivery id = unique per-reminder key (tag rem:<id>@<triggerAt>)');
+  ok(shipCall && shipCall.opts.requireInteraction === true, 'persistent on mobile: requireInteraction stays until handled');
+  ok(shipCall && Array.isArray(shipCall.opts.actions) && shipCall.opts.actions.map((a) => a.action).join() === 'complete,snooze', 'action buttons where supported: Complete + Snooze');
+  const shipTask = taskOf('Ship report');
+  ok(shipCall && shipCall.opts.data.taskId === shipTask.id, 'notification carries the taskId → clicking opens THAT task');
+  {
+    const rec = remsFor('Ship report')[0];
+    ok(rec.status === 'triggered' && rec.notify && rec.notify.via === 'sw' && rec.notify.key === 'rem:' + rec.id + '@' + rec.triggerAt,
+      'reminder record holds its own delivery state (key/at/via) — unique per reminder');
+  }
+
+  /* -------- SW-routed actions: open / snooze / complete -------- */
+  N.__swMessage({ type: 'zt-notif-action', action: 'open', data: { taskId: shipTask.id } });
+  await sleep(140);
+  ok($('#f-title').value === 'Ship report' && !$('#taskForm').closest('[hidden]'), 'click → Open routes straight to the task editor');
+  $('#cancelTaskBtn').click(); await sleep(80);
+  N.__swMessage({ type: 'zt-notif-action', action: 'snooze', data: { reminderId: remsFor('Ship report')[0].id } });
+  await sleep(550);
+  {
+    const rec = remsFor('Ship report')[0];
+    ok(rec.status === 'pending' && rec.delivered === false
+      && rec.triggerAt >= Date.now() + 9 * 60e3 && rec.triggerAt <= Date.now() + 11 * 60e3,
+      'Snooze action (default 10 min from settings) re-arms the SAME record at now+10m — new triggerAt ⇒ new dedup key');
+    ok(cntShip() === 1, 'snoozing fires nothing early and nothing twice');
+  }
+  await resave('Ship report'); // any app activity must not re-alert the handled instance
+  ok(cntShip() === 1, 'no duplicate alert after further app activity (fired-ledger + record status)');
+  N.__swMessage({ type: 'zt-notif-action', action: 'complete', data: { taskId: shipTask.id } });
+  await sleep(380);
+  ok(taskOf('Ship report').status === 'completed', 'Complete action finishes the task straight from the notification');
+
+  /* -------- overdue alerts with a configurable no-spam policy -------- */
+  await setCk('#nOverdue', true);
+  const odBase = nTitle('Task overdue'); // enabling may catch up existing past-due tasks (each alerted once, ever)
+  await mkTask('Old thing', async () => { $('#f-due').value = yestS; });
+  ok(nTitle('Task overdue') === odBase + 1, 'past-due unfinished task → exactly one “Task overdue” alert');
+  ok(swCalls.some((c) => c.title === 'Task overdue' && /Old thing is overdue/.test(c.opts.body || '')), 'overdue body names the task and its due time');
+  {
+    const od = remMirror().reminders.find((x) => x.reminderType === 'overdue' && x.forDue === yestS && taskOf('Old thing') && x.taskId === taskOf('Old thing').id);
+    ok(!!od && od.status === 'triggered', 'overdue alert is a REAL reminder record (persists, syncs, dedupes like any other)');
+  }
+  await resave('Ship report'); await sleep(250);
+  ok(nTitle('Task overdue') === odBase + 1, 'once-mode policy: ongoing activity never re-alerts an overdue task (NO SPAM)');
+  await setVal('#nOdMode', 'repeat');
+  const odMid = nTitle('Task overdue');
+  await mkTask('Stale thing', async () => { $('#f-due').value = twoAgoS; });
+  ok(nTitle('Task overdue') === odMid + 1, 'repeat mode: a newly overdue task alerts once too');
+  {
+    const od2 = remMirror().reminders.find((x) => x.reminderType === 'overdue' && x.forDue === twoAgoS);
+    ok(od2 && od2.status === 'pending' && od2.triggerAt >= Date.now() + 11 * 3600e3 && od2.triggerAt <= Date.now() + 13 * 3600e3,
+      'repeat mode re-arms the SAME record ~odHours(12h) later — bounded cadence, never a tight loop');
+    ok(nTitle('Task overdue') === odMid + 1, 're-arm itself sends no second alert until it is next due');
+  }
+  await setVal('#nOdMode', 'once');
+
+  /* -------- summaries + habit nudges -------- */
+  await mkTask('Water plants', async () => {
+    $('#f-due').value = todayS;
+    const sel = $('#f-recurrence'); sel.value = 'daily'; sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+  await sleep(150);
+  ok(nTitle('Daily summary') === 1, 'daily summary fires once at the configured time');
+  ok(swCalls.some((c) => c.title === 'Daily summary' && /Today: \d+ task\(s\) due, \d+ overdue/.test(c.opts.body || '')), 'daily summary body counts due-today + overdue');
+  ok(nTitle('Weekly summary') === 1, 'weekly summary fires on the chosen weekday');
+  ok(nTitle('Habit check-in') === 1, 'daily-repeat task gets its habit nudge at habitAt');
+  ok(swCalls.some((c) => c.title === 'Habit check-in' && /Water plants/.test(c.opts.body || '')), 'habit alert names the task');
+  await resave('Ship report'); await sleep(250);
+  ok(nTitle('Daily summary') === 1 && nTitle('Habit check-in') === 1, 'day-keyed ids (sum:d:/hab:) ⇒ summaries never repeat within the day');
+
+  /* -------- project deadline warnings -------- */
+  $('#projectBar [data-act="new"]').click(); await sleep(120);
+  $('#pf-name').value = 'Launch site'; $('#pf-due').value = tmrS;
+  $('#modalHost [data-m="save"]').click(); await sleep(250);
+  await resave('Ship report');
+  ok(nTitle('Project deadline') === 1, 'project due within projDays → exactly one “Project deadline” warning per day');
+  ok(swCalls.some((c) => c.title === 'Project deadline' && /Launch site/.test(c.opts.body || '') && /due in 1 day/.test(c.opts.body || '')), 'deadline warning names the project + countdown');
+
+  /* -------- pomodoro notifications -------- */
+  await setCk('#nPomo', true);
+  await setVal('#nPomoFocus', '0.02'); await setVal('#nPomoBreak', '0.02');
+  $('#nPomoStart').click(); await sleep(1500);
+  ok(nTitle('Pomodoro') >= 1, 'pomodoro focus end → “Pomodoro” notification through the same dedup pipeline');
+  ok($('#nPomoStop') && !$('#nPomoStop').hidden, 'settings show a Stop control while a session runs');
+  $('#nPomoStop').click(); await sleep(250);
+  const pomoNow = nTitle('Pomodoro');
+  await sleep(1600);
+  ok(nTitle('Pomodoro') === pomoNow, 'Stop kills the timer — no runaway pomodoro alerts');
+
+  /* -------- settings persistence -------- */
+  await sleep(400);
+  {
+    const sn = remMirror().settings.notify;
+    ok(sn && sn.master === true && sn.reminders === true && sn.overdue === true && sn.daily === true && sn.habits === true
+      && sn.pomo === true && sn.proj === true && sn.dailyAt === '00:01' && sn.odMode === 'once',
+      'settings.notify persists to the same storage mirror as tasks/reminders (survives reload, syncs, lands in backups)');
+  }
+
+  /* -------- in-app card + snooze chips (fallback channel: no OS grant) -------- */
+  FakeNotification.permission = 'default'; N.renderControls(); await sleep(40);
+  await mkTask('Paperwork', pastCustomRem);
+  {
+    const card = [...doc.querySelectorAll('.toast-notify')].find((x) => /Paperwork/.test(x.textContent));
+    ok(!!card, 'without OS permission the alert still shows in-app (graceful degradation)');
+    ok(card.querySelector('[data-remopen]') && card.querySelector('[data-remcomplete]'), 'in-app card carries Open + Complete actions');
+    const chips = [...card.querySelectorAll('[data-snooze]')].map((b) => b.dataset.snooze);
+    ok(['5', '10', '30', '60', 'tomorrow'].every((v) => chips.includes(v)), 'snooze options 5/10/30/60/Tomorrow as buttons');
+    ok(nTitle('Task Reminder') === cntShip(), 'no OS send while ungranted — in-app only');
+    card.querySelector('[data-snooze="5"]').click(); await sleep(550);
+    const rec = remsFor('Paperwork')[0];
+    ok(rec.status === 'pending' && rec.triggerAt >= Date.now() + 4 * 60e3 && rec.triggerAt <= Date.now() + 6 * 60e3, 'card snooze chip re-arms +5min (same record, new instance)');
+    card.querySelector('[data-remopen]').click(); await sleep(120);
+    ok($('#f-title').value === 'Paperwork', 'card Open opens the task');
+    $('#cancelTaskBtn').click(); await sleep(80);
+  }
+
+  FakeNotification.permission = 'granted'; N.renderControls(); await sleep(40);
+  ok(/Send test/.test($('#notifPermRow').textContent), 'granted row offers a “Send test” control');
+  $('#notifPermRow').querySelector('[data-notif="test"]').click(); await sleep(120);
+  ok(swCalls.some((c) => c.title === 'ZeroTodo' && /how alerts will look/.test(c.opts.body || '')), '“Send test” delivers a sample through the real pipeline');
+
+  /* -------- fully unsupported browser (no Notification API at all) -------- */
+  {
+    const saved = window.Notification;
+    delete window.Notification;
+    ok(N.status() === 'unsupported', 'no Notification API → status “unsupported”');
+    await resave('Paperwork');
+    $('#newTaskBtn').click(); await sleep(90);
+    $('#f-title').value = 'No API task'; $('#f-due').value = yestS;
+    $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); await sleep(420);
+    ok(swCalls.every((c) => !/No API task/.test(c.opts.body || '')), 'unsupported browser: zero OS sends, no exception, app keeps working');
+    ok([...doc.querySelectorAll('.toast-notify')].some((x) => /No API task/.test(x.textContent)), 'unsupported browser still gets the in-app alert');
+    window.Notification = saved;
+  }
+
+  ok(nReqs.length === 1, 'the ENTIRE session produced exactly ONE permission request — from the explicit control only');
+  $('#settingsBtn').click(); await sleep(80); // close panel; leave app state neutral
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

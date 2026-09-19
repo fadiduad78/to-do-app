@@ -156,6 +156,45 @@
       <span>Automatically complete parent task when all subtasks are completed</span>
       <input type="checkbox" id="subtaskAuto">
     </label>
+
+    <h2 style="margin-top:14px">Notifications</h2>
+    <div id="notifBox" class="notif-box">
+      <div class="setting-row notif-perm" id="notifPermRow"></div>
+      <label class="setting-row setting-check"><span>Enable notifications</span><input type="checkbox" id="nMaster"></label>
+      <label class="setting-row setting-check"><span>Task reminders</span><input type="checkbox" id="nReminders"></label>
+      <label class="setting-row setting-check"><span>Overdue task alerts</span><input type="checkbox" id="nOverdue"></label>
+      <div class="notif-timing">
+        <label>Policy <select id="nOdMode"><option value="once">Once per task</option><option value="repeat">Repeat until handled</option></select></label>
+        <label>every <input type="number" id="nOdHours" min="1" max="72" step="1" size="3"> hours</label>
+        <label>first alert <input type="number" id="nOdGrace" min="0" max="720" step="5" size="3"> min after due</label>
+      </div>
+      <label class="setting-row setting-check"><span>Daily summary</span><input type="checkbox" id="nDaily"></label>
+      <div class="notif-timing"><label>At <input type="time" id="nDailyAt"></label></div>
+      <label class="setting-row setting-check"><span>Weekly summary</span><input type="checkbox" id="nWeekly"></label>
+      <div class="notif-timing">
+        <label>On <select id="nWeeklyDay">
+          <option value="mon">Monday</option><option value="tue">Tuesday</option><option value="wed">Wednesday</option>
+          <option value="thu">Thursday</option><option value="fri">Friday</option><option value="sat">Saturday</option><option value="sun">Sunday</option>
+        </select> at <input type="time" id="nWeeklyAt"></label>
+      </div>
+      <label class="setting-row setting-check"><span>Habit reminders (daily-repeat tasks)</span><input type="checkbox" id="nHabits"></label>
+      <div class="notif-timing"><label>At <input type="time" id="nHabitAt"></label></div>
+      <label class="setting-row setting-check"><span>Pomodoro notifications</span><input type="checkbox" id="nPomo"></label>
+      <div class="notif-timing">
+        <label>Focus <input type="number" id="nPomoFocus" min="1" max="90" step="1" size="3"> min</label>
+        <label>Break <input type="number" id="nPomoBreak" min="1" max="30" step="1" size="3"> min</label>
+        <button type="button" class="btn btn-sm btn-ghost" id="nPomoStart">▶ Start</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="nPomoStop" hidden>■ Stop</button>
+      </div>
+      <label class="setting-row setting-check"><span>Project deadline warnings</span><input type="checkbox" id="nProj"></label>
+      <div class="notif-timing"><label>Warn within <input type="number" id="nProjDays" min="0" max="30" step="1" size="3"> days of a project's due date</label></div>
+      <div class="notif-timing"><label>Default snooze <select id="nSnooze">
+        <option value="5">5 minutes</option><option value="10">10 minutes</option><option value="30">30 minutes</option>
+        <option value="60">1 hour</option><option value="tomorrow">Tomorrow 09:00</option>
+      </select></label></div>
+      <p class="muted small">Permission is only requested when you click “Enable Notifications” — never on load. On phones, alerts are delivered as persistent notifications through a service worker; where unsupported they appear in-app. Snooze offers 5/10/30/60 minutes and Tomorrow.</p>
+    </div>
+
     <p class="muted small" id="storageInfo"></p>
     <p class="muted small">Your data is saved in this browser first (IndexedDB + backup mirror), and — when online — synced to the server so it survives cleared browser data and works on other devices. Exporting a backup JSON is still a great extra safety net.</p>
 
@@ -195,6 +234,7 @@
 
 <script src="storage.js"></script>
 <script src="cloud.js"></script>
+<script src="notify.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

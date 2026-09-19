@@ -30,6 +30,18 @@ if the server is unreachable, every original guarantee still holds.
   `setTimeout`), so they catch up after a refresh or closed tab, never fire
   twice, and skip work that's completed or trashed. Recurring tasks
   (daily/weekly/monthly) re-arm their reminders on every cycle.
+- **OS notifications** (desktop + mobile/PWA, delivered by `public/notify.js`):
+  task reminders, overdue alerts with a configurable no-spam policy (once per
+  task, or repeat every N hours until handled), daily/weekly summaries, habit
+  check-ins, project-deadline warnings and Pomodoro timers. Permission is only
+  ever requested from an explicit “Enable Notifications” button — never on
+  load. Alerts use `registration.showNotification` (persistent, with
+  Complete/Snooze actions where supported) and are deduped per delivery
+  instance, so refreshes, multi-tab and a second phone can never double-ring.
+  Denied → “Notifications are blocked. Enable them in browser settings.”;
+  unsupported browsers (and `file://`) degrade to the same alerts as in-app
+  cards with Open / Complete / Snooze 5·10·30·60·Tomorrow. Every channel has
+  its own on/off switch + timing in ⚙ Settings → Notifications.
 - Filters: All / Active / Completed / Trash, plus **by tag**, plus full-text
   search over title + description.
 - Reordering: drag-and-drop (desktop) **and** ↑/↓ buttons (touch-friendly).
@@ -123,6 +135,14 @@ tasks, trash }`. You can also hand-edit it (carefully) and re-import.
 
 - `storage.js` — the persistence engine (recovery, dual-write, migrations,
   cross-tab sync, quota handling). This is where the safety logic lives.
+- `notify.js` — the whole notification layer: permission flow (explicit-only),
+  OS delivery via the service worker or the Notification constructor, in-app
+  fallback cards, summaries/habits/deadline/pomodoro scheduling, the dedup
+  ledger and the Settings → Notifications UI. Loaded between `cloud.js` and
+  `app.js`.
+- `sw.js` — service worker: persistent notification display + routing clicks
+  back to an open window (or deep-linking `#t=<id>` when there is none). It
+  holds no app data and does no caching.
 - `app.js` — UI, rendering, and user actions. Every mutation: mutate in-memory
   state → `store.commit(ops)` → re-render.
 - `index.html` / `styles.css` — markup and themeable styles.

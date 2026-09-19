@@ -254,7 +254,7 @@ function coerceTask(raw, isTrash) {
 
 /** Reminder records (schema v5). Lenient like the client: keep unknowns,
  * drop only what can't fire (no id / no taskId / no finite triggerAt). */
-const REMINDER_TYPES = ['onTime', 'm5', 'm10', 'm15', 'm30', 'h1', 'h2', 'd1', 'd2', 'custom'];
+const REMINDER_TYPES = ['onTime', 'm5', 'm10', 'm15', 'm30', 'h1', 'h2', 'd1', 'd2', 'custom', 'overdue'];
 const REMINDER_STATUSES = ['pending', 'triggered', 'dismissed', 'skipped', 'failed'];
 function coerceReminder(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -785,7 +785,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/config') {
       return sendJSON(res, 200, {
-        app: 'zerotodo-server', version: 7, authRequired: authRequired(),
+        app: 'zerotodo-server', version: 8, authRequired: authRequired(),
         storage: sbEnabled() ? 'supabase (Postgres) + local cache' : 'local file only',
       });
     }

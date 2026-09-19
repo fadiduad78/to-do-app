@@ -164,7 +164,7 @@ try {
   s = await sync('B', s.json.rev, { tasks: [], trash: [], reminders: [rem('r1', 'rt1', ts(25))] }, {}, 'merge');
   ok(s.json.reminders.some((x) => x.id === 'r1'), 'edit-beats-delete: a NEWER re-add revives the reminder (mirrors tasks/projects)');
   const cfg = await (await fetch(BASE + '/api/config')).json();
-  ok(cfg.version === 7, 'server advertises version 7 (understands reminders)');
+  ok(cfg.version === 8, 'server advertises version 8 (understands reminders incl. auto-overdue type)');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [{ id: 'pI', name: 'B wins', createdAt: ts(1), updatedAt: ts(99) }] }, {}, 'merge');
   ok(s.json.projects[0].name === 'B wins', 'project edits LWW-merge like tasks');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [] }, { 'projects:pI': ts(120) }, 'merge');
