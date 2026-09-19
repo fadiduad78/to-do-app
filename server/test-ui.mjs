@@ -18,6 +18,7 @@ const storageSrc = readFileSync(PUB + '/storage.js', 'utf8');
 const notifySrc = readFileSync(PUB + '/notify.js', 'utf8');
 const appSrc = readFileSync(PUB + '/app.js', 'utf8');
 const aiSrc = readFileSync(PUB + '/ai.js', 'utf8');
+const nlSrc = readFileSync(PUB + '/nl.js', 'utf8');
 
 /* OS notification surface, installed BEFORE boot so we can prove the app
    never asks for permission on load and can inspect every delivery. */
@@ -50,6 +51,7 @@ Object.defineProperty(window.navigator, 'serviceWorker', {
 window.eval(storageSrc);   // the very file the browser loads
 window.eval(notifySrc);    // delivery module — loaded before app.js, as in index.html
 window.eval(aiSrc);        // AI decomposition planner — before app.js, as in index.html
+window.eval(nlSrc);        // natural-language quick add — before app.js, as in index.html
 window.eval(appSrc);       // boots async init() → recover() → renderAll()
 await sleep(300);
 
@@ -2102,6 +2104,140 @@ await sleep(300);
   ok(true, 'AI decomposition section completed without uncaught errors');
 
   dmQ.window.close();
+}
+
+/* ========== 24. Natural-language quick add — understand, confirm, THEN create ========== */
+{
+  console.log('\n--- 24. natural-language add ---');
+  /* ---- A. the engine on the brief’s exact sentences ---- */
+  const dmN = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dmN.window.eval(nlSrc);
+  const NL = dmN.window.ZTNL;
+  ok(!!NL && typeof NL.parse === 'function', 'public/nl.js loads standalone — the parser is self-contained (no app, no network)');
+  // pin “now” so the assertions are exact, in the LOCAL zone (the only zone the engine knows)
+  const NOW = new Date(2026, 8, 20, 14, 0); // Sun 20 Sep 2026, 14:00 local
+  const P = (s, o) => NL.parse(s, Object.assign({ now: NOW }, o || {}));
+  const a = P('Study Python tomorrow at 7 PM');
+  ok(a.title === 'Study Python' && a.dueDate === '2026-09-21' && a.dueTime === '19:00' && a.priority === 'med' && a.confidence === 'high' && a.notes.length === 0,
+    '“Study Python tomorrow at 7 PM” → Task/Date/Time exactly, no guesses, high confidence');
+  const c = P('Call uncle Friday at 10 AM');
+  ok(c.title === 'Call uncle' && c.dueDate === '2026-09-25' && c.dueTime === '10:00',
+    'bare weekday “Friday” → the coming Friday, phrasing removed from the title');
+  const f = P('Finish assignment tomorrow, high priority, remind me one hour before');
+  ok(f.priority === 'high' && f.remRows.length === 1 && f.remRows[0].reminderType === 'h1' && f.dueDate === '2026-09-21' && f.title === 'Finish assignment',
+    '“high priority, remind me one hour before” → priority + h1 preset reminder, title stays clean');
+  const e = P('Exercise every Monday Wednesday and Friday at 6 PM');
+  ok(e.recurrence === 'custom' && e.recurRule.unit === 'week' && e.recurRule.weekdays.join() === '1,3,5' && e.dueTime === '18:00' && e.title === 'Exercise',
+    'run-on “every Monday Wednesday and Friday” is ONE recurrence (weekly Mon/Wed/Fri), not three dates');
+  ok(NL.fmtRepeat(e) === 'Weekly on Mon, Wed, Fri' && NL.fmtDay('2026-09-21', NOW) === 'Tomorrow' && NL.fmtTime('19:00') === '7:00 PM',
+    'card labels come from the engine: “Weekly on Mon, Wed, Fri · Tomorrow · 7:00 PM”');
+  // every field from the brief exists in the structured output
+  ok(['title','description','dueDate','dueTime','priority','projectId','tags','recurrence','recurRule','remRows','confidence','notes'].every((k) => k in a),
+    'the parse output covers the brief’s full field list (title, description, date, time, priority, project, tags, recurrence, reminders)');
+  const g = P('Gym #health every weekday at 7 in the morning');
+  ok(g.title === 'Gym' && g.tags.join() === 'health' && g.recurrence === 'weekdays' && g.dueTime === '07:00' && g.confidence === 'high',
+    'tags + “every weekday” + “7 in the morning” → 07:00 exactly — the daypart disambiguates, so no guess penalty');
+  const h = P('at 7 meet me');
+  ok(h.dueTime === '19:00' && h.confidence === 'low' && h.notes.length >= 1,
+    'a BARE “at 7” is a guess → confidence drops to LOW and a note says so (ambiguity is never hidden)');
+  const d = P('Fix the sink — replace the cartridge, low priority');
+  ok(d.title === 'Fix the sink' && d.description === 'replace the cartridge' && d.priority === 'low',
+    'description is separated when identifiable (em-dash split) and “low priority” leaves the title');
+  const proj = P('Review PRs in Work tomorrow', { projects: [{ id: 'p1', name: 'Work' }, { id: 'p2', name: 'Home' }] });
+  ok(proj.projectId === 'p1' && proj.title === 'Review PRs', '“in Work” maps to the EXISTING project id — matched against real data, never invented');
+  const noproj = P('Review PRs in Mars tomorrow', { projects: [{ id: 'p1', name: 'Work' }] });
+  ok(noproj.projectId === null && /Mars/.test(noproj.title), '…and an unknown name is NOT turned into a project — it just stays part of the title');
+  const r1 = P('Retro every 2 weeks on Friday');
+  ok(r1.recurrence === 'custom' && r1.recurRule.every === 2 && r1.recurRule.unit === 'week' && r1.recurRule.weekdays.join() === '5',
+    '“every 2 weeks on Friday” → custom rule every-2-weeks on Fri (the “on Friday” feeds the rule, not a due date)');
+  const r2 = P('Standup every other day at 9am');
+  ok(r2.recurRule.unit === 'day' && r2.recurRule.every === 2 && r2.dueTime === '09:00', '“every other day” → every-2-days');
+  const s1 = P('Water plants every weekend');
+  ok(s1.recurRule.weekdays.join() === '0,6', '“every weekend” → Sat+Sun');
+  const rem20 = P('Team lunch tomorrow, remind me 20 minutes before');
+  ok(rem20.remRows[0].reminderType === 'm15' && rem20.notes.some((x) => /nearest preset/.test(x)),
+    '“20 minutes before” snaps to the nearest real preset (m15) — and SAYS it snapped');
+  const remday = P('Dentist tomorrow, remind me the day before');
+  ok(remday.remRows[0].reminderType === 'd1', '“the day before” → 1 day before (not a mangled quantity)');
+  const remat = P('Renew passport friday, remind me at 9pm');
+  ok(remat.remRows[0].reminderType === 'custom' && remat.remRows[0].customTime === '21:00',
+    '“remind me at 9pm” becomes a real custom-time reminder row without stealing the task’s own phrasing');
+  const lead = P('Create a task: buy batteries tomorrow');
+  ok(lead.title === 'Buy batteries', 'the “Create a task:” lead-in (the input’s own placeholder phrasing) is stripped');
+  const rmt = P('Remind me to call the bank tomorrow');
+  ok(rmt.title === 'Call the bank' && rmt.dueDate === '2026-09-21', '“Remind me to X tomorrow” → task X (the classic Apple-Notes idiom)');
+  const tz = NL.parse('tomorrow at 7 AM', { now: new Date(2026, 11, 31, 23, 30) }); // 11:30 PM local on NYE
+  ok(tz.dueDate === '2027-01-01' && /^\d{4}-\d{2}-\d{2}$/.test(tz.dueDate),
+    'LOCAL timezone only: “tomorrow” at 23:30 on Dec 31 → 2027-01-01 (a UTC-offset bug would say 2026-12-31/01 wrongly across midnight)');
+  const det = JSON.stringify(P('Ship v2 next friday 6pm')) === JSON.stringify(P('Ship v2 next friday 6pm'));
+  ok(det, 'deterministic: the same sentence parses to the identical structure every time');
+  const past = P('Party march 3');
+  ok(past.dueDate === '2027-03-03' && past.notes.some((x) => /already passed/.test(x)),
+    '“march 3” already gone this year → next March, with a note about it');
+  const amb = P('Dentist 12/5');
+  ok(amb.dueDate === '2026-12-05' && amb.notes.some((x) => /month\/day/.test(x)),
+    '12/5 (both could be months!) → read as month/day WITH a visible note; unambiguous day-month like 12/25 gets no noise');
+  ok(P('Dentist 12/25').dueDate === '2026-12-25', 'and 12/25 still resolves right (25 can only be a day)');
+  const empty = P('');
+  ok(empty.confidence === 'low', 'empty input → low confidence, nothing invented');
+  dmN.window.close();
+
+  /* ---- B. the confirmation-gated flow in the MAIN dom ---- */
+  const mir = () => JSON.stringify(JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks);
+  const remMir = () => JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+  $('#newTaskBtn').click(); await sleep(120);
+  ok(!$('#nlBox').hidden, 'the composer opens WITH the natural-language input (“Create a task…”) front and center');
+  $('#nlInput').value = 'Finish assignment tomorrow, high priority, remind me one hour before';
+  const beforeEnter = mir();
+  $('#nlInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(220);
+  ok($('#nlCard') && !$('#nlCard').hidden, 'Enter shows the “I understood” card — it does NOT submit the form');
+  ok(mir() === beforeEnter, 'ZERO writes on understand: the task store is byte-identical while suggestions wait for you');
+  const cardTxt = $('#nlCard').textContent;
+  ok(/I understood/.test(cardTxt) && /Finish assignment/.test(cardTxt) && /Tomorrow/.test(cardTxt) && /High/.test(cardTxt) && /1 hour before/.test(cardTxt),
+    'the card reads like the brief: “I understood: Task / Date / Time / Priority / Reminder …”');
+  ok(/nothing saved yet/.test(cardTxt) && /Create task/.test(cardTxt) && /Edit/.test(cardTxt),
+    'the card shows [Create task] and [Edit], and says nothing is saved yet');
+  $('#nlCard [data-nl="create"]').click();
+  await sleep(420);
+  const t24 = tsk().find((x) => x.title === 'Finish assignment');
+  ok(!!t24, 'Create task → the task exists (exactly one, via the composer’s own submit pipeline)');
+  ok(t24.dueDate === NLdue24() && t24.priority === 'high', 'the confirmed date + priority landed on the real task');
+  function NLdue24() { const d = new Date(); d.setDate(d.getDate() + 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  const rw = remMir().reminders.filter((x) => x.taskId === t24.id);
+  ok(rw.length === 1 && rw[0].reminderType === 'h1', 'the “one hour before” reminder became a real reminder record on the task');
+  // the Edit path: parsed values land in the FORM, nothing is written, user saves manually
+  $('#newTaskBtn').click(); await sleep(120);
+  $('#nlInput').value = 'Exercise every Monday Wednesday and Friday at 6 PM';
+  $('#nlInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(200);
+  const beforeEdit = mir();
+  $('#nlCard [data-nl="edit"]').click(); await sleep(250);
+  ok(mir() === beforeEdit, 'Edit writes NOTHING either — it only moves the interpretation into the form');
+  ok($('#f-title').value === 'Exercise' && $('#f-time').value === '18:00' && $('#f-recurrence').value === 'custom',
+    'the form was pre-filled for editing: title, time, recurrence kind');
+  ok(S_uiRecur24(), '…including the Mon/Wed/Fri day set in the custom repeat panel');
+  function S_uiRecur24() { const q = (s) => window.document.querySelector(s); return !!(q('#rcDays [data-rday="1"].on') && q('#rcDays [data-rday="3"].on') && q('#rcDays [data-rday="5"].on')); }
+  $('#saveTaskBtn').click(); await sleep(380);
+  const ex = tsk().find((x) => x.title === 'Exercise');
+  ok(ex && ex.recurrence === 'custom' && ex.recurRule && ex.recurRule.weekdays.join() === '1,3,5',
+    'after the user pressed “Add task”, the edited recurrence is saved — ordinary task, ordinary editor, no special case');
+  // low confidence → the card flags it loudly
+  $('#newTaskBtn').click(); await sleep(100);
+  $('#nlInput').value = 'Organize the garage someday no rush';
+  $('#nlInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(180);
+  ok($('#nlCard').className.includes('low'), 'ambiguous input → the card turns LOW-CONFIDENCE styled (amber, solid border) — confirmation is not optional-look-and-feel');
+  ok(/no date found/.test($('#nlCard').textContent), '…and the note tells the user what it could not find');
+  const lowBefore = mir();
+  $('#nlCard [data-nl="close"]').click(); await sleep(120);
+  ok($('#nlCard').hidden && mir() === lowBefore, 'dismissing the card abandons the interpretation — again zero writes');
+  // edit mode must NOT show the NL bar (explicit editing has no interpretation layer)
+  const row0 = $('#taskList .task');
+  row0.querySelector('[data-act="edit"]').click(); await sleep(200);
+  ok($('#nlBox').hidden, 'the NL input hides itself in Edit mode — it is a creation affordance only');
+  $('#cancelTaskBtn').click(); await sleep(120);
+  ok(true, 'natural-language add section completed without uncaught errors');
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

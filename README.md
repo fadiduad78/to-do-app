@@ -117,6 +117,18 @@ if the server is unreachable, every original guarantee still holds.
   Works offline and with zero configuration via a deterministic built-in
   planner; a self-hoster can wire any OpenAI-compatible model through
   `ZT_AI_URL` / `ZT_AI_KEY` / `ZT_AI_MODEL` — keys never touch the browser.
+- **Natural-language quick add** — at the top of the new-task composer, type a
+  sentence: *“Study Python tomorrow at 7 PM”*, *“Call uncle Friday at 10 AM”*,
+  *“Finish assignment tomorrow, high priority, remind me one hour before”*,
+  *“Exercise every Monday Wednesday and Friday at 6 PM”*. A local, deterministic
+  parser (no network, no AI keys) splits it into structured task data — title,
+  description if identifiable, due date, due time, priority, project, tags,
+  recurrence and reminder presets — and shows an **“I understood: …”** card
+  with **[Create task] / [Edit]**. Nothing is ever created silently: the card
+  is the gate, every guess is annotated (“bare *at 7* → 7 PM, Edit to flip”),
+  low-confidence parses turn amber, and **[Edit]** hands the values to the
+  ordinary form so you can fix anything before saving. Your **local timezone**
+  is the only timezone in the pipeline.
 - **Installable as a PWA** (`manifest.webmanifest` + generated launcher icons
   + theme-color): on Android (and iOS when added to Home Screen) the installed
   app keeps the service worker alive for notification delivery, and the
@@ -395,6 +407,52 @@ regenerate / cancel, and the settings switch; plus route checks in
 `server/test.mjs` (401 / 400-before-rate-limit / structured built-in plan /
 429 / sync passthrough), coercion cases in `server/test-storage.mjs`, and
 pipeline round-trips in `server/test-client.mjs` + `server/test-supabase.mjs`.
+
+## Natural-Language Quick Add (`public/nl.js`)
+
+**The promise:** understand freely, write only on confirmation. `ZTNL.parse()`
+is a pure function with no write path; the app then offers exactly two
+continuations — **[Create task]** (which feeds the composer's *existing* submit
+pipeline — same validation, same reminder wiring, zero duplicated creation
+logic) and **[Edit]** (which merely pre-fills the ordinary form). A task can
+therefore never be born from a bad parse: press ✕, close the composer, or
+ignore the card, and nothing was written (there is a byte-equality test pinning
+this).
+
+- **Grammar covered** — relative days (today/tonight/tomorrow/the day after
+  tomorrow, `in N days/weeks`), weekday names (`on Friday`, `next Friday`),
+  calendar dates (`March 3`, `3 March`, `2027-01-15`, `12/5` with a stated
+  month/day reading), clock times (`7 PM`, `7pm`, `19:00`, `9:30am`, `noon`,
+  `midnight`, `7 in the evening`), priorities (`high/urgent/asap/low/no rush`),
+  `#tags`, project matching against **existing project names only** (it never
+  invents one — an unknown “in Mars” just stays in the title), recurrence
+  (`daily`, `weekly`, `monthly`, `every 2 weeks`, `every other day`,
+  `every weekend`, `every weekday`, run-on day lists like `every Monday
+  Wednesday and Friday`), and reminders mapped onto the app's real presets
+  (`remind me one hour before` → *1 hour before*; `20 minutes before` →
+  nearest preset **with a note saying it snapped**; `remind me at 9pm` →
+  custom-time row; `Remind me to X tomorrow` → task X).
+- **Honesty ledger** — every invented value (bare `at 7` assumed 19:00,
+  `this weekend` assumed Saturday, a past `march 3` rolled to next year…)
+  appends a human-readable note and drops `confidence` to `low`, which the UI
+  renders as an amber card. High confidence still shows the card — this feature
+  has **no silent path at all**, which is the only way the “never silently
+  create” rule can't rot later.
+- **Timezone** — all arithmetic uses local `Date` accessors (`getFullYear/
+  getMonth/getDate`); no UTC conversion exists in the engine, so “tomorrow”
+  at 23:30 on New Year's Eve is `2027-01-01` in the user's zone by
+  construction (a test pins exactly that).
+- **No new data model** — everything the parser finds lands in existing task
+  fields (`dueDate`, `dueTime`, `priority`, `projectId`, `tags`, `recurrence`,
+  `recurRule`) and existing reminder records. Schema, sync and backups are
+  untouched; standalone `file://` copies get the identical parser inlined.
+- **Tests** — `server/test-ui.mjs` §24 (43 checks): the four brief sentences
+  parsed field-by-field, snap-with-note behaviour, project never-invented,
+  local-zone midnight case, determinism, plus the whole UI gate: Enter shows
+  the card, store byte-identical until [Create task], reminder records born
+  with the task, Edit pre-fills the form (incl. the Mon/Wed/Fri chips in the
+  repeat panel) with zero writes, ✕ abandons cleanly, and the bar hides
+  itself in edit mode.
 
 ## Where your data is stored
 
