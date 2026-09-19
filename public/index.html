@@ -130,6 +130,7 @@
 
   <section class="toolbar">
     <input id="searchInput" type="search" placeholder="Search title or description…" autocomplete="off" aria-label="Search tasks">
+    <button id="dashBtn" class="btn btn-ghost" aria-pressed="false" title="Dashboard: your productivity state, computed live from the same data">📊 Dashboard</button>
     <button id="calBtn" class="btn btn-ghost" aria-pressed="false" title="Calendar: a view over the same tasks">📅 Calendar</button>
     <button id="newTaskBtn" class="btn btn-primary">＋ New task</button>
   </section>
@@ -155,6 +156,12 @@
   <section id="calendar" class="calendar" hidden aria-label="Calendar">
     <div id="calBar" class="cal-bar"></div>
     <div id="calHost" class="cal-body"></div>
+  </section>
+
+  <!-- Productivity dashboard: a VIEW over the same task/project/reminder
+       state — it stores nothing; every number is derived at render time. -->
+  <section id="dashboard" class="dashboard" hidden aria-label="Productivity dashboard">
+    <div id="dashHost" class="dash-grid"></div>
   </section>
 
   <div id="trashBar" class="trash-bar" hidden>

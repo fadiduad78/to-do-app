@@ -376,5 +376,31 @@ const recF = await F.recover();
 ok(recF.state.projects.length === 1 && recF.state.projects[0].id === 'fresh', '30-day retention purges stale trashed projects');
 ok(recF.notices.some((n) => n.message.includes('project')), 'pruning is announced via a notice');
 
+// ---- dashboard ledger fields (completedAt / completions) ----
+mem.set('todo_backup_v1', JSON.stringify({
+  app: 'zerotodo', schemaVersion: 5, savedAt: Date.now(), settings: {},
+  tasks: [
+    { id: 'lg1', title: 'Legacy done', status: 'completed', createdAt: 1000, updatedAt: 1000 },
+    { id: 'lg2', title: 'Junk ledger', status: 'active', createdAt: 1000, updatedAt: 1000,
+      completions: ['x', -5, 3000, 1000, null, 2000.4], completedAt: 'nope' },
+    { id: 'lg3', title: 'Fat ledger', status: 'active', createdAt: 1000, updatedAt: 1000,
+      completions: Array.from({ length: 400 }, (_, i) => 100000 + i) },
+  ],
+  trash: [], projects: [], subtasks: [], reminders: [],
+}));
+const LG = ZT.createStore({});
+const recLG = await LG.recover();
+const tOf = (id) => recLG.state.tasks.find((x) => x.id === id);
+ok(tOf('lg1').completedAt === null && Array.isArray(tOf('lg1').completions) && tOf('lg1').completions.length === 0,
+  'legacy task (no ledger) coerces to clean nulls — old backups gain no phantom completions');
+ok(JSON.stringify(tOf('lg2').completions) === '[1000,2000,3000]' && tOf('lg2').completedAt === null,
+  'ledger sanitize: junk dropped, numbers kept & sorted, bad completedAt → null');
+ok(tOf('lg3').completions.length === 256 && tOf('lg3').completions[255] === 100000 + 399 && tOf('lg3').completions[0] === 100000 + 144,
+  'ledger is capped at the 256 most recent stamps (bounded record, safe for sync)');
+await LG.commit([{ store: 'tasks', op: 'put', value: Object.assign(tOf('lg1'), { completions: [Date.now()], completedAt: Date.now(), status: 'active', updatedAt: Date.now() }) }]);
+const snapLG = JSON.parse(mem.get('todo_backup_v1'));
+ok(snapLG.tasks.find((x) => x.id === 'lg1').completions.length === 1,
+  'ledger fields ride the mirror export like every other task field (backup/sync fidelity)');
+
 console.log(failed ? `\n${failed} storage check(s) FAILED` : '\nall storage checks green');
 process.exit(failed ? 1 : 0);

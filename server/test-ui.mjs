@@ -1083,6 +1083,13 @@ await sleep(300);
       await pclick('#calBtn');
       await new Promise((r) => setTimeout(r, 150));
 
+      // state: productivity dashboard
+      await pclick('#dashBtn');
+      await wait('dashboard-open', () => !document.getElementById('dashboard').hidden).catch(() => {});
+      checks.push(['dashboard', await scan(vw)]);
+      await pclick('#dashBtn');
+      await new Promise((r) => setTimeout(r, 150));
+
       // state: project modal (bottom sheet)
       await pclick('#projectBar [data-act="new"]');
       await wait('modal-open', () => !!document.querySelector('#modalHost .modal'));
@@ -1104,7 +1111,7 @@ await sleep(300);
         layoutFails++; lastVw = vw;
         console.log(`  ✗ mobile layout @${vw}px — overflow: ${overflow.map((o) => o[0] + ' ' + JSON.stringify(o[1].offenders && o[1].offenders.length ? o[1].offenders : o[1].docScroll)).join('; ') || 'none'} | <16px inputs: ${JSON.stringify(fontFail)} | targets: ${JSON.stringify(targets)}`);
       } else {
-        console.log(`  ✓ mobile layout @${vw}px: all 8 states overflow-free, inputs ≥16px, tap targets ok`);
+        console.log(`  ✓ mobile layout @${vw}px: all 9 states overflow-free, inputs ≥16px, tap targets ok`);
       }
     }
     ok(layoutFails === 0, `real Chromium @320/360/375/414: no horizontal overflow in any state, no iOS-zoom inputs, touch targets sized${layoutFails ? ' (failed at ' + lastVw + 'px — see log above)' : ''}`);
@@ -1494,6 +1501,149 @@ await sleep(300);
   }
 
   ok(tsk().length === countBefore + 4, 'the entire section added exactly the 4 tasks it created — completion/skip/ghosts never fabricate rows');
+}
+
+/* ================== 19. Productivity dashboard (derived view) ================== */
+{
+  console.log('\n--- 19. productivity dashboard ---');
+  const NOW = Date.now();
+  const YY = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const TODAY = YY(new Date(NOW));
+  const ADDD = (ds, n) => { const [y, mo, dd] = ds.split('-').map(Number); const d = new Date(y, mo - 1, dd + n); return YY(d); };
+  const atT = (ds, h, mi) => { const [y, mo, dd] = ds.split('-').map(Number); return new Date(y, mo - 1, dd, h, mi, 0, 0).getTime(); };
+  const hm = (ms) => { const d = new Date(ms); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const R1 = { d: YY(new Date(NOW + 42 * 60000)), t: hm(NOW + 42 * 60000) }; // custom rows carry date+time — the engine re-derives the instant at boot
+  const R2 = { d: YY(new Date(NOW + 3 * 3600e3)), t: hm(NOW + 3 * 3600e3) };
+  const WK0 = (() => { const d = new Date(NOW); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+
+  const SEED = {
+    app: 'zerotodo', schemaVersion: 5, savedAt: NOW, tasks: [
+      { id: 'dA', title: 'Write report', status: 'completed', dueDate: TODAY, priority: 'med', projectId: 'p1', createdAt: NOW, updatedAt: NOW, completedAt: atT(TODAY, 8, 30), completions: [atT(TODAY, 8, 30)] },
+      { id: 'dB', title: 'Standup', status: 'active', dueDate: TODAY, priority: 'low', recurrence: 'daily', recurAnchor: ADDD(TODAY, -2), createdAt: NOW, updatedAt: NOW, completedAt: atT(TODAY, 8, 55), completions: [atT(ADDD(TODAY, -1), 9, 0), atT(TODAY, 8, 55)] },
+      { id: 'dC', title: 'Draft slides', status: 'active', dueDate: TODAY, priority: 'high', projectId: 'p1', createdAt: NOW, updatedAt: NOW },
+      { id: 'dD', title: 'Pay rent', status: 'active', dueDate: ADDD(TODAY, -2), priority: 'med', createdAt: NOW, updatedAt: NOW },
+      { id: 'dE', title: 'Clean inbox', status: 'active', priority: 'med', createdAt: NOW, updatedAt: NOW },
+      { id: 'dF', title: 'Fix login bug', status: 'active', priority: 'high', createdAt: NOW, updatedAt: NOW },
+      { id: 'dG', title: 'Sprint demo', status: 'active', dueDate: ADDD(TODAY, 1), dueTime: '15:00', priority: 'med', createdAt: NOW, updatedAt: NOW },
+      { id: 'dH', title: 'Old thing', status: 'completed', dueDate: ADDD(TODAY, -30), priority: 'med', createdAt: NOW, updatedAt: NOW },
+      { id: 'dI', title: 'Book flight', status: 'active', dueDate: ADDD(TODAY, 4), priority: 'low', createdAt: NOW, updatedAt: NOW },
+      { id: 'dJ', title: 'Read spec', status: 'completed', priority: 'med', createdAt: NOW, updatedAt: NOW, completedAt: atT(ADDD(TODAY, -1), 21, 0), completions: [atT(ADDD(TODAY, -1), 21, 0)] },
+      { id: 'dK', title: 'Study Python', status: 'active', dueDate: TODAY, dueTime: '23:59', priority: 'med', createdAt: NOW, updatedAt: NOW },
+    ],
+    trash: [], subtasks: [],
+    projects: [{ id: 'p1', name: 'Launch', icon: '🚀', color: '#4f46e5', status: 'active', createdAt: NOW, updatedAt: NOW, sortOrder: NOW }],
+    reminders: [
+      { id: 'r1', taskId: 'dK', triggerAt: NOW + 42 * 60000, reminderType: 'custom', customDate: R1.d, customTime: R1.t, enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: NOW, updatedAt: NOW },
+      { id: 'r2', taskId: 'dG', triggerAt: NOW + 3 * 3600e3, reminderType: 'custom', customDate: R2.d, customTime: R2.t, enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: NOW, updatedAt: NOW },
+      { id: 'r3', taskId: 'dC', triggerAt: NOW + 60 * 60000, reminderType: 'm30', enabled: true, delivered: true, dismissed: false, status: 'triggered', createdAt: NOW, updatedAt: NOW },
+      { id: 'r4', taskId: 'gone-task', triggerAt: NOW + 90 * 60000, reminderType: 'm5', enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: NOW, updatedAt: NOW },
+    ],
+  };
+  const expWeekAll = SEED.tasks.reduce((a, x) => a + ((x.completions || []).filter((ts) => ts >= WK0)).length, 0);
+
+  const domD = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  const wD = domD.window; const docD = wD.document;
+  wD.HTMLElement.prototype.scrollIntoView = function () {};
+  const dashErrs = []; wD.addEventListener('error', (e) => dashErrs.push(String(e.message)));
+  wD.localStorage.setItem('todo_backup_v1', JSON.stringify(SEED));
+  wD.eval(storageSrc); wD.eval(appSrc);
+  await sleep(800);
+
+  const $D = (s) => docD.querySelector(s);
+  const txtD = (s) => ($D(s) ? $D(s).textContent : '');
+
+  ok(!!$D('#dashBtn') && $D('#dashboard').hidden === true, 'dashboard button in the toolbar; the view starts closed');
+  $D('#dashBtn').click(); await sleep(220);
+  ok($D('#dashboard').hidden === false && $D('#calendar').hidden === true && $D('#taskList').hidden === true,
+    'opening the dashboard shows it and steps the list AND calendar aside');
+
+  const hh = new Date().getHours();
+  const expGreet = hh < 5 ? 'Good night' : hh < 12 ? 'Good morning' : hh < 17 ? 'Good afternoon' : hh < 21 ? 'Good evening' : 'Good night';
+  ok(txtD('.dash-greet').trim() === expGreet, 'greeting follows the hour: “' + txtD('.dash-greet').trim() + '”');
+  ok(txtD('.dash-date').includes(String(new Date().getFullYear())), 'current date rendered under the greeting');
+
+  const tileNums = [...docD.querySelectorAll('.dash-tiles .dash-tile b')].map((b) => b.textContent.trim());
+  ok(JSON.stringify(tileNums) === JSON.stringify(['2', '3', '1', '2']),
+    'hero tiles = done-today 2 · left-today 3 · overdue 1 · streak 2 (got ' + JSON.stringify(tileNums) + ')');
+  ok(/🔥 2-day streak/.test(txtD('.dash-streak')), 'streak pill: today + yesterday both have completions → 2-day fire');
+
+  const prog = txtD('.dash-prog');
+  const blocks = (prog.match(/\u2588/g) || []).length;
+  ok(/33%/.test(prog) && blocks === 5, 'progress bar: 2/6 → 33% with round(0.33*16)=5 filled blocks (' + prog.trim() + ')');
+  ok(/2 \/ 6 completed/.test(txtD('.dash-prog-num')), 'progress line reads “2 / 6 completed” (done + open-due + overdue)');
+
+  const gnames = [...docD.querySelectorAll('.dash-today .dash-gname')].map((x) => x.textContent.trim());
+  ok(gnames.join('|') === 'Overdue · 1|High priority · 2|Scheduled for today · 2|Unscheduled · 1',
+    'Today groups: overdue → high → scheduled → unscheduled (' + JSON.stringify(gnames) + ')');
+  const todayRows = [...docD.querySelectorAll('.dash-today [data-drow]')];
+  ok(todayRows.length === 6, 'every active task lands in EXACTLY ONE bucket — 6 rows, no double counting');
+  const rowTitles = todayRows.map((r) => r.querySelector('.dash-rtitle').textContent.trim());
+  ok(rowTitles[0] === 'Pay rent' && /late/.test(todayRows[0].innerHTML), 'overdue row first, flagged “overdue”');
+  ok(rowTitles.includes('Standup') && rowTitles.includes('Study Python'), 'the rolled recurring task AND the 23:59 task sit in “Scheduled for today”');
+  ok(rowTitles.includes('Fix login bug') && rowTitles.includes('Draft slides'), 'unscheduled-high joins due-today-high in the High bucket');
+
+  const cols = [...docD.querySelectorAll('.dash-col')];
+  const todayCol = cols.find((c) => c.classList.contains('today'));
+  ok(cols.length === 7 && todayCol.querySelector('.dash-cn').textContent === '2', 'weekly chart: 7 day columns, today = 2 completions');
+  const chartSum = cols.reduce((a, c) => a + Number(c.querySelector('.dash-cn').textContent), 0);
+  ok(chartSum === expWeekAll, 'chart totals exactly the stamps inside this Mon–Sun window (' + chartSum + ' = ' + expWeekAll + ')');
+
+  const stats = [...docD.querySelectorAll('.dash-stat')].map((s) => s.querySelector('b').textContent.trim());
+  ok(stats[0] === '2' && stats[1] === String(expWeekAll) && stats[2] === '11' && stats[3] === '1' && stats[4] === '27%' && stats[5] === '2 days',
+    'statistics: 2 today · ' + expWeekAll + ' week · 11 created · 1 overdue · 27% rate · 2-day streak (' + JSON.stringify(stats) + ')');
+
+  ok(/Launch/.test(txtD('.dash-prow')) && /1\/2/.test(txtD('.dash-prow')) && /width:50%/.test(docD.querySelector('.dash-mbar i').getAttribute('style')),
+    'project overview: 🚀 Launch 1/2 with a 50% bar');
+
+  const up = [...docD.querySelectorAll('.dash-card')].find((c) => /Upcoming/.test(c.querySelector('h3').textContent));
+  const upRows = [...up.querySelectorAll('.dash-when')].map((x) => x.textContent.trim());
+  ok(upRows.length === 2 && upRows[0] === 'Tomorrow' && /Sprint demo/.test(up.textContent), 'upcoming: exactly the two future tasks, tomorrow first');
+
+  const nextTxt = txtD('.dash-next');
+  ok(/Study Python/.test(nextTxt) && /in 4[0-3] min/.test(nextTxt) && /Custom date\/time/.test(nextTxt),
+    '“Next reminder: Study Python — in ~42 min” (the brief’s example shape; custom type keeps its stored instant through boot reconcile)');
+  const rrows = [...docD.querySelectorAll('.dash-rrow')];
+  ok(rrows.length === 1 && /Sprint demo/.test(rrows[0].textContent) && /in [23] h/.test(rrows[0].textContent),
+    'following-reminder list shows ONLY r2 — fired (r3) and orphaned (r4) records are excluded');
+
+  const snap0 = wD.localStorage.getItem('todo_backup_v1');
+  $D('#dashBtn').click(); await sleep(150); $D('#dashBtn').click(); await sleep(220);
+  $D('#calBtn').click(); await sleep(160);
+  ok($D('#dashboard').hidden === true && $D('#calendar').hidden === false, 'calendar and dashboard are exclusive views');
+  $D('#calBtn').click(); await sleep(120); $D('#dashBtn').click(); await sleep(200);
+  ok(wD.localStorage.getItem('todo_backup_v1') === snap0,
+    'dashboard is NOT a data source: opening, closing and toggling wrote ZERO bytes to storage');
+
+  const cleanRow = [...docD.querySelectorAll('.dash-today [data-drow]')].find((r) => /Clean inbox/.test(r.textContent));
+  cleanRow.querySelector('.dash-check').click(); await sleep(340);
+  const mD = JSON.parse(wD.localStorage.getItem('todo_backup_v1'));
+  const dE = mD.tasks.find((x) => x.id === 'dE');
+  ok(dE.status === 'completed' && dE.completions.length === 1 && dE.completedAt > 0,
+    'the dashboard check-off IS the app toggleTask: same record id, stamped ledger');
+  const tiles2 = [...docD.querySelectorAll('.dash-tiles .dash-tile b')].map((b) => b.textContent.trim());
+  ok(tiles2[0] === '3' && !docD.querySelector('.dash-today').textContent.includes('Clean inbox'),
+    'hero recomputes instantly: done-today 3, row leaves the board (' + JSON.stringify(tiles2) + ')');
+  ok(/43%/.test(txtD('.dash-prog')) && /3 \/ 7 completed/.test(txtD('.dash-prog-num')), 'progress follows: 3 / 7 → 43%');
+
+  const draftRow = [...docD.querySelectorAll('.dash-today [data-drow]')].find((r) => /Draft slides/.test(r.textContent));
+  draftRow.querySelector('.dash-rtitle').click(); await sleep(200);
+  ok($D('#composer').hidden === false && $D('#f-title').value === 'Draft slides',
+    'clicking a dashboard row opens THAT task in the real composer — no shadow copy to edit');
+  $D('#cancelTaskBtn').click(); await sleep(150);
+
+  ok(dashErrs.length === 0, 'the whole dashboard session produced zero uncaught errors');
+
+  // The primary app window: wiring holds against the dirty real dataset.
+  if (!$('#calendar').hidden) { $('#calBtn').click(); await sleep(150); }
+  $('#dashBtn').click(); await sleep(260);
+  ok($('#dashboard').hidden === false && $('#calendar').hidden === true && !!doc.querySelector('.dash-greet'),
+    'main app: dashboard opens over the live multi-section dataset and renders');
+  const mainSnap = JSON.stringify(remMirror());
+  $('#dashBtn').click(); await sleep(180); $('#dashBtn').click(); await sleep(180);
+  ok(JSON.stringify(remMirror()) === mainSnap, 'main app: dashboard open/close left the mirror byte-identical');
+  $('#dashBtn').click(); await sleep(160);
+  ok($('#dashboard').hidden === true && $('#taskList').hidden === false, 'closing the dashboard returns to the list');
+  domD.window.close();
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

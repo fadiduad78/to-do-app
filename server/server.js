@@ -257,6 +257,11 @@ function coerceTask(raw, isTrash) {
   } else t.recurRule = null;
   t.recurAnchor = t.recurrence && typeof raw.recurAnchor === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.recurAnchor) ? raw.recurAnchor
     : (t.recurrence ? t.dueDate : null);
+  // Dashboard completion ledger — mirrored sanitize, same cap as the client.
+  t.completedAt = Number.isFinite(Number(raw.completedAt)) && Number(raw.completedAt) > 0 ? Number(raw.completedAt) : null;
+  t.completions = Array.isArray(raw.completions)
+    ? raw.completions.map((x) => Math.floor(Number(x))).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b).slice(-256)
+    : [];
   t.priority = raw.priority === 'low' || raw.priority === 'high' ? raw.priority : 'med';
   t.status = raw.status === 'completed' ? 'completed' : 'active';
   t.tags = Array.isArray(raw.tags)

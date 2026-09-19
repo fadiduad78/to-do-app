@@ -356,6 +356,15 @@
       : [];
     t.createdAt = Number(raw.createdAt) || now;
     t.updatedAt = Number(raw.updatedAt) || now;
+    // Completion ledger for the productivity dashboard: WHEN the last
+    // completion happened plus the capped history (a recurring task gains
+    // one entry per rolled occurrence — still ON this record, never a
+    // parallel data source). Additive: legacy rows simply have none.
+    t.completedAt = Number.isFinite(Number(raw.completedAt)) && Number(raw.completedAt) > 0
+      ? Number(raw.completedAt) : null;
+    t.completions = Array.isArray(raw.completions)
+      ? raw.completions.map((x) => Math.floor(Number(x))).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b).slice(-256)
+      : [];
     t.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : now;
     t.projectId = typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : null;
     // Calendar support: an optional "HH:MM" placement on the due date. The

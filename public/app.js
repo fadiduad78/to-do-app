@@ -40,6 +40,7 @@
     filterTabs: $('filterTabs'), tagChips: $('tagChips'),
     projectBar: $('projectBar'), projectDetail: $('projectDetail'),
     calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
+    dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
     fRecurrence: $('f-recurrence'), remRows: $('remRows'), addRemBtn: $('addRemBtn'),
     recurPanel: $('recurPanel'), rcEvery: $('rcEvery'), rcUnit: $('rcUnit'), rcDays: $('rcDays'), rcHint: $('rcHint'),
     taskList: $('taskList'), emptyState: $('emptyState'),
@@ -101,7 +102,8 @@
     const rec = await store.recover();
     S = rec.state;
     S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null,
-               cal: { open: false, view: 'month', anchor: '' } };
+               cal: { open: false, view: 'month', anchor: '' },
+               dash: { open: false } };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
@@ -466,15 +468,20 @@
     renderSettings();
     renderFooter();
     refreshDraftResumeUI();
-    // Calendar mode: the task list UI steps aside; the calendar is a view
-    // over the SAME in-memory state — no duplicate data anywhere.
+    // Calendar / Dashboard mode: the task list UI steps aside; both overlays
+    // are views over the SAME in-memory state — no duplicate data anywhere.
     const calOn = !!(S.ui && S.ui.cal.open);
-    els.calendar.hidden = !calOn;
-    els.calBtn.classList.toggle('on', calOn);
-    els.calBtn.setAttribute('aria-pressed', String(calOn));
-    if (calOn) {
+    const dashOn = !!(S.ui && S.ui.dash && S.ui.dash.open);
+    els.calendar.hidden = !calOn || dashOn;
+    els.calBtn.classList.toggle('on', calOn && !dashOn);
+    els.calBtn.setAttribute('aria-pressed', String(calOn && !dashOn));
+    els.dashboard.hidden = !dashOn;
+    els.dashBtn.classList.toggle('on', dashOn);
+    els.dashBtn.setAttribute('aria-pressed', String(dashOn));
+    if (calOn || dashOn) {
       for (const el of [els.filterTabs, els.tagChips, els.projectBar, els.projectDetail, els.trashBar, els.taskList, els.emptyState]) el.hidden = true;
-      renderCalendar();
+      if (dashOn) renderDashboard();
+      if (calOn && !dashOn) renderCalendar();
     } else {
       els.taskList.hidden = false;
     }
@@ -938,6 +945,10 @@
     if (t.status === 'completed') {
       t.status = 'active';
       t.updatedAt = now;
+      // Undoing a completion retracts its most recent ledger mark, so the
+      // dashboard never counts work the user just took back.
+      if (Array.isArray(t.completions) && t.completions.length) t.completions = t.completions.slice(0, -1);
+      t.completedAt = Array.isArray(t.completions) && t.completions.length ? t.completions[t.completions.length - 1] : null;
       ops.push({ store: STORES.tasks, op: 'put', value: t });
       remReviveSkipped(t.id, ops, now); // re-check reminders of the un-completed task
     } else if (t.recurrence) {
@@ -950,6 +961,7 @@
       if (adv) {
         t.status = 'active';
         t.updatedAt = now;
+        pushCompletion(t, now); // the occurrence WAS completed — the dashboard counts rolls
         ops.push({ store: STORES.tasks, op: 'put', value: t });
         toast('Completed this occurrence — next is ' + ((formatDue(adv.next) || {}).txt || adv.next) + (adv.rearmed ? ' · ' + adv.rearmed + ' reminder(s) re-armed' : ''));
       } else {
@@ -966,6 +978,7 @@
 
   /** The plain completion path: mark done + skip every pending schedule. */
   function finishComplete(t, ops, now) {
+    pushCompletion(t, now); // timestamp for the dashboard ledger (rides the record)
     t.status = 'completed';
     t.updatedAt = now;
     ops.push({ store: STORES.tasks, op: 'put', value: t });
@@ -1975,7 +1988,7 @@
   function wireCalendar() {
     els.calBtn.onclick = () => {
       S.ui.cal.open = !S.ui.cal.open;
-      if (S.ui.cal.open) S.ui.cal.anchor = ymd(new Date());
+      if (S.ui.cal.open) { S.ui.cal.anchor = ymd(new Date()); S.ui.dash.open = false; }
       renderAll();
       if (S.ui.cal.open) els.calendar.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
@@ -2560,6 +2573,240 @@
     else if (act === 'stop') await stopRepeating(t);
   }
 
+  /* ------------------------- Productivity dashboard -------------------------
+   * NOT a data source. Every tile, bar and row is derived at render time from
+   * the same S.tasks / S.projects / S.reminders arrays the list and calendar
+   * use; the dashboard itself never persists anything. Its two inputs that
+   * were added WITH it — task.completedAt (last completion) and
+   * task.completions (capped ledger, one entry per completion/roll) — live on
+   * the task record like every other field: they ride commits, sync, trash,
+   * restore, export and import for free.
+   * -------------------------------------------------------------------------*/
+
+  function mondayStart(nowMs) {
+    const d = new Date(nowMs);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+  function dueInstant(t) {
+    if (!t.dueDate) return null;
+    const d = ymdParse(t.dueDate);
+    if (t.dueTime) { const hm = String(t.dueTime).split(':'); d.setHours(Number(hm[0]) || 0, Number(hm[1]) || 0, 0, 0); }
+    else d.setHours(23, 59, 59, 999); // all-day: overdue only once the day is over
+    return d.getTime();
+  }
+  const dashStamps = (t) => (Array.isArray(t.completions) && t.completions.length ? t.completions : []);
+  function pushCompletion(t, now) {
+    const arr = (Array.isArray(t.completions) ? t.completions.slice() : []);
+    arr.push(now);
+    if (arr.length > 256) arr.splice(0, arr.length - 256); // bounded — no unbounded history
+    t.completions = arr;
+    t.completedAt = now;
+  }
+
+  function dashModel(nowMs) {
+    const now = nowMs || Date.now();
+    const today = ymd(new Date(now));
+    const wkStart = mondayStart(now);
+    const live = S.tasks; // trash excluded BY CONSTRUCTION — deleted rests; restore returns it
+    const act = live.filter((t) => t.status !== 'completed');
+    const done = live.filter((t) => t.status === 'completed');
+    const over = act.filter((t) => { const di = dueInstant(t); return di !== null && di < now; });
+    const overIds = new Set(over.map((t) => t.id));
+    const dueTodayOpen = act.filter((t) => t.dueDate === today && !overIds.has(t.id));
+    let completedToday = 0;
+    const stampDays = new Set();
+    const weekDays = {};
+    for (let i = 0; i < 7; i++) weekDays[ymd(new Date(wkStart + i * 86400e3))] = 0;
+    for (const t of live) {
+      for (const ts of dashStamps(t)) {
+        const ds = ymd(new Date(ts));
+        if (ds === today) completedToday++;
+        stampDays.add(ds);
+        if (ts >= wkStart && weekDays[ds] !== undefined) weekDays[ds]++;
+      }
+    }
+    let completedWeek = 0;
+    for (const k in weekDays) completedWeek += weekDays[k];
+    const createdWeek = live.filter((t) => Number(t.createdAt) >= wkStart).length;
+    // Streak: consecutive days with ≥1 completion, counted back from today.
+    // A day still in progress (nothing done yet today) does not break the
+    // run — it expires at midnight, not at breakfast.
+    let streak = 0;
+    {
+      const cur = new Date(now);
+      if (!stampDays.has(today)) cur.setDate(cur.getDate() - 1);
+      for (;;) { const ds = ymd(cur); if (!stampDays.has(ds)) break; streak++; cur.setDate(cur.getDate() - 1); }
+    }
+    // Today's board, one bucket per task (priority order): overdue first,
+    // then high-priority (due today or unscheduled), then the rest of
+    // today, then the dateless backlog. A high task due tomorrow is
+    // tomorrow's problem — it belongs to Upcoming instead.
+    const g = { overdue: [], high: [], scheduled: [], unscheduled: [] };
+    for (const t of act) {
+      if (overIds.has(t.id)) g.overdue.push(t);
+      else if (t.priority === 'high' && (!t.dueDate || t.dueDate === today)) g.high.push(t);
+      else if (t.dueDate === today) g.scheduled.push(t);
+      else if (!t.dueDate) g.unscheduled.push(t);
+    }
+    g.overdue.sort((a, b) => (dueInstant(a) || 0) - (dueInstant(b) || 0));
+    const denom = completedToday + dueTodayOpen.length + over.length;
+    const pct = denom ? Math.round((completedToday / denom) * 100) : 0;
+    const upcoming = act.filter((t) => t.dueDate && t.dueDate > today)
+      .sort((a, b) => (dueInstant(a) || 0) - (dueInstant(b) || 0)).slice(0, 5);
+    const rem = S.reminders
+      .filter((r) => r.status === 'pending' && r.enabled !== false && byId(r.taskId))
+      .sort((a, b) => a.triggerAt - b.triggerAt);
+    const rate = done.length + act.length ? Math.round((done.length / (done.length + act.length)) * 100) : null;
+    return { now, today, wkStart, completedToday, dueTodayOpen, over, g, denom, pct, streak,
+      completedWeek, createdWeek, upcoming, rem, doneCount: done.length, rate, weekDays };
+  }
+
+  function dashRel(ms) {
+    if (ms <= 0) return 'now';
+    const min = Math.round(ms / 60000);
+    if (min < 1) return 'in <1 min';
+    if (min < 90) return 'in ' + min + ' min';
+    const h = Math.floor(min / 60);
+    if (h < 24) return 'in ' + h + ' h ' + (min % 60) + ' min';
+    return 'in ' + Math.round(h / 24) + ' days';
+  }
+  function dashDayLabel(ds, nowMs) {
+    if (ds === ymd(new Date(nowMs))) return 'Today';
+    const tm = new Date(nowMs); tm.setDate(tm.getDate() + 1);
+    if (ds === ymd(tm)) return 'Tomorrow';
+    return ymdParse(ds).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
+  function renderDashboard() {
+    if (!els.dashHost) return;
+    const m = dashModel();
+    const now = m.now;
+    const h24 = new Date(now).getHours();
+    const greet = h24 < 5 ? 'Good night' : h24 < 12 ? 'Good morning' : h24 < 17 ? 'Good afternoon' : h24 < 21 ? 'Good evening' : 'Good night';
+    const dateLine = new Date(now).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    const tile = (n, label, cls) => '<div class="dash-tile' + (cls ? ' ' + cls : '') + '"><b>' + n + '</b><span>' + label + '</span></div>';
+
+    const drow = (t, tag) =>
+      '<div class="dash-row" data-drow="' + esc(t.id) + '">' +
+      '<button class="dash-check" type="button" data-dact="done" aria-label="Complete" title="' +
+        (t.recurrence ? 'Complete this occurrence — rolls to the next date' : 'Complete') + '">✓</button>' +
+      '<span class="dash-rtitle">' + esc(truncate(t.title, 52)) + '</span>' +
+      '<span class="dash-rmeta">' + (tag ? '<b class="' + tag + '">' + (tag === 'late' ? 'overdue' : 'high') + '</b>' : '') +
+      (t.dueDate ? '<span>' + esc(((formatDue(t.dueDate, false) || {}).txt) || t.dueDate) + (t.dueTime ? ' ' + esc(t.dueTime) : '') + '</span>' : '') +
+      (t.recurrence ? '<span title="' + esc(recurLabel(t)) + '">↻</span>' : '') +
+      '</span></div>';
+    const groupSec = (name, list, cls, empty) =>
+      '<div class="dash-gname' + (cls ? ' ' + cls : '') + '">' + name + (list.length ? ' · ' + list.length : '') + '</div>' +
+      (list.length ? list.map((t) => drow(t, cls === 'overdue' ? 'late' : cls === 'high' ? 'hp' : '')).join('') : (empty || ''));
+    const todayCard =
+      groupSec('Overdue', m.g.overdue, 'overdue', '<div class="dash-empty">Nothing overdue — you are keeping up.</div>') +
+      groupSec('High priority', m.g.high, 'high', '') +
+      groupSec('Scheduled for today', m.g.scheduled, '', '') +
+      groupSec('Unscheduled', m.g.unscheduled, '', '<div class="dash-empty">No dateless backlog.</div>');
+    const hasToday = m.g.overdue.length + m.g.high.length + m.g.scheduled.length + m.g.unscheduled.length;
+
+    const BLOCKS = 16;
+    const filled = Math.round((m.pct / 100) * BLOCKS);
+    const progCard =
+      '<div class="dash-prog" aria-label="' + m.pct + ' percent complete">' +
+      '\u2588'.repeat(filled) + '\u2591'.repeat(BLOCKS - filled) + ' ' + m.pct + '%</div>' +
+      (m.denom ? '<div class="dash-prog-num">' + m.completedToday + ' / ' + m.denom + ' completed</div>'
+               : '<div class="dash-prog-num">Nothing scheduled today — the day is wide open 🌿</div>');
+
+    const stat = (label, value) => '<div class="dash-stat"><b>' + value + '</b><span>' + label + '</span></div>';
+    const statsCard =
+      stat('completed today', m.completedToday) + stat('completed this week', m.completedWeek) +
+      stat('created this week', m.createdWeek) + stat('overdue', m.over.length) +
+      stat('completion rate', m.rate === null ? '—' : m.rate + '%') +
+      stat('current streak', m.streak + (m.streak === 1 ? ' day' : ' days'));
+
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(m.wkStart + i * 86400e3);
+      const ds = ymd(d);
+      days.push({ ds, n: m.weekDays[ds] || 0, lbl: 'MTWTFSS'[(d.getDay() + 6) % 7], today: ds === m.today });
+    }
+    const maxN = Math.max(1, ...days.map((d) => d.n));
+    const chartCard = '<div class="dash-chart">' + days.map((d) =>
+      '<div class="dash-col' + (d.today ? ' today' : '') + '" title="' +
+      ymdParse(d.ds).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' — ' + d.n + ' completed">' +
+      '<span class="dash-cn">' + d.n + '</span>' +
+      '<div class="dash-bar" style="height:' + (d.n ? Math.max(8, Math.round((d.n / maxN) * 72)) : 2) + 'px"></div>' +
+      '<span class="dash-cl">' + d.lbl + '</span></div>').join('') + '</div>';
+
+    const pj = (S.projects || []).filter((p) => p.status !== 'completed');
+    const projCard = pj.length ? pj.map((p) => {
+      const inP = S.tasks.filter((x) => x.projectId === p.id);
+      const dn = inP.filter((x) => x.status === 'completed').length;
+      const pc = inP.length ? Math.round((dn / inP.length) * 100) : 0;
+      return '<div class="dash-prow"><span class="dash-picon">' + esc(p.icon || '📁') + '</span>' +
+        '<span class="dash-rtitle">' + esc(truncate(p.name, 26)) + '</span>' +
+        '<span class="dash-mbar"><i style="width:' + pc + '%"></i></span><span class="dash-pn">' + dn + '/' + inP.length + '</span></div>';
+    }).join('') : '<div class="dash-empty">No active projects yet — group related tasks in the composer.</div>';
+
+    const upCard = m.upcoming.length ? m.upcoming.map((t) =>
+      '<div class="dash-row" data-drow="' + esc(t.id) + '"><span class="dash-when">' + esc(dashDayLabel(t.dueDate, now)) + '</span>' +
+      '<span class="dash-rtitle">' + esc(truncate(t.title, 44)) + '</span><span class="dash-rmeta">' +
+      (t.dueTime ? '<span>' + esc(t.dueTime) + '</span>' : '') + (t.recurrence ? '<span title="' + esc(recurLabel(t)) + '">↻</span>' : '') +
+      '</span></div>').join('') : '<div class="dash-empty">Nothing on the horizon beyond today 🌤️</div>';
+
+    const REM_LBL = {};
+    for (const [k, v] of REM_TYPE_LABELS) REM_LBL[k] = v;
+    const next = m.rem.find((r) => r.triggerAt > now) || m.rem[0] || null;
+    const remCard = next
+      ? ('<div class="dash-next"><span class="k">Next reminder</span><br>' +
+         '<b>' + esc((byId(next.taskId) || {}).title || 'a task') + '</b> <span class="when">' + dashRel(next.triggerAt - now) + '</span>' +
+         '<div class="lead">' + esc(REM_LBL[next.reminderType] || 'custom time') + (next.triggerAt <= now ? ' — it is due now' : '') + '</div></div>' +
+        (m.rem.length > 1 ? m.rem.slice(1, 5).map((r) =>
+          '<div class="dash-rrow"><span class="dash-rtitle">' + esc(truncate((byId(r.taskId) || {}).title || '', 40)) + '</span>' +
+          '<span class="when2">' + dashRel(r.triggerAt - now) + '</span></div>').join('') : ''))
+      : '<div class="dash-empty">No reminders armed — add lead times on any task.</div>';
+
+    els.dashHost.innerHTML =
+      '<div class="dash-hero">' +
+        '<div class="dash-hero-row"><div><div class="dash-greet">' + greet + '</div>' +
+        '<div class="dash-date">' + esc(dateLine) + '</div></div>' +
+        '<div class="dash-streak' + (m.streak > 0 ? ' hot' : '') + '" title="Consecutive days with at least one completion">' +
+        (m.streak > 0 ? '🔥 ' + m.streak + '-day streak' : 'no streak yet — check something off today') + '</div></div>' +
+        '<div class="dash-tiles">' +
+          tile(m.completedToday, 'done today') +
+          tile(m.dueTodayOpen.length, 'left today') +
+          tile(m.over.length, 'overdue', m.over.length ? 'warn' : '') +
+          tile(m.streak, 'day streak', m.streak ? 'hot' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="dash-card dash-today"><h3>Today</h3>' +
+        (hasToday ? todayCard : '<div class="dash-empty">Nothing on today\u2019s board. New task from the composer, or browse the unscheduled backlog below.</div>') +
+      '</div>' +
+      '<div class="dash-card"><h3>Progress</h3>' + progCard + '</div>' +
+      '<div class="dash-card"><h3>Statistics</h3><div class="dash-stats">' + statsCard + '</div></div>' +
+      '<div class="dash-card"><h3>This week — completions by day</h3>' + chartCard + '</div>' +
+      '<div class="dash-card"><h3>Projects</h3>' + projCard + '</div>' +
+      '<div class="dash-card"><h3>Upcoming</h3>' + upCard + '</div>' +
+      '<div class="dash-card"><h3>Reminders</h3>' + remCard + '</div>';
+  }
+
+  function wireDashboard() {
+    els.dashBtn.onclick = () => {
+      S.ui.dash.open = !S.ui.dash.open;
+      if (S.ui.dash.open) S.ui.cal.open = false; // the two overlays are exclusive
+      renderAll();
+      if (S.ui.dash.open) {
+        els.dashboard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // Aging matters here ("in 42 min"): refresh quietly while it is open.
+        if (!S.ui.dash.timer) S.ui.dash.timer = setInterval(() => { if (S.ui.dash.open) renderDashboard(); }, 60000);
+      }
+    };
+    els.dashHost.addEventListener('click', (e) => {
+      const chk = e.target.closest('[data-dact="done"]');
+      if (chk) { const host = chk.closest('[data-drow]'); if (host) toggleTask(host.getAttribute('data-drow')); return; }
+      const rw = e.target.closest('[data-drow]');
+      if (rw && byId(rw.getAttribute('data-drow'))) openComposer({ mode: 'edit', taskId: rw.getAttribute('data-drow') });
+    });
+  }
+
   /* --------------------------- Filters & search --------------------------- */
 
   async function setFilterMode(m) {
@@ -2938,6 +3185,7 @@
 
     // Calendar module (view over tasks; keyboard + drag handlers inside)
     wireCalendar();
+    wireDashboard();
 
     // Follow system theme changes while in auto mode
     if (window.matchMedia) {

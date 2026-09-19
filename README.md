@@ -67,6 +67,17 @@ if the server is unreachable, every original guarantee still holds.
   completes for good. Recurrence rides on the task record itself, so
   reminders, trash & restore, calendar, notifications, import/export, backup
   and sync keep working with no special cases.
+- **Productivity dashboard** (📊 in the toolbar): greeting + date, tiles for
+  done-today / left-today / overdue / current streak, a *Today* board grouped
+  into **overdue → high priority → scheduled → unscheduled**, an ASCII
+  progress bar (*“Today's Progress ██████░░ 75% · 6 / 8 completed”*), the six
+  headline statistics (completed today/this week, created this week, overdue,
+  completion rate, streak), a Mon–Sun completions chart, project progress
+  rows, upcoming tasks and the next reminder with its lead time (*“Study
+  Python — in 42 min”*). It is **not a data source** — every number is
+  derived at render time from the same task/project/reminder records;
+  checking a task off on the dashboard calls the very same `toggleTask` the
+  list row uses, and opening/closing the view writes zero bytes.
 - **Installable as a PWA** (`manifest.webmanifest` + generated launcher icons
   + theme-color): on Android (and iOS when added to Home Screen) the installed
   app keeps the service worker alive for notification delivery, and the
@@ -155,6 +166,44 @@ Semantics, by design:
 - **Horizon.** A rule that yields no date within ~10 years completes the task
   for good (*"no future occurrence within 10 years, marked done."*) rather
   than storing a broken record.
+
+## Productivity dashboard
+
+A view, not a database: `dashModel()` reads `S.tasks`, `S.projects` and
+`S.reminders` on every render and the whole page is plain derived HTML — the
+only persistent thing it introduced lives **on the task record**:
+
+| Field | Meaning |
+|---|---|
+| `completedAt` | when the last completion happened (set by complete **and** by a recurring roll; undo pops the newest ledger entry and rewinds this pointer to match) |
+| `completions` | capped ledger (256 most recent stamps, oldest pruned) — a recurring task gains one entry per occurrence completed, which is what makes streaks honest |
+
+Definitions the dashboard commits to (all pinned by **§19 of
+`server/test-ui.mjs`** against a seeded store):
+
+- **done today** = ledger stamps falling on today (rolls included);
+  **left today** = open tasks due today whose instant hasn't passed;
+  **overdue** = open tasks whose due instant (23:59 for all-day) is past.
+- **streak** = consecutive days with ≥1 completion, counted back from today;
+  a day still in progress doesn't break yesterday's run.
+- **Today's Progress %** = done-today ÷ (done-today + left-today + overdue),
+  bar drawn as 16 blocks, `█` count = round(pct·16/100).
+- **this week** = Monday 00:00 → now (charts show Mon–Sun, future days at 0).
+- **completion rate** = all-time `completed ÷ (completed + active)` from the
+  live board only — trash is excluded by construction everywhere, and
+  restoring a task brings its ledger with it.
+- **Upcoming** = the 5 nearest open tasks dated after today; **Next
+  reminder** = the earliest *pending* reminder on a live task (fired,
+  disabled and orphaned records filtered out), aged by a 60 s ticker while
+  open so “in 42 min” doesn't lie.
+- Bucket rule for *Today*: each open task lands in exactly one group —
+  overdue first, then high-priority (due today **or** dateless), then the
+  rest of today, then the dateless backlog. Tasks due on later days are
+  Upcoming, not Today.
+
+Old data degrades honestly: completions made before this feature have no
+ledger, so they count toward totals and the completion rate but not toward
+per-day tiles, streaks or the chart.
 
 ## Where your data is stored
 
