@@ -171,7 +171,7 @@ function bucketFor(username) {
   if (!b) {
     b = {
       username,
-      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], projects: [], tombstones: {} },
+      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], projects: [], subtasks: [], tombstones: {} },
       saveTimer: null, loaded: false, ready: null,
       sse: new Set(),
       sbDirty: false, sbRunning: false, sbDelay: 4000, sbLastOk: 0, sbLastError: '',
@@ -275,6 +275,14 @@ function normalizeState(raw) {
       if (p && !seenP.has(p.id)) { seenP.add(p.id); projects.push(p); }
     }
   }
+  const subtasks = [];
+  {
+    const seenS = new Set();
+    for (const r of (Array.isArray(raw.subtasks) ? raw.subtasks : [])) {
+      const s = coerceSubtask(r);
+      if (s && !seenS.has(s.id)) { seenS.add(s.id); subtasks.push(s); }
+    }
+  }
   return {
     rev: Number.isFinite(Number(raw.rev)) ? Number(raw.rev) : 0,
     savedAt: Number(raw.savedAt) || 0,
@@ -282,6 +290,7 @@ function normalizeState(raw) {
     tasks: pick(raw.tasks, false),
     trash: pick(raw.trash, true),
     projects,
+    subtasks,
     tombstones,
   };
 }
@@ -304,6 +313,23 @@ function coerceProject(raw) {
   p.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : p.createdAt;
   p.deletedAt = Number.isFinite(Number(raw.deletedAt)) && Number(raw.deletedAt) > 0 ? Number(raw.deletedAt) : null;
   return p;
+}
+
+/** Lenient subtask coercion — mirrors storage.js coerceSubtask. */
+function coerceSubtask(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (typeof raw.id !== 'string' || !raw.id) return null;
+  if (typeof raw.parentTaskId !== 'string' || !raw.parentTaskId) return null;
+  if (typeof raw.title !== 'string' || !raw.title.trim()) return null;
+  const now = Date.now();
+  const s = { ...raw };
+  s.title = raw.title.trim().slice(0, 200);
+  s.completed = !!raw.completed;
+  s.completedAt = Number.isFinite(Number(raw.completedAt)) && Number(raw.completedAt) > 0 ? Number(raw.completedAt) : (s.completed ? now : null);
+  s.position = Number.isFinite(Number(raw.position)) ? Number(raw.position) : 0;
+  s.createdAt = Number(raw.createdAt) || now;
+  s.updatedAt = Number(raw.updatedAt) || s.createdAt;
+  return s;
 }
 
 /** Trash retention + tombstone TTL — mirrors the client's rules server-side. */
@@ -350,12 +376,13 @@ function mergeRecords(localArr, remoteArr) {
  * restore) only removes copies in the store it left. A tombstone kills records
  * not newer than it — a later edit/restore legitimately revives a record.
  */
-function applyTombstones(tasks, trash, projects, tombstones) {
+function applyTombstones(tasks, trash, projects, subtasks, tombstones) {
   const kill = (arr, scope) => arr.filter((r) => !(tombstones[scope + ':' + r.id] >= (r.updatedAt || 0)));
   return {
     tasks: kill(tasks, 'tasks'),
     trash: kill(trash, 'trash'),
     projects: kill(projects || [], 'projects'),
+    subtasks: kill(subtasks || [], 'subtasks'),
   };
 }
 
@@ -374,6 +401,7 @@ function ingest(b, body) {
     tasks: (body.state && body.state.tasks) || [],
     trash: (body.state && body.state.trash) || [],
     projects: (body.state && body.state.projects) || [],
+    subtasks: (body.state && body.state.subtasks) || [],
     tombstones: body.tombstones || {},
   });
 
@@ -387,23 +415,27 @@ function ingest(b, body) {
     for (const t of incoming.tasks) delete newTombstones['tasks:' + t.id];
     for (const t of incoming.trash) delete newTombstones['trash:' + t.id];
     for (const p of incoming.projects) delete newTombstones['projects:' + p.id];
+    for (const s of incoming.subtasks) delete newTombstones['subtasks:' + s.id];
     merged = {
       settings: incoming.settings,
       tasks: incoming.tasks,
       trash: enforceLiveWins(incoming.tasks, incoming.trash),
       projects: incoming.projects,
+      subtasks: incoming.subtasks,
       savedAt: Math.max(b.state.savedAt, incoming.savedAt || Date.now()),
     };
   } else {
     const tasks = mergeRecords(b.state.tasks, incoming.tasks);
     const trash = mergeRecords(b.state.trash, incoming.trash);
     const projects = mergeRecords(b.state.projects, incoming.projects);
-    const alive = applyTombstones(tasks, trash, projects, newTombstones);
+    const subtasks = mergeRecords(b.state.subtasks, incoming.subtasks);
+    const alive = applyTombstones(tasks, trash, projects, subtasks, newTombstones);
     merged = {
       settings: (incoming.savedAt || 0) >= b.state.savedAt ? incoming.settings : b.state.settings,
       tasks: alive.tasks,
       trash: enforceLiveWins(alive.tasks, alive.trash),
       projects: alive.projects,
+      subtasks: alive.subtasks,
       savedAt: Math.max(b.state.savedAt, incoming.savedAt || 0) || Date.now(),
     };
     for (const t of merged.tasks) {
@@ -418,10 +450,14 @@ function ingest(b, body) {
       const k = 'projects:' + p.id;
       if (newTombstones[k] && (p.updatedAt || 0) > newTombstones[k]) delete newTombstones[k];
     }
+    for (const s of merged.subtasks) {
+      const k = 'subtasks:' + s.id;
+      if (newTombstones[k] && (s.updatedAt || 0) > newTombstones[k]) delete newTombstones[k];
+    }
   }
 
-  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.projects, b.state.settings]);
-  const after = JSON.stringify([merged.tasks, merged.trash, merged.projects, merged.settings]);
+  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.projects, b.state.subtasks, b.state.settings]);
+  const after = JSON.stringify([merged.tasks, merged.trash, merged.projects, merged.subtasks, merged.settings]);
   const changed = before !== after;
 
   b.state = { ...b.state, ...merged, tombstones: newTombstones, rev: b.state.rev + 1 };
@@ -695,7 +731,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/config') {
       return sendJSON(res, 200, {
-        app: 'zerotodo-server', version: 4, authRequired: authRequired(),
+        app: 'zerotodo-server', version: 5, authRequired: authRequired(),
         storage: sbEnabled() ? 'supabase (Postgres) + local cache' : 'local file only',
       });
     }

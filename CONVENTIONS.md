@@ -16,8 +16,10 @@ It flows through four layers, all of which already know about every field:
 | Server disk | `server/server.js` | one JSON state doc per user (file or Supabase row) |
 
 **Never add a second store, a second doc, or a second table for a new
-record type.** Add a field/array to the existing state (that's how Projects
-shipped: `projects: []` + `tasks[].projectId`).
+record type.** Add a field/array to the existing state — that's how both
+extra record types shipped: Projects (`projects: []` + `tasks[].projectId`)
+and Subtasks (`subtasks: []` flat records with `parentTaskId`; the UI
+supports one nesting level, subtree walks are visited-set cycle-safe).
 
 ## 2. Adding a record type or field — the exact checklist
 

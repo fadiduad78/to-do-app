@@ -45,10 +45,11 @@
   /* ----------------------------- Constants ------------------------------ */
 
   const DB_NAME = 'zerotodo';
-  const DB_VERSION = 2; // v2 adds the 'projects' store (idempotent upgrade below)
+  const DB_VERSION = 3; // v2 added 'projects', v3 adds 'subtasks' (idempotent upgrades below)
   const STORE_TASKS = 'tasks';
   const STORE_TRASH = 'trash';
   const STORE_PROJECTS = 'projects';
+  const STORE_SUBTASKS = 'subtasks';
   const STORE_META = 'meta';
 
   // Versioned localStorage keys: a future format can ship a *_v2 key without
@@ -59,7 +60,7 @@
 
   // The data-shape version written by this app. When you change the task or
   // settings shape, bump this and add a MIGRATIONS[oldVersion] step below.
-  const SCHEMA_VERSION = 2;
+  const SCHEMA_VERSION = 3;
 
   // Trash retention: items are auto-purged 30 days after being trashed.
   const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -76,6 +77,8 @@
     lastReminderDismissedAt: null,
     filterMode: 'all',           // 'all' | 'active' | 'completed' | 'trash'
     filterTag: null,
+    filterProject: null,        // active project filter (like filterTag)
+    subtaskAutoComplete: false, // "complete parent when all subtasks are done"
   });
 
   /* ----------------------------- Migrations ----------------------------- */
@@ -118,8 +121,14 @@
         )),
       };
     },
-    // Future: 2(payload) { return { ...payload, /* transform */ }; }
-    // …and bump SCHEMA_VERSION to 3.
+    // v2 → v3: subtasks. Entirely additive — a task with NO subtasks is
+    // simply a task nothing references via parentTaskId, so all existing data
+    // upgrades by defaulting the array.
+    2(payload) {
+      return { ...payload, subtasks: Array.isArray(payload.subtasks) ? payload.subtasks : [] };
+    },
+    // Future: 3(payload) { return { ...payload, /* transform */ }; }
+    // …and bump SCHEMA_VERSION to 4.
   };
 
   /**
@@ -180,6 +189,7 @@
         if (!db.objectStoreNames.contains(STORE_TRASH)) db.createObjectStore(STORE_TRASH, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(STORE_META)) db.createObjectStore(STORE_META, { keyPath: 'key' });
         if (!db.objectStoreNames.contains(STORE_PROJECTS)) db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains(STORE_SUBTASKS)) db.createObjectStore(STORE_SUBTASKS, { keyPath: 'id' });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB.'));
@@ -273,6 +283,36 @@
   }
 
   /**
+   * Coerce a subtask record. Subtasks are FLAT siblings of tasks in the same
+   * state document (per-record sync/merge — see CONVENTIONS.md). The UI
+   * supports ONE level (task → subtasks); the record shape itself is
+   * parent-agnostic so a future level is additive, and every subtree walk
+   * carries a visited set, so malformed deep/cyclic data can never loop.
+   * Subtasks have no trash of their own: a delete is tombstoned (UI offers an
+   * 8 s undo); deleting the PARENT leaves subtasks untouched so restoring the
+   * parent from trash re-attaches them, and only a PURGE cascades them away.
+   */
+  function coerceSubtask(raw, into) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    if (typeof raw.id !== 'string' || !raw.id) return false;
+    if (typeof raw.parentTaskId !== 'string' || !raw.parentTaskId) return false;
+    if (typeof raw.title !== 'string' || !raw.title.trim()) return false;
+    const now = Date.now();
+    const s = { ...raw };
+    s.parentTaskId = raw.parentTaskId;
+    s.title = raw.title.trim().slice(0, 200);
+    s.completed = !!raw.completed;
+    s.completedAt = Number.isFinite(Number(raw.completedAt)) && Number(raw.completedAt) > 0
+      ? Number(raw.completedAt)
+      : (s.completed ? now : null);
+    s.position = Number.isFinite(Number(raw.position)) ? Number(raw.position) : 0;
+    s.createdAt = Number(raw.createdAt) || now;
+    s.updatedAt = Number(raw.updatedAt) || s.createdAt;
+    into.push(s);
+    return true;
+  }
+
+  /**
    * Lenient validation of a full payload (used for the localStorage backup,
    * import files, and recovery). Returns { ok, schemaVersion, savedAt,
    * tasks, trash, settings }. Records that fail coercion are silently
@@ -289,11 +329,13 @@
       tasks: [],
       trash: [],
       projects: [],
+      subtasks: [],
       settings: null,
     };
     for (const raw of data.tasks) coerceTask(raw, out.tasks);
     if (Array.isArray(data.trash)) for (const raw of data.trash) coerceTask(raw, out.trash, true);
     if (Array.isArray(data.projects)) for (const raw of data.projects) coerceProject(raw, out.projects);
+    if (Array.isArray(data.subtasks)) for (const raw of data.subtasks) coerceSubtask(raw, out.subtasks);
     if (data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) out.settings = data.settings;
     return out;
   }
@@ -320,6 +362,13 @@
       if (coerceProject(raw, projects)) seenProj.add(raw.id);
       else dropped++;
     }
+    const seenSub = new Set();
+    const subtasks = [];
+    for (const raw of (payload && Array.isArray(payload.subtasks) ? payload.subtasks : [])) {
+      if (seenSub.has(raw && raw.id)) { dropped++; continue; }
+      if (coerceSubtask(raw, subtasks)) seenSub.add(raw.id);
+      else dropped++;
+    }
     const seenTrash = new Set();
     for (const raw of (payload && Array.isArray(payload.trash) ? payload.trash : [])) {
       if (seen.has(raw && raw.id) || seenTrash.has(raw && raw.id)) { dropped++; continue; }
@@ -330,6 +379,7 @@
       tasks,
       trash,
       projects,
+      subtasks,
       settings: (payload && payload.settings && typeof payload.settings === 'object') ? payload.settings : {},
       dropped,
     };
@@ -356,6 +406,11 @@
       const other = idbProj.get(p.id);
       if (!other || (p.updatedAt || 0) > (other.updatedAt || 0)) return true;
     }
+    const idbSub = new Map((idb.subtasks || []).map((s) => [s.id, s]));
+    for (const s of backup.subtasks || []) {
+      const other = idbSub.get(s.id);
+      if (!other || (s.updatedAt || 0) > (other.updatedAt || 0)) return true;
+    }
     return false;
   }
 
@@ -381,7 +436,7 @@
     let idbAvailable = null;   // null = unknown, true/false after first attempt
     // The authoritative in-memory state. The UI mutates it directly (via
     // store.state); commit() persists it. A failed write never touches it.
-    const memory = { tasks: [], trash: [], projects: [], settings: { ...DEFAULT_SETTINGS } };
+    const memory = { tasks: [], trash: [], projects: [], subtasks: [], settings: { ...DEFAULT_SETTINGS } };
     let lastSavedAt = 0;
     let dirty = false;         // true while memory is ahead of disk (write failed)
     let resyncing = false;
@@ -409,13 +464,14 @@
 
     async function loadFromIDB() {
       const d = await ensureDB();
-      const data = await readTx(d, [STORE_TASKS, STORE_TRASH, STORE_PROJECTS, STORE_META], (tx) => {
+      const data = await readTx(d, [STORE_TASKS, STORE_TRASH, STORE_PROJECTS, STORE_SUBTASKS, STORE_META], (tx) => {
         const t = reqToPromise(tx.objectStore(STORE_TASKS).getAll());
         const tr = reqToPromise(tx.objectStore(STORE_TRASH).getAll());
         const pj = reqToPromise(tx.objectStore(STORE_PROJECTS).getAll());
+        const sb = reqToPromise(tx.objectStore(STORE_SUBTASKS).getAll());
         const m = reqToPromise(tx.objectStore(STORE_META).get('meta'));
-        return Promise.all([t, tr, pj, m]).then(([tasks, trash, projects, meta]) => ({
-          tasks, trash, projects, meta: meta ? meta.value : null,
+        return Promise.all([t, tr, pj, sb, m]).then(([tasks, trash, projects, subtasks, meta]) => ({
+          tasks, trash, projects, subtasks, meta: meta ? meta.value : null,
         }));
       });
       return data;
@@ -444,6 +500,7 @@
         tasks: memory.tasks,
         trash: memory.trash,
         projects: memory.projects,
+        subtasks: memory.subtasks,
       });
     }
 
@@ -466,6 +523,7 @@
           tasks: shape.tasks,
           trash: shape.trash,
           projects: shape.projects,
+          subtasks: shape.subtasks,
           settings: shape.settings || {},
         },
         error: null,
@@ -508,7 +566,7 @@
      */
     function validateOp(op) {
       if (!op || typeof op !== 'object') throw new Error('invalid operation');
-      if (op.store !== STORE_TASKS && op.store !== STORE_TRASH && op.store !== STORE_PROJECTS && op.store !== STORE_META) {
+      if (op.store !== STORE_TASKS && op.store !== STORE_TRASH && op.store !== STORE_PROJECTS && op.store !== STORE_SUBTASKS && op.store !== STORE_META) {
         throw new Error('unknown store: ' + op.store);
       }
       if (op.op === 'put') {
@@ -519,6 +577,9 @@
         } else if (op.store === STORE_PROJECTS) {
           const sink = [];
           if (!coerceProject(v, sink)) throw new Error('project failed validation (needs a string id)');
+        } else if (op.store === STORE_SUBTASKS) {
+          const sink = [];
+          if (!coerceSubtask(v, sink)) throw new Error('subtask failed validation (needs string id + parentTaskId + title)');
         } else {
           // Reuse the same coercion rules as recovery: no id/title → refuse.
           const sink = [];
@@ -614,15 +675,18 @@
         for (const t of memory.tasks) ops.push({ store: STORE_TASKS, op: 'put', value: t });
         for (const t of memory.trash) ops.push({ store: STORE_TRASH, op: 'put', value: t });
         for (const p of memory.projects) ops.push({ store: STORE_PROJECTS, op: 'put', value: p });
+        for (const s of memory.subtasks) ops.push({ store: STORE_SUBTASKS, op: 'put', value: s });
         if (idbAvailable !== false) {
           try {
             const disk = await loadFromIDB();
             const taskIds = new Set(memory.tasks.map((t) => t.id));
             const trashIds = new Set(memory.trash.map((t) => t.id));
             const projIds = new Set(memory.projects.map((p) => p.id));
+            const subIds = new Set(memory.subtasks.map((s) => s.id));
             for (const t of disk.tasks) if (!taskIds.has(t.id)) ops.push({ store: STORE_TASKS, op: 'delete', key: t.id });
             for (const t of disk.trash) if (!trashIds.has(t.id)) ops.push({ store: STORE_TRASH, op: 'delete', key: t.id });
             for (const p of disk.projects || []) if (!projIds.has(p.id)) ops.push({ store: STORE_PROJECTS, op: 'delete', key: p.id });
+            for (const s of disk.subtasks || []) if (!subIds.has(s.id)) ops.push({ store: STORE_SUBTASKS, op: 'delete', key: s.id });
           } catch (_) { /* disk unreadable — re-putting everything is still best effort */ }
         }
         return await commit(ops, { isResync: true });
@@ -694,6 +758,7 @@
             tasks: idbData.tasks,
             trash: idbData.trash,
             projects: idbData.projects,
+            subtasks: idbData.subtasks,
             settings: (idbData.meta && idbData.meta.settings) || {},
             savedAt: (idbData.meta && idbData.meta.savedAt) || 0,
           };
@@ -711,6 +776,7 @@
             tasks: backup.state.tasks,
             trash: backup.state.trash,
             projects: backup.state.projects || [],
+            subtasks: backup.state.subtasks || [],
             settings: backup.state.settings || {},
             savedAt: backup.state.savedAt,
           };
@@ -722,8 +788,8 @@
       }
 
       // -- 3. choose the source of truth ------------------------------------
-      const idbHas = idbState && (idbState.tasks.length || idbState.trash.length || idbState.projects.length);
-      const bakHas = backupState && (backupState.tasks.length || backupState.trash.length || (backupState.projects || []).length);
+      const idbHas = idbState && (idbState.tasks.length || idbState.trash.length || idbState.projects.length || idbState.subtasks.length);
+      const bakHas = backupState && (backupState.tasks.length || backupState.trash.length || (backupState.projects || []).length || (backupState.subtasks || []).length);
 
       let payload = null;
       let source = 'fresh';
@@ -744,10 +810,11 @@
       }
 
       // -- 4. adopt into memory + prune expired trash -----------------------
-      const clean = payload || { tasks: [], trash: [], projects: [], settings: {} };
+      const clean = payload || { tasks: [], trash: [], projects: [], subtasks: [], settings: {} };
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
       memory.projects = clean.projects;
+      memory.subtasks = clean.subtasks || [];
       memory.settings = { ...DEFAULT_SETTINGS, ...(clean.settings || {}) };
       lastSavedAt = clean.savedAt || Date.now();
 
@@ -798,11 +865,13 @@
         tasks: fresh.tasks,
         trash: fresh.trash,
         projects: fresh.projects,
+        subtasks: fresh.subtasks,
         settings: (fresh.meta && fresh.meta.settings) || {},
       });
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
       memory.projects = clean.projects;
+      memory.subtasks = clean.subtasks;
       memory.settings = { ...DEFAULT_SETTINGS, ...clean.settings };
       lastSavedAt = (fresh.meta && fresh.meta.savedAt) || Date.now();
       dirty = false; // disk is authoritative again
@@ -889,10 +958,11 @@
       startSync,
       refreshFromOtherTab,
       /** Adopt an imported dataset (caller then calls resync()). */
-      replaceMemory(tasks, trash, projects) {
+      replaceMemory(tasks, trash, projects, subtasks) {
         memory.tasks = tasks;
         memory.trash = trash;
         memory.projects = Array.isArray(projects) ? projects : [];
+        memory.subtasks = Array.isArray(subtasks) ? subtasks : [];
       },
       /** Serialize the current state as a downloadable backup file. */
       exportData: () => serializeBackup(Date.now()),
@@ -911,7 +981,7 @@
       TRASH_RETENTION_MS,
       DEFAULT_SETTINGS,
       SCHEMA_VERSION,
-      STORES: { tasks: STORE_TASKS, trash: STORE_TRASH, projects: STORE_PROJECTS, meta: STORE_META },
+      STORES: { tasks: STORE_TASKS, trash: STORE_TRASH, projects: STORE_PROJECTS, subtasks: STORE_SUBTASKS, meta: STORE_META },
     },
     helpers: {
       uuid,
@@ -921,6 +991,7 @@
       cleanPayload,
       backupNewer,
       coerceProject,
+      coerceSubtask,
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

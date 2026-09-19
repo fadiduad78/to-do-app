@@ -54,12 +54,12 @@ globalThis.addEventListener = () => {};
 /* ------------------------ fake local storage engine ---------------------- */
 /* Mimics ZTStorage semantics: commit(ops) mutates nothing here — the test
  * mutates `memory` directly like app.js does — and returns true. */
-const memory = { tasks: [], trash: [], projects: [], settings: {}, lastSavedAt: Date.now() };
+const memory = { tasks: [], trash: [], projects: [], subtasks: [], settings: {}, lastSavedAt: Date.now() };
 const store = {
   state: memory,
   async commit() { return true; },
   async resync() { return true; },
-  replaceMemory(t, r, p) { memory.tasks = t; memory.trash = r; memory.projects = p || []; },
+  replaceMemory(t, r, p, s) { memory.tasks = t; memory.trash = r; memory.projects = p || []; memory.subtasks = s || []; },
 };
 
 /* --------------------------- load real cloud.js -------------------------- */
@@ -207,6 +207,62 @@ st = await serverState();
 ok(st.projects.length === 1 && st.projects[0].name === 'Recreated', 'edit-beats-delete works for projects too');
 // keep task count consistent for any later runs
 await otherPush({ tasks: st.tasks, trash: [], projects: [] }, st.tombstones);
+
+console.log('8. subtasks: sync, parent soft-delete keeps them, purge cascades');
+const tP = rec('tP', 'Build Expense Tracker', Date.now());
+memory.tasks.push(tP);
+const sA = { id: 'sA', parentTaskId: 'tP', title: 'Design database', completed: false, completedAt: null, position: 0, createdAt: Date.now(), updatedAt: Date.now() };
+memory.subtasks.push(sA);
+await store.commit([
+  { store: 'tasks', op: 'put', value: tP },
+  { store: 'subtasks', op: 'put', value: sA },
+]);
+await wait(1400);
+st = await serverState();
+ok(st.subtasks.length === 1 && st.subtasks[0].parentTaskId === 'tP', 'subtask syncs as a flat record of the same state doc');
+// re-read from live memory before mutating (adoptRemote may have replaced the
+// array after the previous push — exactly like app.js always does via find())
+const curS = memory.subtasks.find((x) => x.id === 'sA');
+curS.completed = true; curS.completedAt = Date.now(); curS.updatedAt = Date.now();
+await store.commit([{ store: 'subtasks', op: 'put', value: curS }]);
+await wait(1400);
+st = await serverState();
+ok(st.subtasks[0].completed === true, 'subtask completion syncs');
+// soft-delete the PARENT: subtask must stay untouched (restore re-attaches it)
+const liveP = memory.tasks.find((x) => x.id === 'tP');
+memory.tasks = memory.tasks.filter((x) => x.id !== 'tP');
+const tPTrash = { ...liveP, trashedAt: Date.now(), updatedAt: Date.now() + 5 };
+memory.trash.push(tPTrash);
+await store.commit([
+  { store: 'trash', op: 'put', value: tPTrash },
+  { store: 'tasks', op: 'delete', key: 'tP' },
+]);
+await wait(1400);
+st = await serverState();
+ok(st.trash.some((x) => x.id === 'tP') && st.subtasks.length === 1, 'trashing the parent leaves its subtasks intact on the server');
+// purge forever: cascade delete ops for the subtree in the SAME commit
+memory.trash = memory.trash.filter((x) => x.id !== 'tP');
+memory.subtasks = [];
+await store.commit([
+  { store: 'trash', op: 'delete', key: 'tP' },
+  { store: 'subtasks', op: 'delete', key: 'sA' },
+]);
+await wait(1400);
+st = await serverState();
+ok(st.subtasks.length === 0 && st.tombstones['subtasks:sA'] > 0, 'purge cascades: subtask deleted + tombstoned with its parent');
+// stale re-push of the old subtask is rejected…
+await otherPush({ tasks: [], trash: [], subtasks: [{ ...sA, updatedAt: T0 + 100 }] }, {});
+st = await serverState();
+ok(st.subtasks.length === 0, 'tombstone beats a stale subtask re-push');
+// …an undo (same id, newer updatedAt) revives it
+memory.subtasks.push({ ...sA, updatedAt: Date.now() + 500000 });
+await store.commit([{ store: 'subtasks', op: 'put', value: memory.subtasks[0] }]);
+await wait(1400);
+st = await serverState();
+ok(st.subtasks.length === 1, 'subtask undo (newer record) beats its own tombstone');
+memory.subtasks = [];
+await store.commit([{ store: 'subtasks', op: 'delete', key: 'sA' }]);
+await wait(1400);
 
 child.kill('SIGKILL');
 console.log(failed ? `\nFAILED: ${failed} check(s)` : '\nAll client integration tests passed.');

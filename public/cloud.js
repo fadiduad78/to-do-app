@@ -99,6 +99,7 @@
       tasks: st.tasks,
       trash: st.trash,
       projects: st.projects,
+      subtasks: st.subtasks,
       settings: { theme: st.settings.theme, exportReminderDays: st.settings.exportReminderDays },
     });
   }
@@ -263,11 +264,13 @@
     let tasks = mergeList(st.tasks, remote.tasks);
     let trash = mergeList(st.trash, remote.trash);
     let projects = mergeList(st.projects || [], remote.projects || []);
+    let subtasks = mergeList(st.subtasks || [], remote.subtasks || []);
     // Store-scoped tombstones: a `tasks:id` delete must not remove the
     // trash copy of the same id (soft delete), and vice versa.
     tasks = tasks.filter((t) => !(tombstones['tasks:' + t.id] >= (t.updatedAt || 0)));
     trash = trash.filter((t) => !(tombstones['trash:' + t.id] >= (t.updatedAt || 0)));
     projects = projects.filter((p) => !(tombstones['projects:' + p.id] >= (p.updatedAt || 0)));
+    subtasks = subtasks.filter((s) => !(tombstones['subtasks:' + s.id] >= (s.updatedAt || 0)));
     // App invariant (storage.js cleanPayload): a record lives in one store; live wins.
     { const live = new Set(tasks.map((t) => t.id)); trash = trash.filter((t) => !live.has(t.id)); }
     // Prune redundant tombstones (a live record newer than the deletion has
@@ -285,16 +288,21 @@
       const k = 'projects:' + p.id;
       if (tombstones[k] && (p.updatedAt || 0) > tombstones[k]) { delete tombstones[k]; tombChanged = true; }
     }
+    for (const s of subtasks) {
+      const k = 'subtasks:' + s.id;
+      if (tombstones[k] && (s.updatedAt || 0) > tombstones[k]) { delete tombstones[k]; tombChanged = true; }
+    }
     if (tombChanged) saveJSON(TOMBS_KEY, tombstones);
 
-    const before = JSON.stringify({ t: st.tasks, r: st.trash, p: st.projects });
-    const after = JSON.stringify({ t: tasks, r: trash, p: projects });
+    const before = JSON.stringify({ t: st.tasks, r: st.trash, p: st.projects, s: st.subtasks });
+    const after = JSON.stringify({ t: tasks, r: trash, p: projects, s: subtasks });
     const changed = before !== after;
 
     if (changed) {
       st.tasks = tasks;
       st.trash = trash;
       st.projects = projects;
+      st.subtasks = subtasks;
     }
     if (remote.savedAt && (!st.lastSavedAt || remote.savedAt > st.lastSavedAt) && remote.settings) {
       Object.assign(st.settings, remote.settings);
@@ -357,7 +365,7 @@
           clientId: CLIENT_ID,
           baseRev: serverRev,
           mode,
-          state: { savedAt: Date.now(), settings: st.settings, tasks: st.tasks, trash: st.trash, projects: st.projects },
+          state: { savedAt: Date.now(), settings: st.settings, tasks: st.tasks, trash: st.trash, projects: st.projects, subtasks: st.subtasks },
           tombstones,
         }),
       });

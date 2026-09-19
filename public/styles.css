@@ -597,3 +597,41 @@ body {
   .pc-name { max-width: 110px; }
   .pd-actions { width: 100%; }
 }
+
+/* ================================ Subtasks ================================
+   Inline checklist under a task row + progress affordance on the row itself */
+.sub-block { padding: 2px 0 0 40px; }
+.sub-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: none; border: 0; padding: 2px 4px; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 12px; border-radius: 6px;
+}
+.sub-toggle:hover { background: var(--panel-2); color: var(--text); }
+.sub-caret { font-size: 10px; width: 10px; }
+.sub-progress { white-space: nowrap; }
+.sub-mini { width: 48px; height: 4px; border-radius: 99px; background: var(--border); overflow: hidden; }
+.sub-mini i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+.sub-list { list-style: none; margin: 4px 0 2px; padding: 0 0 0 6px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+.sub-row { display: flex; align-items: center; gap: 8px; padding: 2px 4px; border-radius: 6px; }
+.sub-row:hover { background: var(--panel-2); }
+.sub-check {
+  width: 18px; height: 18px; flex: none; border-radius: 6px;
+  border: 1.5px solid var(--border); background: var(--panel);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; line-height: 1; color: #fff; cursor: pointer; padding: 0;
+}
+.sub-check.on { background: var(--accent); border-color: var(--accent); }
+.sub-title { font-size: 13px; flex: 1; overflow-wrap: anywhere; }
+.sub-row.is-done .sub-title { text-decoration: line-through; color: var(--muted); }
+.sub-acts { display: flex; gap: 1px; opacity: .85; }
+.sub-add { margin-top: 2px; }
+.sub-add-input, .sub-edit-input {
+  flex: 1; min-width: 120px; font: inherit; font-size: 13px;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 7px; padding: 4px 8px;
+}
+.sub-add-input:focus, .sub-edit-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.sub-static { padding: 2px 0 0 40px; font-size: 12px; }
+.setting-check { cursor: pointer; }
+.setting-check input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+@media (max-width: 640px) { .sub-block { padding-left: 12px; } }

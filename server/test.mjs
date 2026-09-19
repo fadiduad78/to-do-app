@@ -137,6 +137,13 @@ try {
   s = await sync('A', 999999, { settings: { theme: 'light' }, tasks: [task('new1', 'Fresh start', ts(5), { projectId: 'pI' })], trash: [], projects: [{ id: 'pI', name: 'Imported', createdAt: ts(1), updatedAt: ts(5) }] }, {}, 'replace');
   ok(s.json.projects.length === 1 && s.json.projects[0].name === 'Imported', 'replace mode carries projects in the SAME state doc');
   ok(s.json.tasks[0].projectId === 'pI', 'task → project links survive a replace import');
+  ok(Array.isArray(s.json.subtasks) && s.json.subtasks.length === 0, 'v2-style import (no subtasks key) stays valid — defaults to []');
+  s = await sync('A', 999999, { settings: {}, tasks: [task('new1', 'Fresh start', ts(5))], trash: [], subtasks: [{ id: 'sX', parentTaskId: 'new1', title: 'step 1', completed: false, position: 0, createdAt: ts(1), updatedAt: ts(5) }] }, {}, 'replace');
+  ok(s.json.subtasks.length === 1 && s.json.subtasks[0].title === 'step 1', 'replace mode carries subtasks in the SAME state doc');
+  s = await sync('B', s.json.rev, { tasks: [], trash: [], subtasks: [{ id: 'sX', parentTaskId: 'new1', title: 'B wins', completed: true, completedAt: ts(99), position: 0, createdAt: ts(1), updatedAt: ts(99) }] }, {}, 'merge');
+  ok(s.json.subtasks[0].title === 'B wins' && s.json.subtasks[0].completed === true, 'subtask edits LWW-merge like tasks');
+  s = await sync('B', s.json.rev, { tasks: [], trash: [], subtasks: [] }, { 'subtasks:sX': ts(120) }, 'merge');
+  ok(s.json.subtasks.length === 0, 'a subtasks-scoped tombstone purges the subtask on every device');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [{ id: 'pI', name: 'B wins', createdAt: ts(1), updatedAt: ts(99) }] }, {}, 'merge');
   ok(s.json.projects[0].name === 'B wins', 'project edits LWW-merge like tasks');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [] }, { 'projects:pI': ts(120) }, 'merge');

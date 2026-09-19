@@ -42,6 +42,7 @@
     taskList: $('taskList'), emptyState: $('emptyState'),
     trashBar: $('trashBar'), trashCount: $('trashCount'), emptyTrashBtn: $('emptyTrashBtn'),
     settingsPanel: $('settingsPanel'), themeSelect: $('themeSelect'), reminderSelect: $('reminderSelect'),
+    subtaskAuto: $('subtaskAuto'),
     storageInfo: $('storageInfo'),
     toastHost: $('toastHost'), modalHost: $('modalHost'), importFile: $('importFile'),
     footerCounts: $('footerCounts'),
@@ -96,7 +97,7 @@
     // migration + validation (see storage.js recover()).
     const rec = await store.recover();
     S = rec.state;
-    S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false };
+    S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
@@ -161,7 +162,8 @@
     if (S.settings.filterProject) list = list.filter((t) => t.projectId === S.settings.filterProject);
     const q = S.ui.search.trim().toLowerCase();
     if (q) list = list.filter((t) =>
-      t.title.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q));
+      t.title.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q)
+      || subsOfTask(t.id).some((s) => s.title.toLowerCase().includes(q))); // subtasks are findable too
     return list;
   }
 
@@ -457,6 +459,88 @@
     els.emptyTrashBtn.hidden = inTrash && n === 0;
   }
 
+  /* ------------------------------ Subtasks -------------------------------- */
+  /* Flat records (id, parentTaskId, title, completed, completedAt, position)
+     in the SAME state document as tasks — see storage.js coerceSubtask. */
+
+  function subsIndex() {
+    const m = new Map();
+    for (const s of S.subtasks) {
+      if (!m.has(s.parentTaskId)) m.set(s.parentTaskId, []);
+      m.get(s.parentTaskId).push(s);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => (a.position - b.position) || (a.createdAt - b.createdAt));
+    return m;
+  }
+  function subsOfTask(taskId) { const a = subsIndex().get(taskId); return a || []; }
+  /** Every id in a task's subtree. Visited-set = cycle-safe even for
+      hand-edited/deep data (the UI only creates one level). */
+  function subtreeIds(taskId) {
+    const m = subsIndex();
+    const out = [];
+    const seen = new Set([taskId]);
+    let frontier = (m.get(taskId) || []).map((s) => s.id);
+    while (frontier.length) {
+      const next = [];
+      for (const sid of frontier) {
+        if (seen.has(sid)) continue;
+        seen.add(sid); out.push(sid);
+        for (const c of (m.get(sid) || [])) next.push(c.id);
+      }
+      frontier = next;
+    }
+    return out;
+  }
+  function subStatsOf(taskId) {
+    const subs = subsOfTask(taskId);
+    const done = subs.filter((s) => s.completed).length;
+    return { total: subs.length, done, pct: subs.length ? Math.round((done / subs.length) * 100) : 0 };
+  }
+  /** One task's 0..1 contribution to its project's progress: completed = 1;
+      otherwise the fraction of its subtasks done (0 when it has none). */
+  function taskProgress(t) {
+    if (t.status === 'completed') return 1;
+    const subs = subsOfTask(t.id);
+    if (!subs.length) return 0;
+    return subs.filter((s) => s.completed).length / subs.length;
+  }
+
+  function subBlockHTML(t) {
+    const subs = subsOfTask(t.id);
+    const ss = subStatsOf(t.id);
+    const open = !!S.ui.openSubs[t.id];
+    const head = '<div class="sub-block">' +
+      '<button class="sub-toggle" data-sact="subs" type="button" aria-expanded="' + open + '">' +
+        '<span class="sub-caret">' + (open ? '▾' : '▸') + '</span>' +
+        (ss.total
+          ? '<span class="sub-mini"><i style="width:' + ss.pct + '%"></i></span>' +
+            '<span class="sub-progress">' + ss.done + '/' + ss.total + ' subtasks · ' + ss.pct + '%</span>'
+          : '<span class="sub-progress">＋ subtasks</span>') +
+      '</button>';
+    if (!open) return head + '</div>';
+    const rows = subs.map((s) => {
+      if (S.ui.subEditing === s.id) {
+        return '<li class="sub-row sub-edit"><input class="sub-edit-input" data-sid="' + esc(s.id) + '" maxlength="200" value="' + esc(s.title) + '">' +
+          '<button class="btn btn-sm btn-primary" data-sact="subsave" data-sid="' + esc(s.id) + '" type="button">Save</button>' +
+          '<button class="btn btn-sm btn-ghost" data-sact="subcancel" type="button">Cancel</button></li>';
+      }
+      return '<li class="sub-row' + (s.completed ? ' is-done' : '') + '" data-sid="' + esc(s.id) + '">' +
+        '<button class="sub-check' + (s.completed ? ' on' : '') + '" data-sact="sbtoggle" data-sid="' + esc(s.id) + '" role="checkbox" aria-checked="' + s.completed + '" aria-label="Toggle subtask" type="button">' + (s.completed ? '✓' : '') + '</button>' +
+        '<span class="sub-title">' + esc(s.title) + '</span>' +
+        '<span class="sub-acts">' +
+          '<button class="btn btn-ghost btn-sm btn-icon" data-sact="subup" data-sid="' + esc(s.id) + '" title="Move up" aria-label="Move up">↑</button>' +
+          '<button class="btn btn-ghost btn-sm btn-icon" data-sact="subdown" data-sid="' + esc(s.id) + '" title="Move down" aria-label="Move down">↓</button>' +
+          '<button class="btn btn-ghost btn-sm btn-icon" data-sact="subedit" data-sid="' + esc(s.id) + '" title="Rename subtask" aria-label="Rename">✎</button>' +
+          '<button class="btn btn-danger-ghost btn-sm btn-icon" data-sact="subdel" data-sid="' + esc(s.id) + '" title="Delete subtask" aria-label="Delete subtask">🗑</button>' +
+        '</span></li>';
+    }).join('');
+    return head +
+      '<ul class="sub-list">' + rows +
+        '<li class="sub-row sub-add"><input class="sub-add-input" data-parent="' + esc(t.id) + '" maxlength="200" placeholder="Add a subtask — Enter to save">' +
+        '<button class="btn btn-sm btn-ghost" data-sact="subadd" data-parent="' + esc(t.id) + '" type="button">Add</button></li>' +
+      '</ul></div>';
+  }
+
   function taskItemHTML(t, inTrash) {
     const done = t.status === 'completed';
     const due = formatDue(t.dueDate, done);
@@ -485,6 +569,9 @@
             (inTrash ? '<span class="muted small">trashed ' + fmtWhen(t.trashedAt) + '</span>' : '') +
           '</div>' +
         '</div>' +
+        (inTrash
+          ? (subtreeIds(t.id).length ? '<div class="sub-static muted small">⊂ ' + subtreeIds(t.id).length + ' subtask(s) — restore brings them back</div>' : '')
+          : subBlockHTML(t)) +
         '<div class="task-actions">' +
           (inTrash
             ? '<button class="btn btn-ghost btn-sm" data-act="restore" title="Restore task">Restore</button>' +
@@ -524,13 +611,15 @@
   function renderSettings() {
     els.themeSelect.value = S.settings.theme || 'auto';
     els.reminderSelect.value = String(S.settings.exportReminderDays || 0);
+    els.subtaskAuto.checked = !!S.settings.subtaskAutoComplete;
   }
 
   function renderFooter() {
     const done = S.tasks.filter((t) => t.status === 'completed').length;
     const liveProj = S.projects.filter((p) => !p.deletedAt).length;
     els.footerCounts.textContent = S.tasks.length + ' task(s) · ' + done + ' completed · ' + S.trash.length + ' in trash'
-      + (liveProj ? ' · ' + liveProj + ' project(s)' : '');
+      + (liveProj ? ' · ' + liveProj + ' project(s)' : '')
+      + (S.subtasks.length ? ' · ' + S.subtasks.filter((s) => s.completed).length + '/' + S.subtasks.length + ' subtasks' : '');
   }
 
   function updateStorageInfo() {
@@ -778,10 +867,16 @@
       danger: true,
     });
     if (!ok) return;
+    // Subtasks die WITH the task forever — deletes + tombstones in the same
+    // commit, so every device purges them too. (The soft delete didn't: they
+    // sat attached for a possible restore.)
+    const doomed = new Set(subtreeIds(id));
     S.trash = S.trash.filter((x) => x.id !== id);
-    await store.commit([{ store: STORES.trash, op: 'delete', key: id }]);
+    S.subtasks = S.subtasks.filter((x) => !doomed.has(x.id));
+    await store.commit([{ store: STORES.trash, op: 'delete', key: id }]
+      .concat([...doomed].map((sid) => ({ store: STORES.subtasks, op: 'delete', key: sid }))));
     renderAll();
-    toast('Deleted forever.');
+    toast('Deleted forever' + (doomed.size ? ' — ' + doomed.size + ' subtask(s) with it.' : '.'));
   }
 
   async function emptyTrash() {
@@ -803,6 +898,10 @@
       );
     } catch (_) { /* safety copy is best-effort */ }
     const ops = S.trash.map((t) => ({ store: STORES.trash, op: 'delete', key: t.id }));
+    const doomedSubs = new Set();
+    for (const t of S.trash) for (const sid of subtreeIds(t.id)) doomedSubs.add(sid);
+    for (const sid of doomedSubs) ops.push({ store: STORES.subtasks, op: 'delete', key: sid });
+    S.subtasks = S.subtasks.filter((x) => !doomedSubs.has(x.id));
     S.trash = [];
     for (const p of deadProjects) {
       ops.push({ store: STORES.projects, op: 'delete', key: p.id });
@@ -865,6 +964,141 @@
     return closest.el;
   }
 
+  /* --------------------------- Subtask mutations -------------------------- */
+
+  function setSubOpen(taskId) { S.ui.openSubs[taskId] = !S.ui.openSubs[taskId]; renderList(); }
+
+  async function addSubtask(taskId, title) {
+    title = String(title || '').trim();
+    if (!title) return;
+    const parent = byId(taskId);
+    if (!parent) return;
+    const now = Date.now();
+    const maxPos = subsOfTask(taskId).reduce((m, s) => Math.max(m, s.position), -1);
+    const s = {
+      id: helpers.uuid(), parentTaskId: taskId, title,
+      completed: false, completedAt: null,
+      position: maxPos + 1, createdAt: now, updatedAt: now,
+    };
+    S.subtasks.push(s);
+    const ops = [{ store: STORES.subtasks, op: 'put', value: s }];
+    // With auto-complete ON, adding an open subtask reopens a completed parent.
+    if (S.settings.subtaskAutoComplete && parent.status === 'completed') {
+      parent.status = 'active'; parent.updatedAt = now;
+      ops.push({ store: STORES.tasks, op: 'put', value: parent });
+    }
+    await store.commit(ops);
+    renderAll();
+  }
+
+  async function toggleSubtask(sid) {
+    const s = S.subtasks.find((x) => x.id === sid);
+    if (!s) return;
+    const now = Date.now();
+    s.completed = !s.completed;
+    s.completedAt = s.completed ? now : null;
+    s.updatedAt = now;
+    const ops = [{ store: STORES.subtasks, op: 'put', value: s }];
+    // Parent auto-completion only when the user explicitly enabled it
+    // (Settings). Parent + subtask change in ONE atomic commit.
+    const parent = byId(s.parentTaskId);
+    if (parent && S.settings.subtaskAutoComplete) {
+      const subs = subsOfTask(parent.id);
+      const allDone = subs.length > 0 && subs.every((x) => x.completed);
+      const want = allDone ? 'completed' : 'active';
+      if (parent.status !== want) {
+        parent.status = want; parent.updatedAt = now;
+        ops.push({ store: STORES.tasks, op: 'put', value: parent });
+      }
+    }
+    await store.commit(ops);
+    renderAll();
+  }
+
+  async function renameSubtask(sid, title) {
+    const s = S.subtasks.find((x) => x.id === sid);
+    title = String(title || '').trim();
+    S.ui.subEditing = null;
+    if (!s || !title || title === s.title) { renderList(); return; }
+    s.title = title;
+    s.updatedAt = Date.now();
+    await store.commit([{ store: STORES.subtasks, op: 'put', value: s }]);
+    renderAll();
+  }
+
+  let undoSubTimer = null;
+
+  async function deleteSubtask(sid) {
+    const i = S.subtasks.findIndex((x) => x.id === sid);
+    if (i === -1) return;
+    const s = S.subtasks.splice(i, 1)[0];
+    await store.commit([{ store: STORES.subtasks, op: 'delete', key: sid }]); // cloud.js tombstones it
+    renderAll();
+    // 8 s undo window — the same pattern task deletes use.
+    clearTimeout(undoSubTimer);
+    els.toastHost.innerHTML =
+      '<div class="toast show toast-undo">' +
+      '<span>Subtask “' + esc(truncate(s.title, 36)) + '” deleted</span>' +
+      '<button class="btn btn-sm btn-undo" id="undoSubBtn">Undo</button>' +
+      '<div class="undo-bar"><div class="undo-bar-fill"></div></div>' +
+      '</div>';
+    $('undoSubBtn').onclick = async () => {
+      clearTimeout(undoSubTimer);
+      els.toastHost.innerHTML = '';
+      if (!S.subtasks.some((x) => x.id === s.id)) S.subtasks.push(s);
+      s.updatedAt = Date.now(); // newer than the tombstone → revives on every device
+      await store.commit([{ store: STORES.subtasks, op: 'put', value: s }]);
+      renderAll();
+    };
+    undoSubTimer = setTimeout(() => { els.toastHost.innerHTML = ''; }, 8000);
+  }
+
+  function moveSubtask(sid, dir) {
+    const s = S.subtasks.find((x) => x.id === sid);
+    if (!s) return;
+    const sib = subsOfTask(s.parentTaskId);
+    const i = sib.findIndex((x) => x.id === sid);
+    const j = i + dir;
+    if (i === -1 || j < 0 || j >= sib.length) return;
+    const a = sib[i]; const b = sib[j];
+    const tmp = a.position; a.position = b.position; b.position = tmp;
+    if (a.position === b.position) { a.position = i; b.position = j; } // equal positions → use slots
+    const now = Date.now();
+    a.updatedAt = now; b.updatedAt = now;
+    store.commit([
+      { store: STORES.subtasks, op: 'put', value: a },
+      { store: STORES.subtasks, op: 'put', value: b },
+    ]).then(renderAll);
+  }
+
+  function handleSubAction(btn, li) {
+    const act = btn.dataset.sact;
+    const sid = btn.dataset.sid;
+    if (act === 'subs') { if (li) setSubOpen(li.dataset.id); return; }
+    if (act === 'sbtoggle') { toggleSubtask(sid); return; }
+    if (act === 'subedit') {
+      S.ui.subEditing = sid;
+      renderList();
+      const inp = els.taskList.querySelector('.sub-edit-input');
+      if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+      return;
+    }
+    if (act === 'subsave') {
+      const inp = els.taskList.querySelector('.sub-edit-input');
+      if (inp) renameSubtask(sid, inp.value);
+      return;
+    }
+    if (act === 'subcancel') { S.ui.subEditing = null; renderList(); return; }
+    if (act === 'subdel') { deleteSubtask(sid); return; }
+    if (act === 'subup') { moveSubtask(sid, -1); return; }
+    if (act === 'subdown') { moveSubtask(sid, 1); return; }
+    if (act === 'subadd') {
+      const wrap = btn.closest('.sub-add');
+      const inp = wrap && wrap.querySelector('.sub-add-input');
+      if (inp) addSubtask(btn.dataset.parent, inp.value);
+    }
+  }
+
   /* ------------------------------- Projects ------------------------------- */
   /* Projects share the tasks/trash machinery completely: same commit path,
      same backup, same tombstones. `deletedAt` marks a trashed project; a task
@@ -885,7 +1119,9 @@
       done,
       left: tasks.length - done,
       overdue: tasks.filter((t) => t.status !== 'completed' && isOverdueDate(t.dueDate)).length,
-      pct: tasks.length ? Math.round((done / tasks.length) * 100) : 0,
+      // "Progress %" counts subtasks: a task contributes its completed
+      // fraction (1 while status=completed, else subtasks done / total).
+      pct: tasks.length ? Math.round((tasks.reduce((sum, t) => sum + taskProgress(t), 0) / tasks.length) * 100) : 0,
     };
   }
 
@@ -1339,7 +1575,7 @@
 
     // Adopt the imported dataset, then make disk converge to it (full
     // read-modify-write resync: put all, delete orphans, mirror, broadcast).
-    store.replaceMemory(clean.tasks, clean.trash, clean.projects);
+    store.replaceMemory(clean.tasks, clean.trash, clean.projects, clean.subtasks);
     // Local settings (theme, reminder cadence) are device preferences — keep
     // them; the imported tasks/trash replace ours entirely.
     const okc = await store.resync();
@@ -1452,6 +1688,8 @@
       const li = e.target.closest('.task');
       if (!li) return;
       const id = li.dataset.id;
+      const sbtn = e.target.closest('[data-sact]');
+      if (sbtn) { if (S.settings.filterMode !== 'trash') handleSubAction(sbtn, li); return; }
       const inTrash = S.settings.filterMode === 'trash';
       const btn = e.target.closest('button');
 
@@ -1508,6 +1746,18 @@
       applyNewOrder(ids);
     });
 
+    // Subtask inline inputs: Enter saves, Escape cancels (no modal needed)
+    els.taskList.addEventListener('keydown', (e) => {
+      if (e.target.classList.contains('sub-add-input')) {
+        if (e.key === 'Enter') { e.preventDefault(); addSubtask(e.target.dataset.parent, e.target.value); }
+        return;
+      }
+      if (e.target.classList.contains('sub-edit-input')) {
+        if (e.key === 'Enter') { e.preventDefault(); renameSubtask(e.target.dataset.sid, e.target.value); }
+        else if (e.key === 'Escape') { e.preventDefault(); S.ui.subEditing = null; renderList(); }
+      }
+    });
+
     // Header actions
     els.exportBtn.onclick = exportNow;
     els.importBtn.onclick = () => els.importFile.click();
@@ -1538,6 +1788,13 @@
     els.reminderSelect.addEventListener('change', (e) => {
       S.settings.exportReminderDays = Number(e.target.value);
       commitSettings();
+    });
+    els.subtaskAuto.addEventListener('change', (e) => {
+      S.settings.subtaskAutoComplete = e.target.checked;
+      commitSettings();
+      toast(e.target.checked
+        ? 'Parents will complete automatically when all their subtasks are done.'
+        : 'Parents now complete only by you.');
     });
 
     els.emptyTrashBtn.onclick = emptyTrash;

@@ -198,12 +198,20 @@ safety copy — nothing is silently overwritten.)
   Deleting a project moves it to Trash **without touching its tasks**; emptying
   the trash detaches them back to the Inbox. Old data (schemaVersion 1) migrates
   automatically on first load — existing tasks simply get `projectId: null`.
+- **Subtasks** → any task can hold an ordered checklist (`▸ n/m subtasks · %` under the
+  row: add, rename, tick, delete with 8 s undo, ↑↓ reorder). Subtasks are flat records
+  in the same state document (per-record sync like everything else). Trashing a task
+  leaves its subtasks attached (restore brings the checklist back); only a permanent
+  delete cascades them. Project progress % counts subtask completion; search matches
+  subtask titles too. Settings has an optional "automatically complete parent when all
+  subtasks are completed" — off by default. One nesting level is supported (the data
+  model is ready for more); old v1/v2 data and backups migrate on load.
 
 ## Test it (dev)
 
 ```bash
-node server/test.mjs          # 47 checks: accounts, sessions, merge, tombstones, replace, projects, persistence, SSE
-node server/test-storage.mjs  # 45 checks: the real public/storage.js in Node — v1→v2 migration, projects coercion, backups
+node server/test.mjs          # 51 checks: accounts, sessions, merge, tombstones, replace, projects+subtasks, persistence, SSE
+node server/test-storage.mjs  # 63 checks: the real public/storage.js in Node — v1→v3 migration, coercion, backups, retention
 node server/test-supabase.mjs # 22 checks: mock PostgREST — free-plan restart survival, per-user rows, adoption
-node server/test-client.mjs   # 23 checks: the real public/cloud.js against a live server (incl. project sync semantics)
+node server/test-client.mjs   # 29 checks: the real public/cloud.js against a live server (project + subtask sync semantics)
 ```

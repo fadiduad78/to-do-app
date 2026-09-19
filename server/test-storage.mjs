@@ -31,7 +31,7 @@ const ok = (cond, name) => {
 
 /* ------------------------------ constants ------------------------------ */
 
-ok(ZT.constants.SCHEMA_VERSION === 2, 'SCHEMA_VERSION bumped to 2');
+ok(ZT.constants.SCHEMA_VERSION === 3, 'SCHEMA_VERSION bumped to 3 (v2 projects, v3 subtasks)');
 ok(ZT.constants.STORES.projects === 'projects', 'STORES exposes the projects store');
 
 /* ------------------------------- migration ------------------------------ */
@@ -47,7 +47,7 @@ const v1 = {
   settings: { theme: 'dark' },
 };
 const v2 = ZT.helpers.migratePayload(v1);
-ok(v2.schemaVersion === 2, 'v1 payload migrates to schemaVersion 2');
+ok(v2.schemaVersion === 3, 'v1 payload migrates all the way to schemaVersion 3');
 ok(Array.isArray(v2.projects) && v2.projects.length === 0, 'migration adds an empty projects list');
 ok(v2.tasks.find((t) => t.id === 't1').projectId === 'ghost', 'existing projectId survives migration');
 ok(v2.tasks.find((t) => t.id === 't2').projectId === null, 'field-free task gets projectId: null');
@@ -55,9 +55,12 @@ ok(v2.tasks.find((t) => t.id === 't1').title === 'Old', 'task data untouched by 
 ok(v2.settings.theme === 'dark', 'settings survive migration');
 // v0 payloads (the very old backups) run migrations 0 then 1 → must land at 2
 const fromZero = ZT.helpers.migratePayload({ schemaVersion: 0, tasks: [{ id: 'z', title: 'Z', status: 'active', createdAt: 1, updatedAt: 1 }] });
-ok(fromZero.schemaVersion === 2 && fromZero.tasks[0].projectId === null, 'v0 payload upgrades all the way to v2');
+ok(fromZero.schemaVersion === 3 && fromZero.tasks[0].projectId === null, 'v0 payload upgrades all the way to v3');
 // idempotent: running migration over an already-v2 payload via cleanPath is a no-op
 ok(v2.projects === v2.projects && v2.tasks.length === 2, 'migration keeps payload shape');
+const v3 = ZT.helpers.migratePayload({ schemaVersion: 2, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1 }], subtasks: [{ id: 's1', parentTaskId: 't1', title: 'kept', completed: false, position: 0, createdAt: 1, updatedAt: 1 }] });
+ok(v3.schemaVersion === 3 && v3.subtasks.length === 1 && v3.subtasks[0].title === 'kept', 'v2 payload with subtasks passes v3 migration untouched');
+ok(ZT.helpers.migratePayload({ schemaVersion: 2, tasks: [] }).subtasks.length === 0, 'v2 payload without subtasks defaults the array');
 
 /* ------------------------------ coerceProject --------------------------- */
 
@@ -115,6 +118,46 @@ ok(ZT.helpers.backupNewer({ savedAt: 9000, tasks: [], trash: [], projects: [{ id
 ok(ZT.helpers.backupNewer({ savedAt: 9000, tasks: [], trash: [], projects: [] }, idb) === false,
   'backup without the extra project is not newer');
 
+/* ------------------------------ coerceSubtask ----------------------------- */
+
+const sinkS = [];
+ok(ZT.helpers.coerceSubtask({ id: 's1', parentTaskId: 't1', title: ' Design db ', completed: true, customDeep: 7 }, sinkS) === true,
+  'minimal valid subtask coerces');
+const s1c = sinkS[0];
+ok(s1c.title === 'Design db' && s1c.position === 0 && Number.isFinite(s1c.createdAt), 'subtask fields normalized (trim, default position, timestamps)');
+ok(s1c.completed === true && s1c.completedAt > 0, 'completed without completedAt gets one filled');
+ok(s1c.customDeep === 7, 'unknown subtask fields preserved (forward compatible)');
+ok(ZT.helpers.coerceSubtask({ id: 's2', title: 'no parent' }, sinkS) === false, 'subtask without parentTaskId rejected');
+ok(ZT.helpers.coerceSubtask({ id: 's3', parentTaskId: 't1' }, sinkS) === false, 'subtask without title rejected');
+ok(sinkS.length === 1, 'rejections push nothing');
+
+/* ------------------ validate / clean / newer for subtasks ----------------- */
+
+const vresS = ZT.helpers.validatePayload({
+  app: 'zerotodo', schemaVersion: 3,
+  tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1 }],
+  subtasks: [
+    { id: 's1', parentTaskId: 't1', title: 'One', completed: false, position: 0, createdAt: 1, updatedAt: 1 },
+    { id: 'nope' },
+  ],
+});
+ok(vresS.ok === true && vresS.subtasks.length === 1 && vresS.subtasks[0].title === 'One', 'subtasks parse at validate; garbage dropped');
+const noSub = ZT.helpers.validatePayload({ app: 'zerotodo', schemaVersion: 2, tasks: [{ id: 'x', title: 'X', status: 'active', createdAt: 1, updatedAt: 1 }], projects: [] });
+ok(noSub.ok === true && Array.isArray(noSub.subtasks) && noSub.subtasks.length === 0, 'v2 backup without subtasks still validates');
+const cleanS = ZT.helpers.cleanPayload({
+  tasks: [], trash: [], projects: [], settings: {},
+  subtasks: [
+    { id: 'a', parentTaskId: 't', title: 'A', createdAt: 1, updatedAt: 1 },
+    { id: 'a', parentTaskId: 't', title: 'dup', createdAt: 1, updatedAt: 1 },
+    { id: 'b', parentTaskId: 't', title: 'B', createdAt: 1, updatedAt: 1 },
+  ],
+});
+ok(cleanS.subtasks.length === 2 && cleanS.dropped === 1, 'cleanPayload dedupes subtasks by id');
+ok(ZT.helpers.backupNewer(
+  { savedAt: 9000, tasks: [], trash: [], projects: [], subtasks: [{ id: 's1', parentTaskId: 't', title: 'X', completed: true, updatedAt: 8000, createdAt: 1 }] },
+  { savedAt: 1000, tasks: [], trash: [], projects: [], subtasks: [{ id: 's1', parentTaskId: 't', title: 'X', completed: false, updatedAt: 1500, createdAt: 1 }] }
+) === true, 'mirror newer via a subtask change alone');
+
 /* --------------------- engine round-trip (LS-only path) ------------------ */
 
 const errorsA = [];
@@ -132,8 +175,12 @@ ok(await A.commit([
 ]), 'commit with project ops succeeds');
 
 const backup = JSON.parse(A.exportData());
-ok(backup.schemaVersion === 2, 'export carries schemaVersion 2');
+ok(backup.schemaVersion === 3, 'export carries schemaVersion 3');
 ok(backup.projects.length === 1 && backup.projects[0].name === 'Launch', 'export includes projects');
+const subA = { id: 'sA', parentTaskId: 'tA', title: 'Design database', completed: false, completedAt: null, position: 0, createdAt: now, updatedAt: now };
+A.state.subtasks.push(subA);
+await A.commit([{ store: 'subtasks', op: 'put', value: subA }]);
+ok(JSON.parse(A.exportData()).subtasks.length === 1, 'export includes subtasks (same document, same commit path)');
 ok(backup.tasks[0].projectId === 'pA', 'export keeps the task→project link');
 
 // Second store instance = "reload": must recover everything from the LS mirror alone.
@@ -141,6 +188,7 @@ const B = ZT.createStore({});
 const recB = await B.recover();
 ok(recB.state.projects.length === 1 && recB.state.projects[0].color === '#ff0044', 'reload recovers projects from the mirror');
 ok(recB.state.tasks[0].id === 'tA' && recB.state.tasks[0].projectId === 'pA', 'reload keeps task ids and the project link');
+ok(recB.state.subtasks.length === 1 && recB.state.subtasks[0].title === 'Design database', 'reload recovers subtasks from the mirror');
 
 // A v1-era mirror (pre-projects) written by an older version must still load.
 mem.set('todo_backup_v1', JSON.stringify({
@@ -159,11 +207,21 @@ C.replaceMemory(
   [{ id: 'n1', title: 'New', status: 'active', priority: 'low', tags: [], description: '', dueDate: null, projectId: 'pZ', createdAt: now, updatedAt: now, sortOrder: 0 }],
   [],
   [{ id: 'pZ', name: 'Zed', createdAt: now, updatedAt: now, sortOrder: now, icon: '🎯', color: '#63c98b', status: 'active', archived: false, dueDate: null, deletedAt: null, description: '' }],
+  [{ id: 'sN', parentTaskId: 'n1', title: 'step 1', completed: false, position: 0, createdAt: now, updatedAt: now }],
 );
 ok(await C.resync(), 'replaceMemory + resync commits');
 const D = ZT.createStore({});
 const recD = await D.recover();
 ok(recD.state.projects[0].name === 'Zed' && recD.state.tasks[0].projectId === 'pZ', 'replaced dataset (incl. projects) round-trips to disk');
+ok(recD.state.subtasks[0].id === 'sN', 'replaceMemory carries the 4th (subtasks) list to disk');
+const orph = { id: 'sOrph', parentTaskId: 'does-not-exist', title: 'orphan', completed: false, position: 0, createdAt: now, updatedAt: now };
+D.state.subtasks.push(orph);
+await D.commit([{ store: 'subtasks', op: 'put', value: orph }]);
+const G = ZT.createStore({});
+await G.recover();
+ok(G.state.subtasks.some((x) => x.id === 'sOrph'), 'orphaned subtask survives (never auto-deleted by storage)');
+ok(await ZT.createStore({ onError() {} }).commit([{ store: 'subtasks', op: 'put', value: { id: 'x' } }]) === false,
+  'subtask without parentTaskId/title refused by validateOp');
 
 // delete-op validation: the projects store accepts deletes (tombstone path)
 ok(await D.commit([{ store: 'projects', op: 'delete', key: 'pZ' }]) === true, 'project delete op accepted');
