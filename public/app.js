@@ -899,9 +899,19 @@
   function renderProjects() {
     const bar = els.projectBar;
     const projects = liveProjects();
-    if (!projects.length) { bar.hidden = true; bar.innerHTML = ''; fillProjectSelect(); return; }
     fillProjectSelect();
-    bar.hidden = false;
+    bar.hidden = false; // ALWAYS visible — with zero projects this is where
+    // "New project" lives; hiding it there made the whole feature undiscoverable.
+    if (!projects.length) {
+      bar.innerHTML =
+        '<div class="project-bar-head">' +
+          '<span class="project-bar-title">📂 Projects</span>' +
+          '<span class="spacer"></span>' +
+          '<button class="btn btn-sm btn-primary" data-act="new" type="button">＋ New project</button>' +
+        '</div>' +
+        '<div class="project-cards"><span class="muted small">No projects yet — create one to group tasks, track progress and due dates together. Then pick it in the task form (or open a project and press “＋ Add task”).</span></div>';
+      return;
+    }
     const archivedOn = !!S.ui.showArchived;
     const vis = projects.filter((p) => p.archived === archivedOn);
     const archivedN = projects.filter((p) => p.archived).length;
