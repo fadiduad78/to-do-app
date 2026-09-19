@@ -715,6 +715,18 @@ await sleep(300);
   await sleep(380);
   ok(taskOf('Ship report').status === 'completed', 'Complete action finishes the task straight from the notification');
 
+  /* -------- the spec's example body: lead-time phrasing -------- */
+  {
+    const soon = new Date(Date.now() + 1800e3); soon.setSeconds(0, 0);
+    const soonTime = pad2(soon.getHours()) + ':' + pad2(soon.getMinutes());
+    await mkTask('Finish Python project', async () => {
+      $('#f-due').value = iso(soon); $('#f-time').value = soonTime;
+      $('#addRemBtn').click(); await sleep(60); await setRowType(0, 'm30');
+    });
+    ok(swCalls.some((c) => c.title === 'Task Reminder' && /Finish Python project is due in (29|30) minutes\./.test(c.opts.body || '')),
+      'spec example body format: “Finish Python project is due in 30 minutes.” (lead time from a 30-min-before reminder)');
+  }
+
   /* -------- overdue alerts with a configurable no-spam policy -------- */
   await setCk('#nOverdue', true);
   const odBase = nTitle('Task overdue'); // enabling may catch up existing past-due tasks (each alerted once, ever)
@@ -790,7 +802,7 @@ await sleep(300);
     ok(card.querySelector('[data-remopen]') && card.querySelector('[data-remcomplete]'), 'in-app card carries Open + Complete actions');
     const chips = [...card.querySelectorAll('[data-snooze]')].map((b) => b.dataset.snooze);
     ok(['5', '10', '30', '60', 'tomorrow'].every((v) => chips.includes(v)), 'snooze options 5/10/30/60/Tomorrow as buttons');
-    ok(nTitle('Task Reminder') === cntShip(), 'no OS send while ungranted — in-app only');
+    ok(!swCalls.some((c) => /Paperwork/.test(c.opts.body || '')), 'no OS send while ungranted — the alert went in-app only');
     card.querySelector('[data-snooze="5"]').click(); await sleep(550);
     const rec = remsFor('Paperwork')[0];
     ok(rec.status === 'pending' && rec.triggerAt >= Date.now() + 4 * 60e3 && rec.triggerAt <= Date.now() + 6 * 60e3, 'card snooze chip re-arms +5min (same record, new instance)');

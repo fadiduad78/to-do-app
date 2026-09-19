@@ -31,8 +31,9 @@ if the server is unreachable, every original guarantee still holds.
   twice, and skip work that's completed or trashed. Recurring tasks
   (daily/weekly/monthly) re-arm their reminders on every cycle.
 - **OS notifications** (desktop + mobile/PWA, delivered by `public/notify.js`):
-  task reminders, overdue alerts with a configurable no-spam policy (once per
-  task, or repeat every N hours until handled), daily/weekly summaries, habit
+  task reminders (body phrases the lead time — “Finish Python project is due
+  in 30 minutes.”), overdue alerts with a configurable no-spam policy (once
+  per task, or repeat every N hours until handled), daily/weekly summaries, habit
   check-ins, project-deadline warnings and Pomodoro timers. Permission is only
   ever requested from an explicit “Enable Notifications” button — never on
   load. Alerts use `registration.showNotification` (persistent, with

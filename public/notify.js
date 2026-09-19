@@ -263,16 +263,44 @@
 
   /* ----------------------------- reminder alert ----------------------------- */
 
+  /* The task's own due moment (mirrors the engine's convention: all-day due
+     dates are 09:00 local). Lets alert bodies carry the LEAD TIME the spec
+     shows — “Finish Python project is due in 30 minutes.” — instead of a
+     bare clock time. */
+  function dueMoment(t) {
+    if (!t || !t.dueDate || !/^\d{4}-\d{2}-\d{2}$/.test(t.dueDate)) return null;
+    const p = t.dueDate.split('-').map(Number);
+    let hh = 9; let mi = 0;
+    if (typeof t.dueTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.dueTime)) {
+      const q = t.dueTime.split(':').map(Number); hh = q[0]; mi = q[1];
+    }
+    return new Date(p[0], p[1] - 1, p[2], hh, mi, 0, 0).getTime();
+  }
+  function leadPhrase(t) {
+    const due = dueMoment(t);
+    if (due == null) return null;
+    const mins = Math.round((due - Date.now()) / 60000);
+    if (mins <= 0) return ' is due now.';
+    if (mins < 60) return ' is due in ' + mins + ' minute' + (mins === 1 ? '' : 's') + '.';
+    if (mins < 24 * 60) { const h = Math.round(mins / 60); return ' is due in ' + h + ' hour' + (h === 1 ? '' : 's') + '.'; }
+    const d = Math.round(mins / 1440);
+    return d <= 1 ? ' is due tomorrow.' : ' is due in ' + d + ' days.';
+  }
+
+
   function reminderAlert(r, t, lateMs) {
     const isOd = r.reminderType === 'overdue';
     const kind = isOd ? 'overdue' : 'reminder';
     const id = (isOd ? 'od:' : 'rem:') + r.id + '@' + r.triggerAt;
     const title = isOd ? 'Task overdue' : 'Task Reminder';
+        const lead = leadPhrase(t);
     const body = isOd
       ? t.title + ' is overdue (was due ' + fmtShort(r.triggerAt) + ').'
       : (lateMs > 60000
         ? t.title + ' — reminder was due ' + fmtShort(r.triggerAt) + ' (missed).'
-        : t.title + ' is due ' + (t.dueTime ? 'at ' + t.dueTime : 'today') + '.');
+        : lead != null
+          ? t.title + lead
+          : t.title + ' is due ' + (t.dueTime ? 'at ' + t.dueTime : 'today') + '.');
     // force: a fired reminder record is never silently swallowed — worst case
     // the user sees the in-app card; OS delivery follows the switches.
     deliver(kind, { id, title, body, taskId: t.id, reminderId: r.id, force: true });
