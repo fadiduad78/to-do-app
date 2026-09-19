@@ -67,6 +67,16 @@ const SB_KEY = (process.env.ZT_SUPABASE_KEY || '').trim();
 const SB_TABLE = (process.env.ZT_SUPABASE_STATE_TABLE || 'zerotodo_state_by_user').trim();
 const SB_USERS_TABLE = (process.env.ZT_SUPABASE_USERS_TABLE || 'zerotodo_users').trim();
 const SB_LEGACY_TABLE = (process.env.ZT_SUPABASE_LEGACY_TABLE || 'zerotodo_state').trim();
+
+/* Optional AI service for task decomposition (POST /api/ai/decompose).
+ * ZT_AI_URL   = chat-completions endpoint (any OpenAI-compatible service)
+ * ZT_AI_KEY   = bearer key — lives ONLY here, never in the browser
+ * ZT_AI_MODEL = model name
+ * Unset → the route answers with the deterministic built-in planner, so the
+ * feature works on any deployment (and offline) with zero configuration. */
+const AI_URL = (process.env.ZT_AI_URL || '').trim();
+const AI_KEY = (process.env.ZT_AI_KEY || '').trim();
+const AI_MODEL = (process.env.ZT_AI_MODEL || '').trim();
 const sbEnabled = () => Boolean(SB_URL && SB_KEY);
 
 const RESERVED = new Set(['admin', 'shared', 'signup', 'login', 'logout', 'me', 'config', 'state', 'sync', 'events']);
@@ -281,6 +291,13 @@ function coerceTask(raw, isTrash) {
       longMin: ci(fa.longMin, 1, 120, 15), longEvery: ci(fa.longEvery, 1, 12, 4),
     };
   })(raw.focusActive);
+  // AI decomposition hints — same rules as public/storage.js (kept in lock-step).
+  const _em = Math.round(Number(raw.estMin));
+  t.estMin = Number.isFinite(_em) && _em > 0 ? Math.min(10080, _em) : 0;
+  t.deps = Array.isArray(raw.deps)
+    ? [...new Set(raw.deps.filter((x) => typeof x === 'string' && x && x !== t.id))].slice(0, 12)
+    : [];
+  t.aiOffer = raw.aiOffer === true;
   t.priority = raw.priority === 'low' || raw.priority === 'high' ? raw.priority : 'med';
   t.status = raw.status === 'completed' ? 'completed' : 'active';
   t.tags = Array.isArray(raw.tags)
@@ -629,6 +646,57 @@ function sbHeaders() {
   return { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
 }
 
+/* ----------------------- task decomposition (AI) -------------------------- */
+
+let AiEngine = null; // the browser's planner module, loaded once, read-only
+function aiLib() {
+  if (AiEngine === null) {
+    try { require(path.join(PUBLIC_DIR, 'ai.js')); AiEngine = globalThis.ZTAI || false; }
+    catch (_) { AiEngine = false; }
+  }
+  return AiEngine || null;
+}
+
+/** Ask the configured service. STRICT JSON contract + the same sanitizer as
+ * the client; any hiccup (network, junk, fences) returns null → built-in. */
+async function aiRemotePlan(title, description, dueDate) {
+  const AI = aiLib();
+  if (!AI || !AI_URL || !AI_KEY || !AI_MODEL) return null;
+  const url = /\/chat\/completions\/?$/.test(AI_URL) ? AI_URL : AI_URL.replace(/\/+$/, '') + '/chat/completions';
+  const sys = 'You are the task-decomposition engine of ZeroTodo, a plain todo app. '
+    + 'Reply with ONLY a JSON object — no prose, no markdown: '
+    + '{"steps":[...]} with 4 to 12 steps. Each step: {"title": imperative action <=140 chars, '
+    + '"description": what done looks like <=300 chars, "estMin": integer 5..10080 (effort minutes), '
+    + '"priority": "low"|"med"|"high", "dueDate": "YYYY-MM-DD" schedule date or null, '
+    + '"dependsOn": integer array of EARLIER step indices}. Order steps so dependencies come first.';
+  const user = 'Task: ' + title
+    + (description ? '\nDetails: ' + description.slice(0, 2000) : '')
+    + (dueDate ? '\nOverall due: ' + dueDate : '');
+  try {
+    const res = await fetchT(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + AI_KEY },
+      body: JSON.stringify({
+        model: AI_MODEL, temperature: 0.3, response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+      }),
+    }, 15000);
+    if (!res.ok) return null;
+    const j = await res.json();
+    const content = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    if (typeof content !== 'string') return null;
+    let parsed = null;
+    try { parsed = JSON.parse(content); }
+    catch (_) {
+      const m = content.match(/\{[\s\S]*\}/); // tolerate accidental fences/prose
+      if (m) { try { parsed = JSON.parse(m[0]); } catch (e2) { parsed = null; } }
+    }
+    const p = AI.sanitizePlan(parsed);
+    if (!p) return null;
+    return { engine: 'AI service', model: AI_MODEL.slice(0, 60), steps: p.steps };
+  } catch (_) { return null; }
+}
+
 /* --------------------- Remote persistence (per bucket) ---------------------- */
 
 function scheduleRemoteSave(b) {
@@ -945,6 +1013,30 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/state' && req.method === 'GET') {
       if (pruneExpired(b)) persist(b);
       return sendJSON(res, 200, b.state);
+    }
+
+    if (p === '/api/ai/decompose' && req.method === 'POST') {
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch (e) { return sendJSON(res, 400, { error: 'bad json' }); }
+      const title = String((body && body.title) || '').trim().slice(0, 400);
+      if (!title) return sendJSON(res, 400, { error: 'title required' });
+      const nowMs = Date.now();
+      if (b.aiAt && nowMs - b.aiAt < 1500) {
+        return sendJSON(res, 429, { error: 'slow down' }); // client: silent local fallback
+      }
+      b.aiAt = nowMs;
+      const due = /^\d{4}-\d{2}-\d{2}$/.test((body && body.dueDate) || '') ? body.dueDate : null;
+      const seed = Math.abs(Number(body && body.seed) || 0) | 0;
+      const desc = String((body && body.description) || '').slice(0, 4000);
+      let out = (AI_URL && AI_KEY && AI_MODEL) ? await aiRemotePlan(title, desc, due) : null;
+      if (!out) {
+        const AI = aiLib();
+        if (!AI) return sendJSON(res, 503, { error: 'planner unavailable' });
+        const pl = AI.plan(title, desc, { start: due, seed });
+        out = { engine: 'built-in planner', playbook: pl.playbook, steps: pl.steps };
+      }
+      return sendJSON(res, 200, out);
     }
 
     if (p === '/api/sync' && req.method === 'POST') {

@@ -17,6 +17,7 @@ const html = readFileSync(PUB + '/index.html', 'utf8');
 const storageSrc = readFileSync(PUB + '/storage.js', 'utf8');
 const notifySrc = readFileSync(PUB + '/notify.js', 'utf8');
 const appSrc = readFileSync(PUB + '/app.js', 'utf8');
+const aiSrc = readFileSync(PUB + '/ai.js', 'utf8');
 
 /* OS notification surface, installed BEFORE boot so we can prove the app
    never asks for permission on load and can inspect every delivery. */
@@ -48,6 +49,7 @@ Object.defineProperty(window.navigator, 'serviceWorker', {
 });
 window.eval(storageSrc);   // the very file the browser loads
 window.eval(notifySrc);    // delivery module — loaded before app.js, as in index.html
+window.eval(aiSrc);        // AI decomposition planner — before app.js, as in index.html
 window.eval(appSrc);       // boots async init() → recover() → renderAll()
 await sleep(300);
 
@@ -1955,6 +1957,151 @@ await sleep(300);
   }
   dmK.window.close();
   ok(true, 'habits section completed without uncaught errors');
+}
+
+/* ============ 23. AI task decomposition — suggestions, review, then add ============ */
+{
+  console.log('\n--- 23. AI decomposition ---');
+  /* ---- A. the engine: structured data in, structured data out ---- */
+  const dmP = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dmP.window.eval(aiSrc);
+  const TAI = dmP.window.ZTAI;
+  ok(!!TAI, 'public/ai.js loads standalone (no app, no server) — the planner is self-contained');
+  const ex = TAI.plan('Build an expense tracker', '', {});
+  ok(ex.steps.map((s) => s.title).join('|') ===
+    'Define requirements|Design data model|Create database|Build expense form|Add categories|Add reports|Add export|Test application',
+    'the brief’s example is PINNED: “Build an expense tracker” → exactly its 8-step list');
+  ok(ex.steps.every((s) =>
+    typeof s.title === 'string' && s.title.length > 2 &&
+    typeof s.description === 'string' && s.description.length > 15 &&
+    Number.isInteger(s.estMin) && s.estMin >= 5 && s.estMin <= 10080 &&
+    ['low', 'med', 'high'].includes(s.priority) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(s.dueDate) &&
+    Array.isArray(s.dependsOn) && s.dependsOn.every((d) => Number.isInteger(d) && d >= 0)) &&
+    ex.steps.every((s, i) => s.dependsOn.every((d) => d < i)),
+    'every suggestion is STRUCTURED task data (title/desc/est/priority/due/dependsOn) — deps only ever point at earlier steps');
+  ok(TAI.looksLarge('Build an expense tracker', '') && TAI.looksLarge('Study for IELTS', '') &&
+    TAI.looksLarge('Organize my parents’ 40th anniversary party', '') && !TAI.looksLarge('Buy milk', '') && !TAI.looksLarge('Call mom', ''),
+    '“large task” heuristic fires on real projects, stays quiet on errands (the OFFER is what it gates — never any writing)');
+  const dom = TAI.plan('Fix the kitchen shelf and repaint it', '');
+  ok(dom.playbook === 'home' && /Measure & buy/.test(dom.steps.map((s) => s.title).join(' ')), 'domain detection: hands-on jobs get a home playbook');
+  ok(TAI.plan('Tie a knot', '').playbook === 'generic', 'unknown domain falls to the generic ladder, never to nothing');
+  const cap = TAI.sanitizePlan({ steps: Array.from({ length: 30 }, (_, i) => ({ title: 'S' + i, estMin: i ? -5 : 20000, dependsOn: [7, 7, 99] })) });
+  ok(cap.steps.length === 12 && cap.steps[0].estMin === 10080 && cap.steps[1].estMin === 60 &&
+    cap.steps[7].dependsOn.length === 0 && cap.steps[0].dependsOn.join() === '7' && cap.steps[8].dependsOn.join() === '7',
+    'sanitizePlan: caps 12 steps, clamps estimates (20000 → 10080, negative → default 60), drops self + out-of-range deps, dedupes — forward refs survive because a model may list steps in any order and real ids replace indices');
+  ok(TAI.sanitizePlan('Sure! Here is a plan:\n1. do stuff') === null && TAI.sanitizePlan({ steps: [] }) === null,
+    'arbitrary prose from a model is REFUSED — only shaped data passes');
+  const p1 = TAI.plan('Write a report', '', {}); const p2 = TAI.plan('Write a report', '', {});
+  ok(JSON.stringify(p1) === JSON.stringify(p2) && p1.playbook === 'writing', 'planner is deterministic — no chat roulette in the built-in engine');
+  ok(TAI.fmtEst(45) === '45m' && TAI.fmtEst(90) === '1h30m' && TAI.fmtEst(120) === '2h' && TAI.fmtEst(1500) === '1d 1h',
+    'estimates render human: 45m / 1h30m / 2h / 1d 1h');
+  dmP.window.close();
+
+  /* ---- B. the full review-gated flow in a deterministic boot ---- */
+  const NOW23 = Date.now();
+  const Dshift = (n) => { const x = new Date(NOW23); x.setDate(x.getDate() + n); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+  const seed23 = {
+    app: 'zerotodo', schemaVersion: 5, savedAt: NOW23, settings: {},
+    tasks: [
+      { id: 'big1', title: 'Build an expense tracker', description: 'A full app: log expenses by category, see monthly totals, export.', dueDate: Dshift(10), status: 'active', priority: 'med', projectId: 'pp1', tags: [], aiOffer: true, createdAt: NOW23 - 60000, updatedAt: NOW23 - 60000 },
+      { id: 'small1', title: 'Buy milk', status: 'active', priority: 'low', projectId: null, tags: [], createdAt: NOW23 - 50000, updatedAt: NOW23 - 50000 },
+    ],
+    trash: [], subtasks: [], reminders: [],
+    projects: [{ id: 'pp1', name: 'Expenses', icon: '💸', color: '#4f46e5', status: 'active', createdAt: 1, updatedAt: 1, sortOrder: 1 }],
+  };
+  const dmQ = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dmQ.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dmQ.window.localStorage.setItem('todo_backup_v1', JSON.stringify(seed23));
+  dmQ.window.eval(storageSrc); dmQ.window.eval(aiSrc); dmQ.window.eval(appSrc);
+  await sleep(900);
+  const dq = (s) => dmQ.window.document.querySelector(s);
+  const dqa = (s) => [...dmQ.window.document.querySelectorAll(s)];
+  const qmir = () => JSON.parse(dmQ.window.localStorage.getItem('todo_backup_v1'));
+  const rowOf = (t) => dqa('#taskList .task').find((r) => r.querySelector('.task-title').textContent.includes(t));
+  ok(!!rowOf('Build an expense tracker').querySelector('.ai-cta'), 'a LARGE task row carries the offer button: “✨ Break this task down with AI”');
+  ok(!rowOf('Buy milk').querySelector('.ai-cta'), 'a small task gets NO nagging offer (aiOffer not inferred per-row — set at creation by the heuristic)');
+  ok(!!rowOf('Buy milk').querySelector('[data-act="aidec"]'), 'yet the ✨ action is available on every active row — the offer is an invitation, not a lock');
+
+  rowOf('Build an expense tracker').querySelector('.ai-cta').click();
+  await sleep(350);
+  const snapBefore = JSON.stringify(qmir());
+  ok(!!dq('.ai-modal') && /AI suggestions/.test(dq('.ai-modal h3').textContent), 'the review dialog opens (“✨ AI suggestions”)');
+  ok(dqa('.ai-modal .ai-step').length === 8, 'all 8 suggestions listed, each with its own row');
+  ok(dq('.ai-modal .ai-title').value === 'Define requirements' && dqa('.ai-step input[type="checkbox"]').every((c) => c.checked),
+    'suggestions come PRE-CHECKED (uncheck to veto — the brief’s ☑☑☑☐ pattern is user-made, not the app hiding steps)');
+  await sleep(400);
+  ok(JSON.stringify(qmir()) === snapBefore, 'opening the dialog + generating the plan writes NOTHING — the AI cannot touch the task store');
+  const nTasks0 = qmir().tasks.length;
+
+  const step = (i) => dqa('.ai-step')[i];
+  const t3 = step(2).querySelector('.ai-title'); t3.value = 'Set up SQLite'; t3.dispatchEvent(new dmQ.window.Event('input', { bubbles: true }));
+  for (const gi of [5, 6, 7]) { const c = step(gi).querySelector('input[type="checkbox"]'); c.checked = false; c.dispatchEvent(new dmQ.window.Event('change', { bubbles: true })); }
+  ok(/5 of 8 selected/.test(dq('.ai-count').textContent) && /Add selected tasks \(5\)/.test(dq('[data-aim="add"]').textContent),
+    'footer live-counts the selection: “5 of 8 selected” → “Add selected tasks (5)”');
+  const depSel = step(3).querySelector('[data-ai="depadd"]'); // Build expense form (deps: [Set up SQLite])
+  const before = step(3).querySelectorAll('.ai-dep-chip').length;
+  depSel.value = '0'; depSel.dispatchEvent(new dmQ.window.Event('change', { bubbles: true })); await sleep(160);
+  ok(step(3).querySelectorAll('.ai-dep-chip').length === before + 1, 'dependencies are editable too — “+ after…” adds a link chip, and one already present is never duplicated');
+  dq('[data-aim="add"]').click();
+  await sleep(500);
+  ok(!dq('.ai-modal'), 'Add closes the dialog — one action, no lingering overlay');
+  const qm = qmir();
+  ok(qm.tasks.length === nTasks0 + 5, 'exactly the CHECKED five were created (unchecked suggestions simply don’t exist downstream)');
+  ok(!qm.tasks.some((x) => /Add reports|Add export|Test application/.test(x.title)),
+    'the vetted-away steps were NOT auto-created — “Do NOT automatically create AI-generated tasks” pinned');
+  const created = (t) => qm.tasks.find((x) => x.title === t);
+  ok(created('Set up SQLite') && !created('Create database'),
+    'inline EDITS before adding are honored (Create database → Set up SQLite) — every suggestion was editable');
+  ok(created('Define requirements').projectId === 'pp1' && created('Add categories').priority === 'med' && created('Define requirements').estMin === 45,
+    'approved suggestions land as ORDINARY tasks: project inherited, priority suggestion kept, estimate stored');
+  ok(qm.tasks.find((x) => x.title === 'Design data model').deps.includes(created('Define requirements').id),
+    'dependencies were rewired from plan indices to REAL task ids of the added batch');
+  ok(created('Build expense form').deps.length === 2 &&
+     created('Build expense form').deps.includes(created('Set up SQLite').id) &&
+     created('Build expense form').deps.includes(created('Define requirements').id),
+    'the manually added “+ after #0” chip landed as a second real dependency on the created task');
+  ok(qm.tasks.find((x) => x.title === 'Build expense form').dueDate >= qm.tasks.find((x) => x.title === 'Define requirements').dueDate,
+    'suggested due dates are scheduled in order (staggered from the parent’s own due date)');
+  ok(qm.tasks.find((x) => x.id === 'big1').aiOffer === false, 'adding the breakdown retires the parent’s offer prompt');
+  const row1 = rowOf('Add categories');
+  ok(/⏱ 1h/.test(row1.textContent) && /🔗/.test(row1.textContent), 'new rows show the advisory ⏱ estimate and 🔗 depends-on badges (display only)');
+  const okRow0 = rowOf('Define requirements');
+  ok(!/🔗/.test(okRow0.textContent), 'a first step with no dependencies shows no 🔗 badge');
+  await sleep(400);
+  ok(created('Add categories').estMin === 60 && created('Add categories').deps.length === 1 && created('Add categories').aiOffer === false && created('Add categories').status === 'active',
+    'every created task survived the storage round-trip with its advisory fields intact (⏱🔗 are data, not decoration)');
+
+  /* cancel path on the small task (generic playbook) */
+  rowOf('Buy milk').querySelector('[data-act="aidec"]').click(); await sleep(350);
+  ok(dqa('.ai-modal .ai-step').length === 6, '“Buy milk” still gets the generic 6-step ladder when ASKED (offer ≠ force, and no dead end)');
+  const beforeCancel = JSON.stringify(qmir());
+  dq('[data-aim="regen"]').click(); await sleep(300);
+  ok(JSON.stringify(qmir()) === beforeCancel, '✨ Regenerate re-plans with ZERO writes (same guard as before)');
+  ok(dqa('.ai-modal .ai-step').length === 6, 'regenerated plan renders fresh rows');
+  dq('[data-aim="cancel"]').click(); await sleep(150);
+  ok(!dq('.ai-modal') && JSON.stringify(qmir()) === beforeCancel, 'Cancel adds NOTHING — reviewed, declined, untouched');
+
+  /* ---- C. main dom: creation heuristic + settings ---- */
+  $('#newTaskBtn').click(); await sleep(60);
+  $('#f-title').value = 'Migrate the billing system to usage-based pricing';
+  $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); await sleep(300);
+  ok(tsk().some((x) => x.title === 'Migrate the billing system to usage-based pricing' && x.aiOffer === true),
+    'creating a LARGE task stamps aiOffer — the row itself offers “Break this task down with AI”');
+  $('#newTaskBtn').click(); await sleep(60);
+  $('#f-title').value = 'Sharpen pencils';
+  $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); await sleep(300);
+  ok(tsk().some((x) => x.title === 'Sharpen pencils' && !x.aiOffer), 'small new tasks get no offer flag — quiet by design');
+  const bigRow = $$('#taskList .task').find((r) => /Migrate the billing/.test(r.querySelector('.task-title').textContent));
+  ok(!!bigRow.querySelector('.ai-cta'), '…and large ones immediately show the offer chip');
+  $('#settingsBtn').click(); await sleep(200);
+  ok($('#aiMode').value === 'auto', 'Settings → AI exposes the engine choice (default: auto)');
+  $('#aiMode').value = 'local'; $('#aiMode').dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(260);
+  ok(remMirror().settings.aiMode === 'local', 'the preference persists + syncs inside settings like every other');
+  $('#settingsBtn').click(); await sleep(140);
+  ok(true, 'AI decomposition section completed without uncaught errors');
+
+  dmQ.window.close();
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

@@ -484,5 +484,32 @@ console.log('\n--- habits (coerce layer) ---');
   ok(recH.state.reminders.length === 0, 'no phantom reminder rows created by recovery (engine owns those)');
 }
 
+/* ---------------- AI decomposition fields on TASKS ---------------- */
+{
+  const CT = ZT.helpers.coerceTask;
+  const out = [];
+  ok(CT({ id: 'a1', title: 'T', estMin: '500', deps: ['d1', 'd1', 'a1', 7, ''], aiOffer: 1 }, out) &&
+    out[0].estMin === 500 && out[0].deps.join() === 'd1' && out[0].aiOffer === false,
+    'coerceTask AI hints: estMin string→number, deps dedupe + drop self/non-string/empty, aiOffer strict true (1 → false)');
+  const out2 = [];
+  CT({ id: 'a2', title: 'T', estMin: -9, deps: Array.from({ length: 20 }, (_, i) => 'x' + i), aiOffer: true }, out2);
+  ok(out2[0].estMin === 0 && out2[0].deps.length === 12 && out2[0].aiOffer === true,
+    'negative/absent estMin → 0 (badge hidden), deps capped at 12, aiOffer true round-trips');
+  const out3 = [];
+  CT({ id: 'a3', title: 'T', estMin: 99999 }, out3);
+  ok(out3[0].estMin === 10080, 'estMin clamps at one week (10080 min) — no absurd values reach the UI from any source');
+  const out4 = [];
+  ok(!CT({ id: 'a4', title: '', estMin: 30 }, out4) && CT({ id: 'a5', title: 'ok' }, out4) === true,
+    'AI fields neither rescue an invalid task nor veto a valid one — pure advisory decoration on the existing contract');
+  // dangling deps must SURVIVE cleaning (badge renders “(removed task)”, no silent data mutation)
+  const rec = ZT.helpers.cleanPayload({ schemaVersion: 5, tasks: [
+    { id: 'p', title: 'Parent', deps: ['gone'] },
+    { id: 'c', title: 'Child', estMin: 45, deps: ['p', 'ghost2'] },
+  ], trash: [], projects: [], subtasks: [] });
+  const cRow = rec.tasks.find((x) => x.id === 'c');
+  ok(cRow.deps.join() === 'p,ghost2' && cRow.estMin === 45,
+    'cleanPayload keeps advisory deps even when the target is missing — removal order must never rewrite user data');
+}
+
 console.log(failed ? `\n${failed} storage check(s) FAILED` : '\nall storage checks green');
 process.exit(failed ? 1 : 0);

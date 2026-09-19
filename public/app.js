@@ -42,6 +42,7 @@
     calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
     dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
     habBtn: $('habBtn'), habitsView: $('habitsView'), habitsHost: $('habitsHost'), habInStats: $('habInStats'),
+    aiMode: $('aiMode'),
     focusBar: $('focusBar'),
     fRecurrence: $('f-recurrence'), remRows: $('remRows'), addRemBtn: $('addRemBtn'),
     recurPanel: $('recurPanel'), rcEvery: $('rcEvery'), rcUnit: $('rcUnit'), rcDays: $('rcDays'), rcHint: $('rcHint'),
@@ -629,7 +630,9 @@
           ? '<span class="check" aria-hidden="true">🗑</span>'
           : '<button class="check' + (done ? ' on' : '') + '" role="checkbox" aria-checked="' + done + '" aria-label="Toggle complete" data-act="toggle">' + (done ? '✓' : '') + '</button>') +
         '<div class="task-main">' +
-          '<div class="task-title">' + esc(t.title) + '</div>' +
+          '<div class="task-title">' + esc(t.title) +
+          (!inTrash && t.aiOffer && window.ZTAI ? ' <button type="button" class="btn btn-sm ai-cta" data-act="aidec" title="You asked for a big task — let the planner propose steps. Nothing is added until you approve them.">✨ Break this task down with AI</button>' : '') +
+          '</div>' +
           (t.description ? '<div class="task-desc">' + esc(t.description) + '</div>' : '') +
           '<div class="task-meta">' +
             '<span class="badge prio-' + t.priority + '">' + prioLabel + '</span>' +
@@ -637,6 +640,21 @@
             (!inTrash && remPendingFor(t.id) ? '<span class="badge rem" title="' + remPendingFor(t.id) + ' pending reminder(s), next: ' + esc(remNextLabel(t.id)) + '">🔔 ' + remPendingFor(t.id) + '</span>' : '') +
             (t.recurrence ? '<span class="badge recur" title="' + esc(recurLabel(t)) + ' · completing rolls to the next date; ↻ opens series actions' + '">↻ ' + esc(recurLabel(t)) + '</span>' : '') +
             (t.focusTotal > 0 ? '<span class="badge focus" title="' + t.focusTotal + ' focused min · ' + (t.focusSessions || 0) + ' completed session(s)">🍅 ' + (t.focusTotal < 60 ? t.focusTotal + 'm' : (Math.round(t.focusTotal / 6) / 10) + 'h') + '</span>' : '') +
+            (t.estMin > 0 ? '<span class="badge est" title="Planned effort (from an AI breakdown — advisory)">⏱ ' + (window.ZTAI ? ZTAI.fmtEst(t.estMin) : t.estMin + 'm') + '</span>' : '') +
+            (function () {
+              const dd = t.deps || [];
+              if (!dd.length) return '';
+              let open = 0; const names = [];
+              for (const d of dd) {
+                const o = byId(d);
+                if (!o) { names.push('(removed task)'); open++; continue; }
+                names.push(truncate(o.title, 40));
+                if (o.status !== 'completed') open++;
+              }
+              return '<span class="badge deps' + (open ? '' : ' ready') + '" title="Suggested after: ' + esc(names.slice(0, 3).join(', ')) +
+                (names.length > 3 ? ' +' + (names.length - 3) : '') + (open ? ' — still open' : ' — all done, go ahead') + '">' +
+                (open ? '🔗 ' + open : '🔗 ✓') + '</span>';
+            })() +
             (function () {
               if (!t.projectId) return '';
               const pj = S.projects.find((p) => p.id === t.projectId);
@@ -657,6 +675,7 @@
             ? '<button class="btn btn-ghost btn-sm" data-act="restore" title="Restore task">Restore</button>' +
               '<button class="btn btn-danger-ghost btn-sm" data-act="destroy" title="Delete forever">Delete forever</button>'
             : '<button class="btn btn-ghost btn-sm btn-icon" data-act="focus" title="Start Focus — a Pomodoro session on this task" aria-label="Start focus session">🍅</button>' +
+              (window.ZTAI ? '<button class="btn btn-ghost btn-sm btn-icon" data-act="aidec" title="Break this task down with AI — suggestions you review first" aria-label="Break down with AI">✨</button>' : '') +
               (t.recurrence ? '<button class="btn btn-ghost btn-sm btn-icon" data-act="series" title="Series: complete / skip / edit occurrence or series / stop repeating" aria-label="Recurring series options">↻</button>' : '') +
               '<button class="btn btn-ghost btn-sm btn-icon" data-act="up" title="Move up" aria-label="Move up">↑</button>' +
               '<button class="btn btn-ghost btn-sm btn-icon" data-act="down" title="Move down" aria-label="Move down">↓</button>' +
@@ -697,6 +716,7 @@
     els.subtaskAuto.checked = !!S.settings.subtaskAutoComplete;
     if (els.fzWork) { const c = focusCfg(); els.fzWork.value = c.work; els.fzShort.value = c.short; els.fzLong.value = c.long; els.fzEvery.value = c.longEvery; els.fzNotify.checked = c.notify; els.fzAuto.checked = c.autoComplete; }
     if (els.habInStats) els.habInStats.checked = S.settings.habitsInStats === true;
+    if (els.aiMode) els.aiMode.value = S.settings.aiMode === 'local' ? 'local' : 'auto';
     if (window.ZTNotify) ZTNotify.renderControls(); // the Notifications section owns itself
   }
 
@@ -848,6 +868,7 @@
         status: 'active',
         sortOrder: S.tasks.length ? base - 1 : 0,
         createdAt: now, updatedAt: now,
+        aiOffer: !!(window.ZTAI && ZTAI.looksLarge(title, v.description)),
       };
       S.tasks.push(t);
       ops = [{ store: STORES.tasks, op: 'put', value: t }];
@@ -3261,6 +3282,183 @@
     }
   }
 
+  /* ====================== AI task decomposition (review-gated) ======================
+     The brief's contract, kept honest: the planner SUGGESTS structured steps and
+     the task store is not touched — not one op — until the user presses
+     “Add selected tasks” in this dialog. Every field of every suggestion is
+     editable inline before that; unchecking simply leaves that step out. What
+     gets created are ORDINARY tasks (plus advisory estMin/deps/⏱🔗 badges) —
+     the AI never replaces or re-wires the task system. */
+
+  function aiStepRow(s, i, steps) {
+    const depChips = (s.dependsOn || []).filter((j) => steps[j]).map((j) =>
+      '<span class="ai-dep-chip">#' + (j + 1) + ' ' + esc(truncate(steps[j].title || '?', 22)) +
+      '<button type="button" data-ai="depdel" data-j="' + j + '" aria-label="Remove dependency">✕</button></span>').join('');
+    const depOpts = steps.map((o, j) => (j !== i && String(o.title || '').trim()
+      ? '<option value="' + j + '">#' + (j + 1) + ' ' + esc(truncate(o.title, 24)) + '</option>' : '')).join('');
+    return '<div class="ai-step' + (s.checked ? '' : ' off') + '" data-airow="' + i + '">' +
+      '<label class="ai-ck" title="Include this step"><input type="checkbox" data-ai="checked"' + (s.checked ? ' checked' : '') + '></label>' +
+      '<div class="ai-fields">' +
+        '<div class="ai-l1"><span class="ai-num">' + (i + 1) + '.</span>' +
+        '<input class="ai-title" data-ai="title" value="' + esc(s.title) + '" maxlength="200" placeholder="Step title" aria-label="Title">' +
+        '<input class="ai-est" type="number" data-ai="estMin" min="5" max="10080" step="5" value="' + s.estMin + '" title="Estimated minutes" aria-label="Estimated minutes"><span class="ai-unit">m</span>' +
+        '<select data-ai="priority" title="Suggested priority" aria-label="Priority">' +
+          ['low', 'med', 'high'].map((pp) => '<option value="' + pp + '"' + (s.priority === pp ? ' selected' : '') + '>' + pp + '</option>').join('') +
+        '</select>' +
+        '<input type="date" data-ai="dueDate" value="' + (s.dueDate || '') + '" title="Suggested due date — edit or clear it" aria-label="Due date">' +
+        '</div>' +
+        '<div class="ai-l2"><input class="ai-desc" data-ai="description" value="' + esc(s.description) + '" maxlength="500" placeholder="What “done” looks like" aria-label="Description">' +
+        '<span class="ai-deps">' + depChips +
+        '<select data-ai="depadd" title="Also start after…" aria-label="Add dependency"><option value="">+ after…</option>' + depOpts + '</select></span>' +
+        '</div>' +
+      '</div></div>';
+  }
+
+  function aiDecomposeModal(parent) {
+    if (!window.ZTAI) { toast('AI planner module is missing.'); return; }
+    const ov = document.createElement('div');
+    ov.className = 'modal-overlay';
+    const card = document.createElement('div');
+    card.className = 'modal-card ai-modal';
+    let D = null;
+    let seed = 0;
+    const footHtml = () => {
+      if (!D) return '';
+      const nSel = D.steps.filter((s) => s.checked).length;
+      const allOn = nSel === D.steps.length;
+      return '<button type="button" class="btn btn-ghost btn-sm" data-aim="all">' + (allOn ? '☐ Uncheck all' : '☑ Check all') + '</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-aim="regen">✨ Regenerate</button>' +
+        '<span class="ai-count muted small">' + nSel + ' of ' + D.steps.length + ' selected</span>' +
+        '<span class="ai-gap"></span>' +
+        '<button type="button" class="btn btn-ghost" data-aim="cancel">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" data-aim="add"' + (nSel ? '' : ' disabled') + '>Add selected tasks' + (nSel ? ' (' + nSel + ')' : '') + '</button>';
+    };
+    const renderFoot = () => { const f = card.querySelector('.ai-foot'); if (f) f.innerHTML = footHtml(); };
+    const render = () => {
+      if (!D) {
+        card.innerHTML = '<h3>✨ AI suggestions</h3><p class="muted small ai-loading">Planning “' + esc(truncate(parent.title, 60)) + '”… ⏳</p>';
+        return;
+      }
+      card.innerHTML =
+        '<h3>✨ AI suggestions</h3>' +
+        '<p class="muted small">For: <b>' + esc(truncate(parent.title, 70)) + '</b> · via ' + esc(D.engine || 'planner') + (D.model ? ' (' + esc(D.model) + ')' : '') +
+        (D.playbook && D.playbook !== 'generic' ? ' · playbook: ' + esc(D.playbook) : '') +
+        ' · edit anything — <b>nothing is added until you press “Add selected tasks”</b>.</p>' +
+        '<div class="ai-body">' + D.steps.map((s, i) => aiStepRow(s, i, D.steps)).join('') + '</div>' +
+        '<div class="ai-foot">' + footHtml() + '</div>';
+    };
+    const load = () => {
+      D = null; render();
+      ZTAI.decompose(parent, { mode: S.settings.aiMode === 'local' ? 'local' : 'auto', seed })
+        .then((p) => {
+          if (!p || !p.steps || !p.steps.length) { card.innerHTML = '<h3>✨ AI suggestions</h3><p class="muted small">The planner returned nothing usable — try again or add steps yourself.</p>'; return; }
+          D = { engine: p.engine, model: p.model, playbook: p.playbook, steps: p.steps.map((s, i) => Object.assign({}, s, { checked: true, __gi: i })) };
+          render();
+        });
+    };
+    render();
+    load();
+    ov.appendChild(card);
+    document.body.appendChild(ov);
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    function close() { document.removeEventListener('keydown', onKey); ov.remove(); }
+    document.addEventListener('keydown', onKey);
+    card.addEventListener('input', (e) => {
+      const inp = e.target.closest('[data-ai]');
+      if (!inp || !D) return;
+      const row = inp.closest('[data-airow]');
+      const s = D.steps[Number(row && row.dataset.airow)];
+      if (!s) return;
+      const f = inp.dataset.ai;
+      if (f === 'title') s.title = inp.value;
+      else if (f === 'description') s.description = inp.value;
+      else if (f === 'estMin') { const v = Math.round(Number(inp.value)); if (Number.isFinite(v)) s.estMin = Math.min(10080, Math.max(5, v)); }
+      else if (f === 'dueDate') s.dueDate = /^\d{4}-\d{2}-\d{2}$/.test(inp.value) ? inp.value : null;
+    });
+    card.addEventListener('change', (e) => {
+      const inp = e.target.closest('[data-ai]');
+      if (!inp || !D) return;
+      const row = inp.closest('[data-airow]');
+      const i = Number(row && row.dataset.airow);
+      const s = D.steps[i];
+      if (!s) return;
+      const f = inp.dataset.ai;
+      if (f === 'priority') { s.priority = inp.value; return; }
+      if (f === 'checked') { s.checked = inp.checked; row.classList.toggle('off', !s.checked); renderFoot(); return; }
+      if (f === 'depadd') {
+        const j = Number(inp.value);
+        if (inp.value !== '' && Number.isInteger(j) && j !== i && D.steps[j] && !s.dependsOn.includes(j)) s.dependsOn.push(j);
+        render(); // structure changed (chips)
+      }
+    });
+    card.addEventListener('click', async (e) => {
+      const del = e.target.closest('[data-ai="depdel"]');
+      if (del && D) {
+        const row = del.closest('[data-airow]');
+        const s = D.steps[Number(row && row.dataset.airow)];
+        if (s) { s.dependsOn = s.dependsOn.filter((j) => j !== Number(del.dataset.j)); render(); }
+        return;
+      }
+      const b = e.target.closest('[data-aim]');
+      if (!b) { if (e.target === ov) close(); return; }
+      const m = b.dataset.aim;
+      if (m === 'cancel') close();
+      else if (m === 'all') { const allOn = D.steps.every((s) => s.checked); D.steps.forEach((s) => { s.checked = !allOn; }); render(); }
+      else if (m === 'regen') { seed++; load(); }
+      else if (m === 'add') { close(); await aiPlanAdd(parent, D); }
+    });
+  }
+
+  /** Commit the APPROVED subset as ordinary tasks, in plan order, with the
+   * dependency links re-pointed at the freshly created ids. This is the ONE
+   * place the AI feature writes — only ever from the “Add selected tasks”
+   * button. Unselected or titleless suggestions are simply not created. */
+  async function aiPlanAdd(parent, D) {
+    const sel = D.steps.filter((s) => s.checked);
+    const cleaned = [];
+    for (const s of sel) {
+      const title = String(s.title || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+      if (!title) continue;
+      cleaned.push(Object.assign({}, s, { title }));
+    }
+    if (!cleaned.length) { toast('Nothing to add — select at least one step with a title.'); return; }
+    const now = Date.now();
+    const ids = cleaned.map(() => helpers.uuid());
+    const giToId = new Map(cleaned.map((s, i) => [s.__gi, ids[i]]));
+    const minSoFar = S.tasks.reduce((m, x) => Math.min(m, x.sortOrder), S.tasks.length ? Infinity : 0);
+    const base = Number.isFinite(minSoFar) ? minSoFar : 0;
+    const ops = [];
+    cleaned.forEach((s, i) => {
+      const t = {
+        id: ids[i], title: s.title,
+        description: String(s.description || '').slice(0, 2000),
+        dueDate: /^\d{4}-\d{2}-\d{2}$/.test(s.dueDate || '') ? s.dueDate : null,
+        dueTime: null,
+        priority: ['low', 'med', 'high'].indexOf(s.priority) >= 0 ? s.priority : 'med',
+        tags: [],
+        projectId: parent.projectId || null,
+        recurrence: null, recurRule: null, recurAnchor: null,
+        status: 'active',
+        estMin: s.estMin,
+        deps: (s.dependsOn || []).map((g) => giToId.get(g)).filter(Boolean),
+        aiOffer: false,
+        sortOrder: base - (cleaned.length - i),
+        createdAt: now + i, updatedAt: now,
+      };
+      S.tasks.push(t);
+      ops.push({ store: STORES.tasks, op: 'put', value: t });
+    });
+    if (parent.aiOffer) {
+      parent.aiOffer = false;
+      parent.updatedAt = now;
+      ops.push({ store: STORES.tasks, op: 'put', value: parent });
+    }
+    const okc = await store.commit(ops);
+    renderAll();
+    toast('✨ Added ' + cleaned.length + ' task' + (cleaned.length === 1 ? '' : 's') +
+      ' from the breakdown — ordinary tasks now, edit anything as usual.' + (okc ? '' : ' (storage reported an error)'));
+  }
+
   /* ------------------------- Productivity dashboard -------------------------
    * NOT a data source. Every tile, bar and row is derived at render time from
    * the same S.tasks / S.projects / S.reminders arrays the list and calendar
@@ -3793,6 +3991,7 @@
       if (btn && btn.dataset.act === 'delete') { deleteTask(id); return; }
       if (btn && btn.dataset.act === 'series') { const tt = byId(id); if (tt) seriesDialog(tt).then((a) => onSeriesAction(a, tt)); return; }
       if (btn && btn.dataset.act === 'focus') { focusStartModal(id); return; }
+      if (btn && btn.dataset.act === 'aidec') { const tt = byId(id); if (tt) aiDecomposeModal(tt); return; }
       // Clicking the task body opens the editor
       if (e.target.closest('.task-main')) openComposer({ mode: 'edit', taskId: id });
     });
@@ -3903,6 +4102,11 @@
       toast(e.target.checked
         ? '⚠ A finished session will complete the task automatically.'
         : 'Tasks will only be completed by you — sessions just record focus time.');
+    });
+    if (els.aiMode) els.aiMode.addEventListener('change', (e) => {
+      S.settings.aiMode = e.target.value === 'local' ? 'local' : 'auto';
+      commitSettings();
+      toast(S.settings.aiMode === 'local' ? 'Task breakdowns will use the built-in planner only.' : 'Task breakdowns will try the server AI service first (falls back to built-in).');
     });
     if (els.habInStats) els.habInStats.addEventListener('change', (e) => {
       S.settings.habitsInStats = e.target.checked;

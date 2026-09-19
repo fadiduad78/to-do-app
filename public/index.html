@@ -220,6 +220,15 @@
     <label class="setting-row setting-check"><span>Count habit check-ins in dashboard stats (tiles, week chart, streak)</span><input type="checkbox" id="habInStats"></label>
     <p class="muted small">Off by default — habits are a separate module: task statistics stay pure unless you turn this on. Habit days never count as overdue.</p>
 
+    <h2 style="margin-top:14px">AI</h2>
+    <label class="setting-row"><span>Task decomposition engine</span><select id="aiMode">
+      <option value="auto">Auto — server AI service when configured, else built-in planner</option>
+      <option value="local">Built-in planner only (offline, deterministic)</option>
+    </select></label>
+    <p class="muted small">✨ “Break this task down with AI” only ever <b>suggests</b>: you review, edit and check
+    every step — nothing is created until you press “Add selected tasks”. No API keys live in the browser; an
+    operator can wire a model on the server via <code>ZT_AI_URL / ZT_AI_KEY / ZT_AI_MODEL</code>.</p>
+
     <h2 style="margin-top:14px">Notifications</h2>
     <div id="notifBox" class="notif-box">
       <div class="setting-row notif-perm" id="notifPermRow"></div>
@@ -293,6 +302,7 @@
 <script src="storage.js"></script>
 <script src="cloud.js"></script>
 <script src="notify.js"></script>
+<script src="ai.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -388,6 +388,15 @@
         longMin: ci(fa.longMin, 1, 120, 15), longEvery: ci(fa.longEvery, 1, 12, 4),
       };
     })(raw.focusActive);
+    // AI decomposition hints — ADVISORY only: estMin feeds the ⏱ badge, deps
+    // the 🔗 badge, aiOffer is the one-time “break this down?” nudge. Nothing
+    // here gates completion, due dates or the reminder engine.
+    const _em = Math.round(Number(raw.estMin));
+    t.estMin = Number.isFinite(_em) && _em > 0 ? Math.min(10080, _em) : 0;
+    t.deps = Array.isArray(raw.deps)
+      ? [...new Set(raw.deps.filter((x) => typeof x === 'string' && x && x !== t.id))].slice(0, 12)
+      : [];
+    t.aiOffer = raw.aiOffer === true;
     t.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : now;
     t.projectId = typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : null;
     // Calendar support: an optional "HH:MM" placement on the due date. The
@@ -1309,6 +1318,7 @@
       cleanPayload,
       backupNewer,
       coerceProject,
+      coerceTask,
       coerceSubtask,
       coerceReminder,
       coerceHabit,

@@ -1004,6 +1004,36 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
 .hab-modal .hab-days { display: flex; gap: 6px; margin-top: 6px; }
 @media (max-width: 560px) { .hab-day { font-size: 10.5px; padding: 3px 5px; } .hab-count { width: 100%; margin-bottom: 2px; } }
 
+/* ========================= AI task decomposition ========================= */
+.ai-cta { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; font-size: 11.5px; font-weight: 600; padding: 1px 10px; margin-left: 8px; vertical-align: 2px; }
+.ai-cta:hover { filter: brightness(0.97); }
+.badge.est { background: var(--panel-2); color: var(--muted); }
+.badge.deps { background: var(--panel-2); color: var(--muted); }
+.badge.deps.ready { background: var(--ok-soft); color: var(--ok); }
+.modal-card.ai-modal { width: min(760px, 94vw); max-height: 84vh; overflow: auto; }
+.ai-modal h3 { margin: 2px 0 4px; }
+.ai-body { margin: 10px 0 6px; display: flex; flex-direction: column; gap: 8px; }
+.ai-step { display: flex; gap: 10px; align-items: flex-start; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.ai-step.off { opacity: 0.55; }
+.ai-ck { margin-top: 3px; }
+.ai-ck input { width: 16px; height: 16px; accent-color: var(--accent); }
+.ai-fields { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.ai-l1 { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ai-num { font-weight: 700; color: var(--muted); font-size: 13px; flex: none; }
+.ai-title { flex: 2 1 200px; font-weight: 600; }
+.ai-est { width: 64px; }
+.ai-unit { font-size: 11px; color: var(--muted); margin-right: 4px; }
+.ai-l1 select, .ai-l1 input[type=date] { font-size: 12px; }
+.ai-l2 { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ai-desc { flex: 3 1 240px; font-size: 12.5px; color: var(--muted); }
+.ai-deps { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.ai-dep-chip { font-size: 11px; background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.ai-dep-chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 10px; padding: 0 0 0 4px; }
+.ai-deps select { font-size: 11.5px; max-width: 150px; }
+.ai-foot { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; flex-wrap: wrap; }
+.ai-foot .ai-gap { flex: 1 1 auto; }
+@media (max-width: 560px) { .ai-l1 { gap: 4px; } .ai-title { flex-basis: 130px; } .ai-cta { display: block; margin: 4px 0 0; } }
+
   </style>
 </head>
 <body>
@@ -1210,6 +1240,15 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     <h2 style="margin-top:14px">Habits</h2>
     <label class="setting-row setting-check"><span>Count habit check-ins in dashboard stats (tiles, week chart, streak)</span><input type="checkbox" id="habInStats"></label>
     <p class="muted small">Off by default — habits are a separate module: task statistics stay pure unless you turn this on. Habit days never count as overdue.</p>
+
+    <h2 style="margin-top:14px">AI</h2>
+    <label class="setting-row"><span>Task decomposition engine</span><select id="aiMode">
+      <option value="auto">Auto — server AI service when configured, else built-in planner</option>
+      <option value="local">Built-in planner only (offline, deterministic)</option>
+    </select></label>
+    <p class="muted small">✨ “Break this task down with AI” only ever <b>suggests</b>: you review, edit and check
+    every step — nothing is created until you press “Add selected tasks”. No API keys live in the browser; an
+    operator can wire a model on the server via <code>ZT_AI_URL / ZT_AI_KEY / ZT_AI_MODEL</code>.</p>
 
     <h2 style="margin-top:14px">Notifications</h2>
     <div id="notifBox" class="notif-box">
@@ -1672,6 +1711,15 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
         longMin: ci(fa.longMin, 1, 120, 15), longEvery: ci(fa.longEvery, 1, 12, 4),
       };
     })(raw.focusActive);
+    // AI decomposition hints — ADVISORY only: estMin feeds the ⏱ badge, deps
+    // the 🔗 badge, aiOffer is the one-time “break this down?” nudge. Nothing
+    // here gates completion, due dates or the reminder engine.
+    const _em = Math.round(Number(raw.estMin));
+    t.estMin = Number.isFinite(_em) && _em > 0 ? Math.min(10080, _em) : 0;
+    t.deps = Array.isArray(raw.deps)
+      ? [...new Set(raw.deps.filter((x) => typeof x === 'string' && x && x !== t.id))].slice(0, 12)
+      : [];
+    t.aiOffer = raw.aiOffer === true;
     t.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : now;
     t.projectId = typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : null;
     // Calendar support: an optional "HH:MM" placement on the due date. The
@@ -2593,6 +2641,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
       cleanPayload,
       backupNewer,
       coerceProject,
+      coerceTask,
       coerceSubtask,
       coerceReminder,
       coerceHabit,
@@ -3740,6 +3789,306 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
 
 </script>
 <script>
+/* ==========================================================================
+ * ZeroTodo — AI task decomposition (public/ai.js)
+ *
+ * The brief in one line: when a task is big, offer to "Break this task down
+ * with AI" — and let the AI return STRUCTURED TASK DATA (never prose) that
+ * the user reviews, edits and explicitly approves. Nothing here ever writes
+ * to the task system: this module only plans. Creating the approved subset is
+ * app.js's job, through the ordinary task pipeline — an accepted suggestion is
+ * just a task, with two advisory extras (estMin, deps) that ride the record.
+ *
+ * Two engines, one interface (ZTAI.decompose):
+ *   • built-in planner — deterministic, domain-aware, always available
+ *     (offline, file:// standalone, rate-limited fallback). "AI" here means a
+ *     structured planning engine, not a chatbot: its output is an array of
+ *     {title, description, estMin, priority, dueDate, dependsOn} — the exact
+ *     shape the review UI (and the server) consume.
+ *   • server AI service — POST /api/ai/decompose; if the deployment set
+ *     ZT_AI_URL/ZT_AI_KEY/ZT_AI_MODEL the server proxies a strict-JSON LLM
+ *     call; any failure at all falls back to the built-in planner (the app
+ *     must work with zero AI configuration).
+ *
+ * No API keys ever live in the browser; settings only choose the preference
+ * 'auto' vs 'local'.
+ * ==========================================================================*/
+(function (global) {
+  'use strict';
+
+  const PRIORITIES = ['low', 'med', 'high'];
+  const MAX_STEPS = 12;
+
+  /* ------------------------- the built-in planner ------------------------- */
+  /* Playbooks: matched in order, first hit wins. A step is
+     [title, description, estMin, priority, dependsOn...] and deliberately
+     mirrors how a senior engineer would slice the work — small front-end
+     steps, bigger core step, tests near the end. The expense-tracker
+     playbook pins the exact 8-step list from the product brief. */
+  const PLAYBOOKS = [
+    {
+      id: 'expense-app',
+      test: (t) => /(expense|budget|spending)/i.test(t) && /(track|tracker|app|log|record|manage)/i.test(t),
+      steps: [
+        ['Define requirements', 'List must-haves (amount, date, category, totals, filters) and write down non-goals so the build does not sprawl.', 45, 'med', []],
+        ['Design data model', 'expense(id, amount, date, category, note) + category(id, name); decide validation rules and rounding.', 60, 'high', [0]],
+        ['Create database', 'Set up storage (localStorage/IndexedDB or SQL), run initial schema, seed a few sample rows.', 90, 'high', [1]],
+        ['Build expense form', 'Add/edit with validation, delete with confirm; keyboard-friendly and mobile-sized.', 120, 'high', [2]],
+        ['Add categories', 'CRUD for categories + assignment in the form; color chips in lists and totals.', 60, 'med', [1]],
+        ['Add reports', 'Monthly totals, per-category breakdown, date-range picker — computed from the same records.', 90, 'med', [3]],
+        ['Add export', 'CSV/JSON export of the filtered set; empty result handled honestly.', 60, 'low', [5]],
+        ['Test application', 'Happy path + edge cases (negative amounts, empty state, DST dates, 12-month range); fix fallout.', 120, 'high', [4, 6]],
+      ],
+    },
+    {
+      id: 'backend-api',
+      test: (t) => /\b(api|backend|server|endpoint|web ?service)\b/i.test(t) && /(build|create|design|implement|develop)/i.test(t),
+      steps: [
+        ['Spec endpoints', 'Routes, payloads, status codes, auth contract — written down before code.', 45, 'low', []],
+        ['Persistence & migrations', 'Schema for the core tables; reversible migrations; seed script.', 90, 'high', [0]],
+        ['Implement handlers', 'CRUD first, then the clever bits; request validation at the edge.', 150, 'high', [1]],
+        ['Auth & rate limits', 'Session/token checks, guard rails per bucket; errors in one shape.', 60, 'med', [0]],
+        ['Integration tests', 'Happy path + 4xx matrix against a throwaway database.', 90, 'high', [2, 3]],
+        ['Deploy & document', 'One README with curl examples; healthcheck wired.', 45, 'low', [4]],
+      ],
+    },
+    {
+      id: 'software',
+      test: (t) => /(build|create|develop|make|implement|code|write|design)/i.test(t)
+        && /(app|application|website|web ?site|site|platform|dashboard|tool|system|clone|game|extension|bot|feature|module|tracker|manager)/i.test(t),
+      steps: [
+        ['Define requirements', 'Who uses it, for what, in one paragraph; a short non-goals list.', 45, 'med', []],
+        ['Sketch data & UI', 'Draw the main screen and the shape of the records — it settles half the build.', 60, 'high', [0]],
+        ['Scaffold the project', 'Repo, framework, empty states; something clickable day one.', 90, 'med', [1]],
+        ['Build the core flow', 'The ONE feature the app exists for, end to end, no extras yet.', 180, 'high', [2]],
+        ['Style & polish', 'Responsive layout, empty/loading states, keyboard focus.', 90, 'med', [3]],
+        ['Test key flows', 'Write the 5 flows a demo runs through; make them pass.', 90, 'high', [3]],
+        ['Ship & document', 'Deploy, write the README, collect first feedback.', 45, 'low', [4, 5]],
+      ],
+    },
+    {
+      id: 'study',
+      test: (t) => /(study|learn|prepare|revise|master|cram|course|exam|ielts|toefl|certification|syllabus)/i.test(t),
+      steps: [
+        ['Assess level & goals', 'One honest sample test or self-check; write the target score/date.', 30, 'med', []],
+        ['Build a weekly schedule', 'Fixed slots, realistic load; put it where the app can nag.', 30, 'high', [0]],
+        ['Gather resources', 'One primary source + one practice set — resist the hoarding urge.', 45, 'low', [0]],
+        ['Core topics deep-work', 'Work the syllabus in blocks; one topic at a time to done.', 240, 'high', [1, 2]],
+        ['Deliberate practice', 'Timed problem sets on the weakest topic each session.', 120, 'high', [3]],
+        ['Mock exam / checkpoint', 'Full conditions, score it, keep only the findings.', 90, 'med', [4]],
+        ['Patch weak spots', 'Target the two worst areas, then re-schedule around them.', 60, 'med', [5]],
+      ],
+    },
+    {
+      id: 'writing',
+      test: (t) => /(write|writing|essay|article|blog|thesis|dissertation|book|newsletter|documentation|report|proposal|draft)/i.test(t),
+      steps: [
+        ['Audience & angle', 'One sentence: who reads this and what they should think after.', 30, 'med', []],
+        ['Research & sources', 'Gather the 5-10 pieces of evidence worth citing; kill the rest.', 90, 'med', [0]],
+        ['Outline sections', 'Headings + one-line promise per section — the contract with the reader.', 45, 'high', [0]],
+        ['First draft', 'Ugly and complete beats pretty and stalled; no editing allowed yet.', 180, 'high', [2]],
+        ['Revise structure', 'Reorder, cut whole sections; argue with yourself once.', 90, 'med', [3]],
+        ['Edit & proofread', 'Sentences, then commas, then read it aloud once.', 60, 'med', [4]],
+        ['Publish & share', 'Ship it; note the two things you would fix for next time.', 30, 'low', [5]],
+      ],
+    },
+    {
+      id: 'event',
+      test: (t) => /(wedding|party|conference|meetup|retreat|trip|vacation|holiday|tour|event|launch ?(party|event)|gathering)/i.test(t),
+      steps: [
+        ['Budget & list', 'How much, how many — everything downstream unlocks from these two numbers.', 45, 'high', []],
+        ['Lock date & venue', 'Two backup dates checked before paying anything.', 60, 'high', [0]],
+        ['Book vendors', 'Catering/photo/transport — written confirmations with dates.', 90, 'med', [1]],
+        ['Schedule & invites', 'Run-sheet skeleton; invitations out with an RSVP deadline.', 60, 'med', [1]],
+        ['Logistics checklist', 'Day-of timeline, contacts, payment plan, weather/backup plan.', 45, 'high', [2, 3]],
+        ['Follow-up', 'Photos, thank-yous, expenses settled while it is fresh.', 30, 'low', [4]],
+      ],
+    },
+    {
+      id: 'home',
+      test: (t) => /(paint|fix|repair|install|assemble|renovate|declutter|deep ?clean|shelf|garage|kitchen|bathroom|garden|landscap)/i.test(t),
+      steps: [
+        ['Measure & buy', 'Actual measurements, then materials +10% and a tool check.', 60, 'med', []],
+        ['Prep the area', 'Move, mask, cover, protect — 30 minutes here saves hours later.', 45, 'med', [0]],
+        ['Do the core work', 'The big physical step; take the break you planned.', 120, 'high', [1]],
+        ['Finish & details', 'Edges, touch-ups, hardware back on, height/level re-check.', 60, 'med', [2]],
+        ['Clean & inspect', 'Tools back where they came from; photograph the result.', 30, 'low', [3]],
+      ],
+    },
+    {
+      id: 'generic',
+      test: () => true,
+      steps: [
+        ['Define scope & success', 'One paragraph: done means what, measurably.', 30, 'high', []],
+        ['Break down & order', 'List every piece of work you can think of; sequence it roughly.', 30, 'med', [0]],
+        ['Prep inputs & tools', 'Access, files, accounts, materials — the boring enablers.', 45, 'med', [1]],
+        ['Execute the core', 'The main body of work, one chunk at a time.', 120, 'high', [2]],
+        ['Review & fix', 'Compare against “done means what”; close the gap, not the file.', 60, 'med', [3]],
+        ['Wrap up & share', 'Deliver, document two lessons learned, archive.', 30, 'low', [4]],
+      ],
+    },
+  ];
+
+  function playbookFor(text) {
+    for (const pb of PLAYBOOKS) if (pb.test(text)) return pb;
+    return PLAYBOOKS[PLAYBOOKS.length - 1];
+  }
+
+  /* ---------------------------- date helpers ------------------------------- */
+  /* The engine must not depend on app.js — small self-contained date math. */
+  function ymd(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function addDays(baseYmd, n) {
+    const p = String(baseYmd).split('-').map(Number);
+    const d = new Date(p[0], p[1] - 1, p[2]);
+    d.setDate(d.getDate() + n);
+    return ymd(d);
+  }
+  function todayYmd() { return ymd(new Date()); }
+
+  /** ~4h of focused work fits a day; a step never stretches below 1 day. */
+  function daysFor(min) { return Math.max(1, Math.ceil(min / 240)); }
+
+  /**
+   * Structured plan for a task (title + description as prose input, data out).
+   * `opts`: { start: 'YYYY-MM-DD' | null, seed: 0 } — seed jitters estimates
+   * for “Regenerate” without shuffling the dependency order.
+   */
+  function plan(title, description, opts) {
+    const o = opts || {};
+    const text = String(title || '') + ' ' + String(description || '');
+    const pb = playbookFor(text);
+    const start = /^\d{4}-\d{2}-\d{2}$/.test(o.start || '') ? o.start : todayYmd();
+    const jitter = [1, 1.25, 0.8, 1.1][Math.abs(Number(o.seed) || 0) % 4] || 1;
+    const raw = pb.steps.map((s, i) => {
+      const est = Math.min(600, Math.max(5, Math.round(s[2] * (jitter + (i % 3 ? 0 : 0)) / 5) * 5));
+      return { idx: i, title: s[0], description: s[1], estMin: est, priority: s[3], dependsOn: (s[4] || []).slice() };
+    });
+    // schedule: each step ends after its latest dependency + own duration
+    const endDay = [];
+    for (const s of raw) {
+      const startAt = s.dependsOn.length ? Math.max(...s.dependsOn.map((d) => (d < s.idx ? endDay[d] : 0))) : 0;
+      endDay[s.idx] = startAt + daysFor(s.estMin);
+      s.dueDate = addDays(start, endDay[s.idx] - 1 < 0 ? 0 : endDay[s.idx] - 1);
+    }
+    return {
+      engine: 'built-in planner',
+      playbook: pb.id,
+      steps: raw.map(({ idx, ...rest }) => rest),
+    };
+  }
+
+  /* -------------------------- structured-data rules ------------------------- */
+  /* One sanitizer for EVERY plan source (built-in, server, LLM JSON): the
+     review UI is fed validated data no matter who produced it. This is the
+     “return structured task data rather than arbitrary text” contract. */
+  function sanitizeStep(s, i) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return null;
+    const title = typeof s.title === 'string' ? s.title.trim().replace(/\s+/g, ' ').slice(0, 200) : '';
+    if (!title) return null;
+    const e = Math.round(Number(s.estMin));
+    return {
+      title,
+      description: typeof s.description === 'string' ? s.description.trim().slice(0, 500) : '',
+      estMin: Number.isFinite(e) && e > 0 ? Math.min(10080, Math.max(5, e)) : 60,
+      priority: PRIORITIES.indexOf(s.priority) >= 0 ? s.priority : 'med',
+      dueDate: /^\d{4}-\d{2}-\d{2}$/.test(s.dueDate || '') ? s.dueDate : null,
+      _dep: Array.isArray(s.dependsOn) || Array.isArray(s.depends_on) ? (s.dependsOn || s.depends_on) : [],
+      _i: i,
+    };
+  }
+  function sanitizePlan(input) {
+    const arr = Array.isArray(input) ? input : (input && typeof input === 'object' && Array.isArray(input.steps) ? input.steps : null);
+    if (!arr) return null;
+    const steps = arr.slice(0, MAX_STEPS).map(sanitizeStep).filter(Boolean);
+    if (!steps.length) return null;
+    for (const s of steps) {
+      s.dependsOn = [...new Set(s._dep.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < steps.length && n !== s._i))];
+      delete s._dep; delete s._i;
+    }
+    return { steps, engine: (input && input.engine) || 'structured', playbook: (input && input.playbook) || null, model: (input && input.model) || '' };
+  }
+
+  /* "large task" heuristic — decides when the app OFFERS the breakdown.
+     The offer is never automatic work: worst case we nag with a button. */
+  const LARGE_RE = /\b(build|create|develop|implement|design|launch|migrate|refactor|rebuild|overhaul|organize|plan|prepare|write|study|learn|research|deploy|ship|set ?up|setup|fix|repair|install|publish|automate|redesign)\b|tracker|\bapp\b|application|website|platform|dashboard|\bapi\b|database|wedding|conference|thesis|dissertation|course|exam/i;
+  function looksLarge(title, description) {
+    const t = String(title || '').trim();
+    if (!t) return false;
+    if (LARGE_RE.test(t)) return true;
+    if (t.length >= 32) return true;
+    if (String(description || '').trim().length >= 120) return true;
+    return t.split(/\s+/).length >= 5;
+  }
+
+  /** '⏱ 1h30m' style label used by badges and the review UI. */
+  function fmtEst(min) {
+    const m = Math.round(Number(min) || 0);
+    if (!m) return '';
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    if (h < 24) return m % 60 ? h + 'h' + (m % 60) + 'm' : h + 'h';
+    const d = Math.floor(h / 24);
+    return d + 'd' + (h % 24 ? ' ' + (h % 24) + 'h' : '');
+  }
+
+  /* ------------------------------ decomposition ----------------------------- */
+  /* mode: 'auto' = try the server (which tries a configured LLM and falls
+     back to its own built-in planner), 'local' = never leave the device.
+     Any server failure at all (offline, file://, 429, malformed) is silent —
+     the built-in planner answers, so the feature NEVER dead-ends. */
+  async function decompose(task, opts) {
+    const o = opts || {};
+    const local = () => {
+      const p = plan(task.title, task.description, { start: task.dueDate || null, seed: o.seed || 0 });
+      return sanitizePlan(p);
+    };
+    const wantServer = o.mode !== 'local' && typeof global.fetch === 'function';
+    if (wantServer) {
+      try {
+        const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = ctl ? setTimeout(() => ctl.abort(), 12000) : null;
+        const res = await global.fetch('/api/ai/decompose', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: ctl ? ctl.signal : undefined,
+          body: JSON.stringify({
+            title: String(task.title || '').slice(0, 400),
+            description: String(task.description || '').slice(0, 4000),
+            dueDate: /^\d{4}-\d{2}-\d{2}$/.test(task.dueDate || '') ? task.dueDate : null,
+            seed: Number(o.seed) || 0,
+          }),
+        });
+        if (timer) clearTimeout(timer);
+        if (res && res.ok) {
+          const j = await res.json();
+          const p = sanitizePlan(j);
+          if (p) {
+            p.engine = (typeof j.engine === 'string' && j.engine) ? j.engine : 'server planner';
+            p.model = (typeof j.model === 'string' && j.model) ? j.model.slice(0, 60) : '';
+            return p;
+          }
+        }
+      } catch (_) { /* offline / standalone / aborted → built-in below */ }
+    }
+    return local();
+  }
+
+  global.ZTAI = {
+    plan,
+    decompose,
+    sanitizePlan,
+    sanitizeStep,
+    looksLarge,
+    fmtEst,
+    PRIORITIES,
+    MAX_STEPS,
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
 /* ============================================================================
  * app.js — ZeroTodo UI layer
  * ----------------------------------------------------------------------------
@@ -3784,6 +4133,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
     dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
     habBtn: $('habBtn'), habitsView: $('habitsView'), habitsHost: $('habitsHost'), habInStats: $('habInStats'),
+    aiMode: $('aiMode'),
     focusBar: $('focusBar'),
     fRecurrence: $('f-recurrence'), remRows: $('remRows'), addRemBtn: $('addRemBtn'),
     recurPanel: $('recurPanel'), rcEvery: $('rcEvery'), rcUnit: $('rcUnit'), rcDays: $('rcDays'), rcHint: $('rcHint'),
@@ -4371,7 +4721,9 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
           ? '<span class="check" aria-hidden="true">🗑</span>'
           : '<button class="check' + (done ? ' on' : '') + '" role="checkbox" aria-checked="' + done + '" aria-label="Toggle complete" data-act="toggle">' + (done ? '✓' : '') + '</button>') +
         '<div class="task-main">' +
-          '<div class="task-title">' + esc(t.title) + '</div>' +
+          '<div class="task-title">' + esc(t.title) +
+          (!inTrash && t.aiOffer && window.ZTAI ? ' <button type="button" class="btn btn-sm ai-cta" data-act="aidec" title="You asked for a big task — let the planner propose steps. Nothing is added until you approve them.">✨ Break this task down with AI</button>' : '') +
+          '</div>' +
           (t.description ? '<div class="task-desc">' + esc(t.description) + '</div>' : '') +
           '<div class="task-meta">' +
             '<span class="badge prio-' + t.priority + '">' + prioLabel + '</span>' +
@@ -4379,6 +4731,21 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
             (!inTrash && remPendingFor(t.id) ? '<span class="badge rem" title="' + remPendingFor(t.id) + ' pending reminder(s), next: ' + esc(remNextLabel(t.id)) + '">🔔 ' + remPendingFor(t.id) + '</span>' : '') +
             (t.recurrence ? '<span class="badge recur" title="' + esc(recurLabel(t)) + ' · completing rolls to the next date; ↻ opens series actions' + '">↻ ' + esc(recurLabel(t)) + '</span>' : '') +
             (t.focusTotal > 0 ? '<span class="badge focus" title="' + t.focusTotal + ' focused min · ' + (t.focusSessions || 0) + ' completed session(s)">🍅 ' + (t.focusTotal < 60 ? t.focusTotal + 'm' : (Math.round(t.focusTotal / 6) / 10) + 'h') + '</span>' : '') +
+            (t.estMin > 0 ? '<span class="badge est" title="Planned effort (from an AI breakdown — advisory)">⏱ ' + (window.ZTAI ? ZTAI.fmtEst(t.estMin) : t.estMin + 'm') + '</span>' : '') +
+            (function () {
+              const dd = t.deps || [];
+              if (!dd.length) return '';
+              let open = 0; const names = [];
+              for (const d of dd) {
+                const o = byId(d);
+                if (!o) { names.push('(removed task)'); open++; continue; }
+                names.push(truncate(o.title, 40));
+                if (o.status !== 'completed') open++;
+              }
+              return '<span class="badge deps' + (open ? '' : ' ready') + '" title="Suggested after: ' + esc(names.slice(0, 3).join(', ')) +
+                (names.length > 3 ? ' +' + (names.length - 3) : '') + (open ? ' — still open' : ' — all done, go ahead') + '">' +
+                (open ? '🔗 ' + open : '🔗 ✓') + '</span>';
+            })() +
             (function () {
               if (!t.projectId) return '';
               const pj = S.projects.find((p) => p.id === t.projectId);
@@ -4399,6 +4766,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
             ? '<button class="btn btn-ghost btn-sm" data-act="restore" title="Restore task">Restore</button>' +
               '<button class="btn btn-danger-ghost btn-sm" data-act="destroy" title="Delete forever">Delete forever</button>'
             : '<button class="btn btn-ghost btn-sm btn-icon" data-act="focus" title="Start Focus — a Pomodoro session on this task" aria-label="Start focus session">🍅</button>' +
+              (window.ZTAI ? '<button class="btn btn-ghost btn-sm btn-icon" data-act="aidec" title="Break this task down with AI — suggestions you review first" aria-label="Break down with AI">✨</button>' : '') +
               (t.recurrence ? '<button class="btn btn-ghost btn-sm btn-icon" data-act="series" title="Series: complete / skip / edit occurrence or series / stop repeating" aria-label="Recurring series options">↻</button>' : '') +
               '<button class="btn btn-ghost btn-sm btn-icon" data-act="up" title="Move up" aria-label="Move up">↑</button>' +
               '<button class="btn btn-ghost btn-sm btn-icon" data-act="down" title="Move down" aria-label="Move down">↓</button>' +
@@ -4439,6 +4807,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     els.subtaskAuto.checked = !!S.settings.subtaskAutoComplete;
     if (els.fzWork) { const c = focusCfg(); els.fzWork.value = c.work; els.fzShort.value = c.short; els.fzLong.value = c.long; els.fzEvery.value = c.longEvery; els.fzNotify.checked = c.notify; els.fzAuto.checked = c.autoComplete; }
     if (els.habInStats) els.habInStats.checked = S.settings.habitsInStats === true;
+    if (els.aiMode) els.aiMode.value = S.settings.aiMode === 'local' ? 'local' : 'auto';
     if (window.ZTNotify) ZTNotify.renderControls(); // the Notifications section owns itself
   }
 
@@ -4590,6 +4959,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
         status: 'active',
         sortOrder: S.tasks.length ? base - 1 : 0,
         createdAt: now, updatedAt: now,
+        aiOffer: !!(window.ZTAI && ZTAI.looksLarge(title, v.description)),
       };
       S.tasks.push(t);
       ops = [{ store: STORES.tasks, op: 'put', value: t }];
@@ -7003,6 +7373,183 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     }
   }
 
+  /* ====================== AI task decomposition (review-gated) ======================
+     The brief's contract, kept honest: the planner SUGGESTS structured steps and
+     the task store is not touched — not one op — until the user presses
+     “Add selected tasks” in this dialog. Every field of every suggestion is
+     editable inline before that; unchecking simply leaves that step out. What
+     gets created are ORDINARY tasks (plus advisory estMin/deps/⏱🔗 badges) —
+     the AI never replaces or re-wires the task system. */
+
+  function aiStepRow(s, i, steps) {
+    const depChips = (s.dependsOn || []).filter((j) => steps[j]).map((j) =>
+      '<span class="ai-dep-chip">#' + (j + 1) + ' ' + esc(truncate(steps[j].title || '?', 22)) +
+      '<button type="button" data-ai="depdel" data-j="' + j + '" aria-label="Remove dependency">✕</button></span>').join('');
+    const depOpts = steps.map((o, j) => (j !== i && String(o.title || '').trim()
+      ? '<option value="' + j + '">#' + (j + 1) + ' ' + esc(truncate(o.title, 24)) + '</option>' : '')).join('');
+    return '<div class="ai-step' + (s.checked ? '' : ' off') + '" data-airow="' + i + '">' +
+      '<label class="ai-ck" title="Include this step"><input type="checkbox" data-ai="checked"' + (s.checked ? ' checked' : '') + '></label>' +
+      '<div class="ai-fields">' +
+        '<div class="ai-l1"><span class="ai-num">' + (i + 1) + '.</span>' +
+        '<input class="ai-title" data-ai="title" value="' + esc(s.title) + '" maxlength="200" placeholder="Step title" aria-label="Title">' +
+        '<input class="ai-est" type="number" data-ai="estMin" min="5" max="10080" step="5" value="' + s.estMin + '" title="Estimated minutes" aria-label="Estimated minutes"><span class="ai-unit">m</span>' +
+        '<select data-ai="priority" title="Suggested priority" aria-label="Priority">' +
+          ['low', 'med', 'high'].map((pp) => '<option value="' + pp + '"' + (s.priority === pp ? ' selected' : '') + '>' + pp + '</option>').join('') +
+        '</select>' +
+        '<input type="date" data-ai="dueDate" value="' + (s.dueDate || '') + '" title="Suggested due date — edit or clear it" aria-label="Due date">' +
+        '</div>' +
+        '<div class="ai-l2"><input class="ai-desc" data-ai="description" value="' + esc(s.description) + '" maxlength="500" placeholder="What “done” looks like" aria-label="Description">' +
+        '<span class="ai-deps">' + depChips +
+        '<select data-ai="depadd" title="Also start after…" aria-label="Add dependency"><option value="">+ after…</option>' + depOpts + '</select></span>' +
+        '</div>' +
+      '</div></div>';
+  }
+
+  function aiDecomposeModal(parent) {
+    if (!window.ZTAI) { toast('AI planner module is missing.'); return; }
+    const ov = document.createElement('div');
+    ov.className = 'modal-overlay';
+    const card = document.createElement('div');
+    card.className = 'modal-card ai-modal';
+    let D = null;
+    let seed = 0;
+    const footHtml = () => {
+      if (!D) return '';
+      const nSel = D.steps.filter((s) => s.checked).length;
+      const allOn = nSel === D.steps.length;
+      return '<button type="button" class="btn btn-ghost btn-sm" data-aim="all">' + (allOn ? '☐ Uncheck all' : '☑ Check all') + '</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-aim="regen">✨ Regenerate</button>' +
+        '<span class="ai-count muted small">' + nSel + ' of ' + D.steps.length + ' selected</span>' +
+        '<span class="ai-gap"></span>' +
+        '<button type="button" class="btn btn-ghost" data-aim="cancel">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" data-aim="add"' + (nSel ? '' : ' disabled') + '>Add selected tasks' + (nSel ? ' (' + nSel + ')' : '') + '</button>';
+    };
+    const renderFoot = () => { const f = card.querySelector('.ai-foot'); if (f) f.innerHTML = footHtml(); };
+    const render = () => {
+      if (!D) {
+        card.innerHTML = '<h3>✨ AI suggestions</h3><p class="muted small ai-loading">Planning “' + esc(truncate(parent.title, 60)) + '”… ⏳</p>';
+        return;
+      }
+      card.innerHTML =
+        '<h3>✨ AI suggestions</h3>' +
+        '<p class="muted small">For: <b>' + esc(truncate(parent.title, 70)) + '</b> · via ' + esc(D.engine || 'planner') + (D.model ? ' (' + esc(D.model) + ')' : '') +
+        (D.playbook && D.playbook !== 'generic' ? ' · playbook: ' + esc(D.playbook) : '') +
+        ' · edit anything — <b>nothing is added until you press “Add selected tasks”</b>.</p>' +
+        '<div class="ai-body">' + D.steps.map((s, i) => aiStepRow(s, i, D.steps)).join('') + '</div>' +
+        '<div class="ai-foot">' + footHtml() + '</div>';
+    };
+    const load = () => {
+      D = null; render();
+      ZTAI.decompose(parent, { mode: S.settings.aiMode === 'local' ? 'local' : 'auto', seed })
+        .then((p) => {
+          if (!p || !p.steps || !p.steps.length) { card.innerHTML = '<h3>✨ AI suggestions</h3><p class="muted small">The planner returned nothing usable — try again or add steps yourself.</p>'; return; }
+          D = { engine: p.engine, model: p.model, playbook: p.playbook, steps: p.steps.map((s, i) => Object.assign({}, s, { checked: true, __gi: i })) };
+          render();
+        });
+    };
+    render();
+    load();
+    ov.appendChild(card);
+    document.body.appendChild(ov);
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    function close() { document.removeEventListener('keydown', onKey); ov.remove(); }
+    document.addEventListener('keydown', onKey);
+    card.addEventListener('input', (e) => {
+      const inp = e.target.closest('[data-ai]');
+      if (!inp || !D) return;
+      const row = inp.closest('[data-airow]');
+      const s = D.steps[Number(row && row.dataset.airow)];
+      if (!s) return;
+      const f = inp.dataset.ai;
+      if (f === 'title') s.title = inp.value;
+      else if (f === 'description') s.description = inp.value;
+      else if (f === 'estMin') { const v = Math.round(Number(inp.value)); if (Number.isFinite(v)) s.estMin = Math.min(10080, Math.max(5, v)); }
+      else if (f === 'dueDate') s.dueDate = /^\d{4}-\d{2}-\d{2}$/.test(inp.value) ? inp.value : null;
+    });
+    card.addEventListener('change', (e) => {
+      const inp = e.target.closest('[data-ai]');
+      if (!inp || !D) return;
+      const row = inp.closest('[data-airow]');
+      const i = Number(row && row.dataset.airow);
+      const s = D.steps[i];
+      if (!s) return;
+      const f = inp.dataset.ai;
+      if (f === 'priority') { s.priority = inp.value; return; }
+      if (f === 'checked') { s.checked = inp.checked; row.classList.toggle('off', !s.checked); renderFoot(); return; }
+      if (f === 'depadd') {
+        const j = Number(inp.value);
+        if (inp.value !== '' && Number.isInteger(j) && j !== i && D.steps[j] && !s.dependsOn.includes(j)) s.dependsOn.push(j);
+        render(); // structure changed (chips)
+      }
+    });
+    card.addEventListener('click', async (e) => {
+      const del = e.target.closest('[data-ai="depdel"]');
+      if (del && D) {
+        const row = del.closest('[data-airow]');
+        const s = D.steps[Number(row && row.dataset.airow)];
+        if (s) { s.dependsOn = s.dependsOn.filter((j) => j !== Number(del.dataset.j)); render(); }
+        return;
+      }
+      const b = e.target.closest('[data-aim]');
+      if (!b) { if (e.target === ov) close(); return; }
+      const m = b.dataset.aim;
+      if (m === 'cancel') close();
+      else if (m === 'all') { const allOn = D.steps.every((s) => s.checked); D.steps.forEach((s) => { s.checked = !allOn; }); render(); }
+      else if (m === 'regen') { seed++; load(); }
+      else if (m === 'add') { close(); await aiPlanAdd(parent, D); }
+    });
+  }
+
+  /** Commit the APPROVED subset as ordinary tasks, in plan order, with the
+   * dependency links re-pointed at the freshly created ids. This is the ONE
+   * place the AI feature writes — only ever from the “Add selected tasks”
+   * button. Unselected or titleless suggestions are simply not created. */
+  async function aiPlanAdd(parent, D) {
+    const sel = D.steps.filter((s) => s.checked);
+    const cleaned = [];
+    for (const s of sel) {
+      const title = String(s.title || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+      if (!title) continue;
+      cleaned.push(Object.assign({}, s, { title }));
+    }
+    if (!cleaned.length) { toast('Nothing to add — select at least one step with a title.'); return; }
+    const now = Date.now();
+    const ids = cleaned.map(() => helpers.uuid());
+    const giToId = new Map(cleaned.map((s, i) => [s.__gi, ids[i]]));
+    const minSoFar = S.tasks.reduce((m, x) => Math.min(m, x.sortOrder), S.tasks.length ? Infinity : 0);
+    const base = Number.isFinite(minSoFar) ? minSoFar : 0;
+    const ops = [];
+    cleaned.forEach((s, i) => {
+      const t = {
+        id: ids[i], title: s.title,
+        description: String(s.description || '').slice(0, 2000),
+        dueDate: /^\d{4}-\d{2}-\d{2}$/.test(s.dueDate || '') ? s.dueDate : null,
+        dueTime: null,
+        priority: ['low', 'med', 'high'].indexOf(s.priority) >= 0 ? s.priority : 'med',
+        tags: [],
+        projectId: parent.projectId || null,
+        recurrence: null, recurRule: null, recurAnchor: null,
+        status: 'active',
+        estMin: s.estMin,
+        deps: (s.dependsOn || []).map((g) => giToId.get(g)).filter(Boolean),
+        aiOffer: false,
+        sortOrder: base - (cleaned.length - i),
+        createdAt: now + i, updatedAt: now,
+      };
+      S.tasks.push(t);
+      ops.push({ store: STORES.tasks, op: 'put', value: t });
+    });
+    if (parent.aiOffer) {
+      parent.aiOffer = false;
+      parent.updatedAt = now;
+      ops.push({ store: STORES.tasks, op: 'put', value: parent });
+    }
+    const okc = await store.commit(ops);
+    renderAll();
+    toast('✨ Added ' + cleaned.length + ' task' + (cleaned.length === 1 ? '' : 's') +
+      ' from the breakdown — ordinary tasks now, edit anything as usual.' + (okc ? '' : ' (storage reported an error)'));
+  }
+
   /* ------------------------- Productivity dashboard -------------------------
    * NOT a data source. Every tile, bar and row is derived at render time from
    * the same S.tasks / S.projects / S.reminders arrays the list and calendar
@@ -7535,6 +8082,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
       if (btn && btn.dataset.act === 'delete') { deleteTask(id); return; }
       if (btn && btn.dataset.act === 'series') { const tt = byId(id); if (tt) seriesDialog(tt).then((a) => onSeriesAction(a, tt)); return; }
       if (btn && btn.dataset.act === 'focus') { focusStartModal(id); return; }
+      if (btn && btn.dataset.act === 'aidec') { const tt = byId(id); if (tt) aiDecomposeModal(tt); return; }
       // Clicking the task body opens the editor
       if (e.target.closest('.task-main')) openComposer({ mode: 'edit', taskId: id });
     });
@@ -7645,6 +8193,11 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
       toast(e.target.checked
         ? '⚠ A finished session will complete the task automatically.'
         : 'Tasks will only be completed by you — sessions just record focus time.');
+    });
+    if (els.aiMode) els.aiMode.addEventListener('change', (e) => {
+      S.settings.aiMode = e.target.value === 'local' ? 'local' : 'auto';
+      commitSettings();
+      toast(S.settings.aiMode === 'local' ? 'Task breakdowns will use the built-in planner only.' : 'Task breakdowns will try the server AI service first (falls back to built-in).');
     });
     if (els.habInStats) els.habInStats.addEventListener('change', (e) => {
       S.settings.habitsInStats = e.target.checked;

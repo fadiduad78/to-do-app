@@ -291,6 +291,33 @@ try {
     ok(s2.json.habits.find((x) => x.id === 'hh1').name === 'Exercise Evening', 'a STALE habit push cannot clobber the newer one');
   }
 
+  /* ---------------- AI decomposition: route + advisory sync fields ---------------- */
+  {
+    console.log('AI decomposition: POST /api/ai/decompose + fields on the sync path');
+    let r = await fetch(BASE + '/api/ai/decompose', { method: 'POST', body: '{}' });
+    ok(r.status === 401, '/api/ai/decompose without a token → 401 (the proxy is auth-gated like the data it plans on)');
+    r = await fetch(BASE + '/api/ai/decompose', H('POST', {}));
+    ok(r.status === 400, 'missing title → 400 with a structured error (never a prose shrug)');
+    r = await fetch(BASE + '/api/ai/decompose', H('POST', { title: 'Build an expense tracker' }));
+    const plan1 = await r.json();
+    ok(r.status === 200 && plan1.engine === 'built-in planner' && Array.isArray(plan1.steps) && plan1.steps.length === 8 &&
+      plan1.steps[0].title === 'Define requirements' && plan1.steps[7].title === 'Test application' &&
+      plan1.steps.every((s) => typeof s.title === 'string' && typeof s.description === 'string' &&
+        Number.isInteger(s.estMin) && ['low', 'med', 'high'].includes(s.priority) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(s.dueDate) && Array.isArray(s.dependsOn)),
+      'no ZT_AI_* configured → deterministic built-in planner answers with fully STRUCTURED task data (the brief’s 8-step example, exact)');
+    r = await fetch(BASE + '/api/ai/decompose', H('POST', { title: 'Build an expense tracker' }));
+    ok(r.status === 429, 'a second request from the same user within 1.5s → 429 (per-user guard; the browser treats any failure as “use local plan”)');
+    r = await fetch(BASE + '/api/ai/decompose', H('POST', { title: '   ' }));
+    ok(r.status === 400, 'blank title is rejected before the rate limiter is consulted (validation order matters: free checks first)');
+    const cur = await pull();
+    const at = task('aiT1', 'Build a mobile app for the team', ts(80), { estMin: '45', deps: ['aiT1', 'ghost', 4, 'keepme'], aiOffer: true, priority: 'high' });
+    const sr = await sync('Z', cur.rev, { settings: {}, tasks: [at], trash: [] });
+    const row = (sr.json.tasks || []).find((x) => x.id === 'aiT1');
+    ok(row && row.estMin === 45 && row.deps.join() === 'ghost,keepme' && row.aiOffer === true,
+      'advisory AI fields ride /api/sync with the same coercion as the browser engine (strings numericized, self/non-string deps dropped)');
+  }
+
   rmSync(dataDir, { recursive: true, force: true });
 } catch (e) {
   console.error('TEST CRASH:', e);

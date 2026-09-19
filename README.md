@@ -104,6 +104,19 @@ if the server is unreachable, every original guarantee still holds.
   channels all work unchanged), and habit days are **never** mixed into task
   statistics unless you flip *Settings → Habits → count in dashboard stats*
   (off by default, like every opt-in here).
+- **AI task decomposition (✨ on any task)** — for a big task like *“Build an
+  expense tracker”* ZeroTodo proposes an ordered plan (**Define requirements →
+  Design data model → Create database → Build expense form → Add categories →
+  Add reports → Add export → Test application**). Every suggestion is
+  **structured task data** — title, description, estimated duration, priority
+  suggestion, optional due-date suggestion and a dependency suggestion — never
+  a wall of chat. The “AI suggestions” dialog is a **☑/☐ checklist you review
+  and edit inline (all six fields)** before pressing **Add selected tasks**;
+  nothing is written to the task store until you do, and approved steps become
+  **ordinary tasks**, editable with the existing editors like everything else.
+  Works offline and with zero configuration via a deterministic built-in
+  planner; a self-hoster can wire any OpenAI-compatible model through
+  `ZT_AI_URL` / `ZT_AI_KEY` / `ZT_AI_MODEL` — keys never touch the browser.
 - **Installable as a PWA** (`manifest.webmanifest` + generated launcher icons
   + theme-color): on Android (and iOS when added to Home Screen) the installed
   app keeps the service worker alive for notification delivery, and the
@@ -321,6 +334,67 @@ day-alignment-stable day-set case), plus habit cases in
 `server/test-storage.mjs`, `server/test.mjs`, `server/test-client.mjs` and
 `server/test-supabase.mjs` (single state doc, LWW + stale-push rejection,
 nudge row persistence across restart).
+
+## AI Task Decomposition (review-first, by construction)
+
+**The one promise that shapes everything:** the AI never creates tasks. It can
+only *suggest*; `public/app.js` renders suggestions in a review dialog and the
+task store is not touched — *not one commit op* — until the user presses
+**“Add selected tasks”** (a UI test snapshots the entire mirror before and
+after opening, editing and regenerating a plan, and requires byte-equality;
+Cancel adds nothing). Approved suggestions become ordinary tasks in the same
+store, in plan order, with the parent's project inherited and the parent's
+“break this down?” prompt retired.
+
+- **The offer, not the shove** — new tasks whose title/description looks like a
+  project (multi-word action phrasing, build/create/implement verbs, ≥5 words,
+  ≥32 chars, or a fat description) are stamped `aiOffer: true`, which shows a
+  one-line **“✨ Break this task down with AI”** button under the title. Small
+  errands never get it. Regardless, every active row has the ✨ action, so any
+  task can be decomposed on demand.
+- **Structured contract** — every suggestion is
+  `{ title, description, estMin, priority: low|med|high, dueDate: YYYY-MM-DD|null, dependsOn: [earlier step indices] }`.
+  `sanitizePlan` (shared by browser and server via `public/ai.js`) rejects
+  prose, caps plans at 12 steps, clamps estimates to 5–10080 minutes, and
+  drops self-dependencies and out-of-range indices. A model that rambles
+  produces *nothing*, not a paragraph.
+- **Engines** — `Settings → AI → Task decomposition engine`:
+  **Auto** asks `POST /api/ai/decompose` (auth-gated like every data route,
+  per-user rate limit 1.5 s); if the server has `ZT_AI_URL` + `ZT_AI_KEY` +
+  `ZT_AI_MODEL` it relays one chat-completions request with
+  `response_format: json_object` and a strict system contract, else it answers
+  with the **built-in planner**: deterministic domain playbooks (the pinned
+  8-step software example, backend APIs, study plans, writing, events, home
+  jobs, plus a generic 6-step ladder), due dates staggered along the
+  dependency chain from the parent's own due date. **Any** failure — offline,
+  429, malformed reply — falls back to the local plan silently; a standalone
+  `file://` copy just uses it. **Built-in only** forces the offline engine.
+- **What lands on tasks** — after approval, the three advisory fields persist
+  on the ordinary task record: `estMin` (⏱ badge with the estimate), `deps`
+  (🔗 badge, how many suggested predecessors are still open — ✓ when all are
+  done), `aiOffer` (prompt, cleared on first breakdown). They are decoration on
+  the existing record: identical coercion rules in `public/storage.js` and
+  `server/server.js`, dangling deps are kept rather than rewritten, and nothing
+  about them gates completion, reminders or the dashboard. Old servers simply
+  pass the fields through — no schema bump, no migration, no new store.
+- **Privacy by default** — with no AI env vars set, *no data ever leaves the
+  device*: the built-in planner is pure local computation, and the server route
+  with no provider configured only runs it. With a provider, exactly title,
+  description and due date travel to it — configured server-side by the
+  operator of *your* deployment.
+- **Regenerate is safe** — re-planning (the ✨ Regenerate button, or flipping
+  engines) never writes; it just refills the review dialog. Estimates jitter
+  per seed so regenerated plans differ, while titles stay deterministic.
+
+Tests: `server/test-ui.mjs` §23 pins the engine (exact example plan, clamp
+rules, prose refusal, determinism), the offer heuristic, the full review flow
+in JSDOM (8 rows → edit a title inline → uncheck three → add a dependency chip
+→ Add → exactly 5 ordinary tasks with rewired real dependency ids, inherited
+project, scheduled due dates, ⏱🔗 badges), zero-write guarantees on open /
+regenerate / cancel, and the settings switch; plus route checks in
+`server/test.mjs` (401 / 400-before-rate-limit / structured built-in plan /
+429 / sync passthrough), coercion cases in `server/test-storage.mjs`, and
+pipeline round-trips in `server/test-client.mjs` + `server/test-supabase.mjs`.
 
 ## Where your data is stored
 

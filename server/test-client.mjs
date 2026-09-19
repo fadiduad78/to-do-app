@@ -316,6 +316,22 @@ console.log('11. habits: a separate store on the client, the same state doc on t
   await wait(1400);
 }
 
+console.log('12. AI breakdown fields ride the ordinary task pipeline');
+{
+  const aiT = { id: 'ai1', title: 'Build an expense tracker', status: 'active', priority: 'med', tags: [], projectId: null,
+    estMin: 45, deps: ['other', 'other', 'ai1'], aiOffer: true, createdAt: Date.now() - 9000, updatedAt: Date.now() };
+  memory.tasks = memory.tasks.concat([aiT]);
+  await store.commit([{ store: 'tasks', op: 'put', value: aiT }]);
+  await wait(1400);
+  st = await serverState();
+  const rw = st.tasks.find((x) => x.id === 'ai1');
+  ok(rw && rw.estMin === 45 && rw.deps.join() === 'other' && rw.aiOffer === true,
+    'estMin/deps/aiOffer survive commit→sync→server with the same coercion as everything else (dedup, self-drop) — zero new plumbing');
+  await store.commit([{ store: 'tasks', op: 'delete', key: 'ai1' }]);
+  memory.tasks = memory.tasks.filter((x) => x.id !== 'ai1');
+  await wait(1400);
+}
+
 child.kill('SIGKILL');
 console.log(failed ? `\nFAILED: ${failed} check(s)` : '\nAll client integration tests passed.');
 process.exit(failed ? 1 : 0);

@@ -169,6 +169,12 @@ try {
     'habits ride alice\'s single state doc — separate store on the client, zero new tables (Postgres or file)');
   ok((hpush.reminders || []).some((x) => x.id === 'hr:hb1'), 'the engine-managed habit nudge row persists like any reminder');
   ok(await poll(() => db.byuser.alice && (db.byuser.alice.reminders || []).some((x) => x.id === 'sr1'), 45000), 'reminder persisted to the Postgres row');
+  const aiSrc23 = (hpush.tasks || []).find((x) => x.id === aState.tasks[0].id);
+  const aiRow = Object.assign({}, aiSrc23, { estMin: 20000, deps: [aState.tasks[1].id, 'ghost'], aiOffer: true, updatedAt: Date.now() });
+  const apush = await (await fetch(BASE + '/api/sync', { method: 'POST', headers: bearer(alice), body: JSON.stringify({ clientId: 'test', baseRev: hpush.rev, mode: 'merge', state: { savedAt: Date.now(), settings: {}, tasks: [aiRow], trash: [] }, tombstones: {} }) })).json();
+  const aiBack = (apush.tasks || []).find((x) => x.id === aiRow.id);
+  ok(aiBack && aiBack.estMin === 10080 && aiBack.deps.length === 2 && aiBack.aiOffer === true,
+    '⏱ estimate / 🔗 deps / ✨ offer persist on the ORDINARY task record through the state doc (clamped by server coercion, no schema change)');
   await stopApp(app.child);
   rmSync(path.join(dir, 'state.json'), { force: true });
   app = await startApp(dir); await app.ready;
