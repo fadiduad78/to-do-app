@@ -365,6 +365,27 @@
     t.completions = Array.isArray(raw.completions)
       ? raw.completions.map((x) => Math.floor(Number(x))).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b).slice(-256)
       : [];
+    // Focus Mode (task-bound Pomodoro): monotonic aggregates + a capped
+    // detail log + the live session snapshot, so a timer survives reloads,
+    // sync and backups exactly like every other task field.
+    t.focusTotal = Number.isFinite(Number(raw.focusTotal)) && Number(raw.focusTotal) > 0 ? Math.floor(Number(raw.focusTotal)) : 0;
+    t.focusSessions = Number.isFinite(Number(raw.focusSessions)) && Number(raw.focusSessions) > 0 ? Math.floor(Number(raw.focusSessions)) : 0;
+    t.focusLog = Array.isArray(raw.focusLog)
+      ? raw.focusLog.map((x) => (x && typeof x === 'object') ? { at: Number(x.at), min: Math.floor(Number(x.min)) } : null)
+        .filter((x) => x && Number.isFinite(x.at) && x.at > 0 && Number.isFinite(x.min) && x.min > 0)
+        .sort((a, b) => a.at - b.at).slice(-128)
+      : [];
+    t.focusActive = (function (fa) {
+      if (!fa || typeof fa !== 'object' || !Number.isFinite(Number(fa.endsAt)) || Number(fa.endsAt) <= 0) return null;
+      if (['focus', 'break', 'long'].indexOf(fa.phase) < 0) return null;
+      const ci = (v, lo, hi, d) => { const n = Math.floor(Number(v)); return n >= lo && n <= hi ? n : d; };
+      return {
+        phase: fa.phase, endsAt: Number(fa.endsAt),
+        pausedAt: Number.isFinite(Number(fa.pausedAt)) && Number(fa.pausedAt) > 0 ? Number(fa.pausedAt) : null,
+        durMin: ci(fa.durMin, 1, 240, 25), breakMin: ci(fa.breakMin, 1, 120, 5),
+        longMin: ci(fa.longMin, 1, 120, 15), longEvery: ci(fa.longEvery, 1, 12, 4),
+      };
+    })(raw.focusActive);
     t.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : now;
     t.projectId = typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : null;
     // Calendar support: an optional "HH:MM" placement on the due date. The

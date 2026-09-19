@@ -23,13 +23,15 @@
  *    other tabs and re-synchronised devices can never re-alert for it.
  *    Each reminder record also carries its `notify: { key, at, via }` —
  *    the unique delivery state — which rides sync/backup like any field.
- *  • summaries (daily/weekly), habit check-ins, project deadline warnings
- *    and Pomodoro phase notices are scheduled HERE (day-keyed ids), reading
- *    task data only through getState() — no task logic lives here.
+ *  • summaries (daily/weekly), habit check-ins and project deadline
+ *    warnings are scheduled HERE (day-keyed ids), reading task data only
+ *    through getState() — no task logic lives here. Focus-Mode phase notices
+ *    are pushed in from app.js via focusNotice() — the engine there owns the
+ *    session, this module only delivers.
  *
  * Public: window.ZTNotify = { attach, sanitize, renderControls, status,
  *   requestEnable, deliver, reminderAlert, tick, policy, wantsOverdue,
- *   pomodoroStart, pomodoroStop }
+ *   focusNotice }
  * ==========================================================================*/
 (function (global) {
   'use strict';
@@ -53,15 +55,13 @@
     odGraceMin: 0,           // …fire N minutes after the due instant
     snoozeMin: 10,           // default snooze (buttons offer 5/10/30/60/Tomorrow)
     projDays: 2,             // warn when a project due date is within N days
-    pomoFocus: 25, pomoBreak: 5,
   };
   const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
   const SNOOZE_OPTS = [[5, '5 min'], [10, '10 min'], [30, '30 min'], [60, '1 hour'], ['tomorrow', 'Tomorrow']];
 
   let H = null;         // host hooks from app.js (getState/commit/toast/…)
   let swReg = null;     // ServiceWorkerRegistration once we have one
-  let pomo = null;
-  let cardWired = false;      // transient Pomodoro session { phase, endsAt, timer }
+  let cardWired = false;
   let bound = false;
 
   /* ------------------------------- helpers -------------------------------- */
@@ -367,42 +367,13 @@
     return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()] === key;
   }
 
-  /* -------------------------------- pomodoro -------------------------------- */
-  /* A focus session is inherently transient (like an alarm): it is not task
-     data, so it lives here in memory — but each PHASE notification still
-     goes through the dedup ledger. */
+  /* ------------------------------- focus mode ------------------------------
+   * The Focus-Mode engine lives in app.js (the session is TASK data: it is
+   * persisted, synced and tracked). This module only delivers its phase
+   * notices through the standard gated/deduped channel ('pomo' switch). */
 
-  function pomoPhase(mins, phase) {
-    if (pomo && pomo.timer) clearTimeout(pomo.timer);
-    pomo = { phase, endsAt: Date.now() + mins * 60000, timer: setTimeout(pomoAdvance, Math.max(250, mins * 60000)) };
-  }
-  function pomoAdvance() {
-    const n = cfg();
-    if (!pomo) return;
-    const stamp = pomo.endsAt;
-    if (pomo.phase === 'focus') {
-      deliver('pomo', { id: 'pomo:' + stamp + ':done', title: 'Pomodoro', body: 'Focus session complete — take a ' + n.pomoBreak + ' minute break.', quiet: false });
-      pomoPhase(Math.max(0.02, n.pomoBreak), 'break');
-    } else {
-      deliver('pomo', { id: 'pomo:' + stamp + ':done', title: 'Pomodoro', body: 'Break over — back to a ' + n.pomoFocus + ' minute focus session.', quiet: false });
-      pomoPhase(Math.max(0.02, n.pomoFocus), 'focus');
-    }
-  }
-  function pomoStart(focusMin, breakMin) {
-    const n = cfg();
-    const f = Math.max(0.02, Number(focusMin) || n.pomoFocus || 25);
-    const b = Math.max(0.02, Number(breakMin) || n.pomoBreak || 5);
-    if (!n.master || !n.pomo) { toast('Enable notifications (and the Pomodoro switch) first.'); return false; }
-    if (pomo && pomo.timer) clearTimeout(pomo.timer);
-    pomoPhase(f, 'focus');
-    renderControls();
-    return true;
-  }
-  function pomoStop() {
-    if (pomo && pomo.timer) clearTimeout(pomo.timer);
-    pomo = null;
-    renderControls();
-    return true;
+  function focusNotice(title, body) {
+    return deliver('pomo', { id: 'focus:' + Date.now() + ':' + Math.random().toString(36).slice(2, 7), title: title, body: body, quiet: false });
   }
 
   /* ----------------------------- settings panel ----------------------------- */
@@ -417,12 +388,10 @@
     set('nDaily', n.daily); set('nDailyAt', n.dailyAt);
     set('nWeekly', n.weekly); set('nWeeklyDay', n.weeklyDay); set('nWeeklyAt', n.weeklyAt);
     set('nHabits', n.habits); set('nHabitAt', n.habitAt);
-    set('nPomo', n.pomo); set('nPomoFocus', String(n.pomoFocus)); set('nPomoBreak', String(n.pomoBreak));
+    set('nPomo', n.pomo);
     set('nProj', n.proj); set('nProjDays', String(n.projDays));
     set('nOdMode', n.odMode); set('nOdHours', String(n.odHours)); set('nOdGrace', String(n.odGraceMin));
     set('nSnooze', String(n.snoozeMin));
-    const ps = el('nPomoStart'); const pq = el('nPomoStop');
-    if (ps) ps.hidden = !!pomo; if (pq) pq.hidden = !pomo;
     const row = el('notifPermRow');
     if (row) {
       const st = status();
@@ -438,7 +407,7 @@
     nDaily: 'daily', nWeekly: 'weekly', nHabits: 'habits', nPomo: 'pomo', nProj: 'proj',
     nDailyAt: 'dailyAt', nWeeklyDay: 'weeklyDay', nWeeklyAt: 'weeklyAt', nHabitAt: 'habitAt',
     nOdMode: 'odMode', nOdHours: 'odHours', nOdGrace: 'odGraceMin',
-    nSnooze: 'snoozeMin', nProjDays: 'projDays', nPomoFocus: 'pomoFocus', nPomoBreak: 'pomoBreak',
+    nSnooze: 'snoozeMin', nProjDays: 'projDays',
   };
 
   function bindControls() {
@@ -473,8 +442,6 @@
           toast('Test notification sent (check the OS tray even if the app is open).');
           return;
         }
-        if (e.target.closest('#nPomoStart')) { const st = H.getState(); pomoStart(st.settings.notify && st.settings.notify.pomoFocus, st.settings.notify && st.settings.notify.pomoBreak); return; }
-        if (e.target.closest('#nPomoStop')) { pomoStop(); return; }
       });
     }
     // In-app alert cards live in #toastHost — their action buttons must be
@@ -543,7 +510,7 @@
     deliver, reminderAlert, tick,
     policy: () => { const n = cfg(); return { odMode: n.odMode, odHours: n.odHours, odGraceMin: n.odGraceMin, snoozeMin: n.snoozeMin }; },
     wantsOverdue: () => { const n = cfg(); return n.master && n.overdue; },
-    pomodoroStart: pomoStart, pomodoroStop: pomoStop,
+    focusNotice,
     isPersistent: () => !!swReg,
     __swMessage: (d) => onSwMessage(d), // test hook: simulate a notification click routed by the SW
     DEFAULTS,

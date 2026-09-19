@@ -41,12 +41,15 @@
     projectBar: $('projectBar'), projectDetail: $('projectDetail'),
     calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
     dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
+    focusBar: $('focusBar'),
     fRecurrence: $('f-recurrence'), remRows: $('remRows'), addRemBtn: $('addRemBtn'),
     recurPanel: $('recurPanel'), rcEvery: $('rcEvery'), rcUnit: $('rcUnit'), rcDays: $('rcDays'), rcHint: $('rcHint'),
     taskList: $('taskList'), emptyState: $('emptyState'),
     trashBar: $('trashBar'), trashCount: $('trashCount'), emptyTrashBtn: $('emptyTrashBtn'),
     settingsPanel: $('settingsPanel'), themeSelect: $('themeSelect'), reminderSelect: $('reminderSelect'),
     subtaskAuto: $('subtaskAuto'),
+    fzWork: $('fzWork'), fzShort: $('fzShort'), fzLong: $('fzLong'), fzEvery: $('fzEvery'),
+    fzNotify: $('fzNotify'), fzAuto: $('fzAuto'),
     storageInfo: $('storageInfo'),
     toastHost: $('toastHost'), modalHost: $('modalHost'), importFile: $('importFile'),
     footerCounts: $('footerCounts'),
@@ -103,7 +106,7 @@
     S = rec.state;
     S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null,
                cal: { open: false, view: 'month', anchor: '' },
-               dash: { open: false } };
+               dash: { open: false }, focus: { taskId: null } };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
@@ -176,6 +179,7 @@
     checkExportReminder();
     startRelativeClock();
     remInit(); // load → detect overdue → catch up safely → reschedule (persisted schedule)
+    await focusBoot(); // resume/catch-up any live Pomodoro session (it lives on the task)
 
     // Cloud layer (see cloud.js): LWW-merges with the server only AFTER the app
     // is rendered and interactive, then mirrors every commit upstream. A slow
@@ -485,6 +489,7 @@
     } else {
       els.taskList.hidden = false;
     }
+    renderFocus(); // the session bar re-derives from t.focusActive like everything else
     if (els.savePill.classList.contains('saved')) setPill('saved');
   }
 
@@ -624,6 +629,7 @@
             (due && !inTrash ? '<span class="badge due ' + due.cls + '">' + due.text + '</span>' : '') +
             (!inTrash && remPendingFor(t.id) ? '<span class="badge rem" title="' + remPendingFor(t.id) + ' pending reminder(s), next: ' + esc(remNextLabel(t.id)) + '">🔔 ' + remPendingFor(t.id) + '</span>' : '') +
             (t.recurrence ? '<span class="badge recur" title="' + esc(recurLabel(t)) + ' · completing rolls to the next date; ↻ opens series actions' + '">↻ ' + esc(recurLabel(t)) + '</span>' : '') +
+            (t.focusTotal > 0 ? '<span class="badge focus" title="' + t.focusTotal + ' focused min · ' + (t.focusSessions || 0) + ' completed session(s)">🍅 ' + (t.focusTotal < 60 ? t.focusTotal + 'm' : (Math.round(t.focusTotal / 6) / 10) + 'h') + '</span>' : '') +
             (function () {
               if (!t.projectId) return '';
               const pj = S.projects.find((p) => p.id === t.projectId);
@@ -643,7 +649,8 @@
           (inTrash
             ? '<button class="btn btn-ghost btn-sm" data-act="restore" title="Restore task">Restore</button>' +
               '<button class="btn btn-danger-ghost btn-sm" data-act="destroy" title="Delete forever">Delete forever</button>'
-            : (t.recurrence ? '<button class="btn btn-ghost btn-sm btn-icon" data-act="series" title="Series: complete / skip / edit occurrence or series / stop repeating" aria-label="Recurring series options">↻</button>' : '') +
+            : '<button class="btn btn-ghost btn-sm btn-icon" data-act="focus" title="Start Focus — a Pomodoro session on this task" aria-label="Start focus session">🍅</button>' +
+              (t.recurrence ? '<button class="btn btn-ghost btn-sm btn-icon" data-act="series" title="Series: complete / skip / edit occurrence or series / stop repeating" aria-label="Recurring series options">↻</button>' : '') +
               '<button class="btn btn-ghost btn-sm btn-icon" data-act="up" title="Move up" aria-label="Move up">↑</button>' +
               '<button class="btn btn-ghost btn-sm btn-icon" data-act="down" title="Move down" aria-label="Move down">↓</button>' +
               '<button class="btn btn-ghost btn-sm" data-act="edit" title="Edit task">Edit</button>' +
@@ -681,6 +688,7 @@
     els.themeSelect.value = S.settings.theme || 'auto';
     els.reminderSelect.value = String(S.settings.exportReminderDays || 0);
     els.subtaskAuto.checked = !!S.settings.subtaskAutoComplete;
+    if (els.fzWork) { const c = focusCfg(); els.fzWork.value = c.work; els.fzShort.value = c.short; els.fzLong.value = c.long; els.fzEvery.value = c.longEvery; els.fzNotify.checked = c.notify; els.fzAuto.checked = c.autoComplete; }
     if (window.ZTNotify) ZTNotify.renderControls(); // the Notifications section owns itself
   }
 
@@ -996,6 +1004,14 @@
     const i = S.tasks.findIndex((t) => t.id === id);
     if (i === -1) return;
     const t = S.tasks.splice(i, 1)[0];
+    if (t.focusActive) {
+      const nowT = Date.now();
+      const m = Math.round(focusElapsedMs(t.focusActive, nowT) / 60000);
+      if (m > 0 && t.focusActive.phase === 'focus') focusLogAppend(t, nowT, m, false);
+      t.focusActive = null;
+      if (S.ui.focus && S.ui.focus.taskId === t.id) S.ui.focus.taskId = null;
+      toast('Focus session abandoned — ' + (m > 0 ? m + ' focused minute(s) still logged.' : 'nothing was logged yet.'));
+    }
     t.trashedAt = Date.now();
     t.updatedAt = t.trashedAt; // keep LWW ordering sane for the store move (sync)
     S.trash.push(t);
@@ -2573,6 +2589,269 @@
     else if (act === 'stop') await stopRepeating(t);
   }
 
+  /* ------------------------------- Focus Mode --------------------------------
+   * Task-bound Pomodoro, built on the app's own doctrines:
+   *  • The session is a snapshot ON THE TASK ({ phase, endsAt, pausedAt, … })
+   *    — derived-time like reminders, so nothing ticks per second into
+   *    storage, and a refresh, a sleep or a sync can't lose progress: boot
+   *    catches the phase machine up from wall-clock.
+   *  • Focus TIME rides the task too (focusTotal minutes, focusSessions,
+   *    capped focusLog), so trash/restore/export/sync and the dashboard
+   *    aggregates need no special cases.
+   *  • A task is NEVER auto-completed — that happens only behind the
+   *    explicit ⚙ Settings → “Mark the task complete when a session ends”.
+   * The old transient notify-only Pomodoro is gone; this IS that feature.
+   * --------------------------------------------------------------------------*/
+
+  const FOCUS_DEF = { work: 25, short: 5, long: 15, longEvery: 4, notify: true, autoComplete: false };
+  function focusCfg() {
+    const raw = (S.settings && S.settings.focus) || {};
+    const num = (v, lo, hi, d) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= lo && n <= hi ? n : d; };
+    return {
+      work: num(raw.work, 1, 180, FOCUS_DEF.work),
+      short: num(raw.short, 1, 60, FOCUS_DEF.short),
+      long: num(raw.long, 1, 120, FOCUS_DEF.long),
+      longEvery: num(raw.longEvery, 1, 12, FOCUS_DEF.longEvery),
+      notify: raw.notify === undefined ? FOCUS_DEF.notify : !!raw.notify,
+      autoComplete: raw.autoComplete === undefined ? FOCUS_DEF.autoComplete : !!raw.autoComplete,
+    };
+  }
+  async function focusSavePatch(patch) {
+    S.settings.focus = Object.assign({}, S.settings.focus || {}, patch);
+    await commitSettings();
+    renderFocus();
+  }
+  function focusTask() { const id = S.ui.focus && S.ui.focus.taskId; return id ? byId(id) : null; }
+  function focusRemainingMs(fa, now) { return Math.max(0, fa.pausedAt ? fa.endsAt - fa.pausedAt : fa.endsAt - now); }
+  function focusElapsedMs(fa, now) {
+    const start = fa.endsAt - fa.durMin * 60000;
+    return Math.max(0, Math.min(fa.durMin * 60000, (fa.pausedAt || now) - start));
+  }
+  function focusLogAppend(t, now, min, completed) {
+    if (min > 0) {
+      t.focusTotal = (t.focusTotal || 0) + min;
+      const log = (Array.isArray(t.focusLog) ? t.focusLog.slice() : []);
+      log.push({ at: now, min });
+      if (log.length > 128) log.splice(0, log.length - 128);
+      t.focusLog = log;
+    }
+    if (completed) t.focusSessions = (t.focusSessions || 0) + 1;
+  }
+  async function focusStopQuiet(t) {
+    if (!t || !t.focusActive) return;
+    const fa = t.focusActive;
+    if (fa.phase === 'focus') {
+      const m = Math.round(focusElapsedMs(fa, Date.now()) / 60000);
+      if (m > 0) focusLogAppend(t, Date.now(), m, false);
+    }
+    t.focusActive = null;
+    if (S.ui.focus && S.ui.focus.taskId === t.id) S.ui.focus.taskId = null;
+    await store.commit([{ store: STORES.tasks, op: 'put', value: t }]);
+  }
+  async function focusStart(taskId, workMin, breakMin) {
+    const t = byId(taskId);
+    if (!t) return;
+    const c = focusCfg();
+    const prev = focusTask();
+    if (prev && prev.focusActive) await focusStopQuiet(prev); // ONE session at a time, always honest
+    const now = Date.now();
+    t.focusActive = { phase: 'focus', endsAt: now + workMin * 60000, pausedAt: null, durMin: workMin, breakMin, longMin: c.long, longEvery: c.longEvery };
+    S.ui.focus.taskId = taskId;
+    await store.commit([{ store: STORES.tasks, op: 'put', value: t }]);
+    renderAll();
+    focusTickOn();
+    toast('🍅 Focus started — ' + workMin + ' minutes on \u201c' + truncate(t.title, 32) + '\u201d.');
+  }
+  async function focusStop() {
+    const t = focusTask();
+    if (!t || !t.focusActive) return;
+    const fa = t.focusActive;
+    let msg = '⏹ Focus stopped.';
+    if (fa.phase === 'focus') {
+      const m = Math.round(focusElapsedMs(fa, Date.now()) / 60000);
+      msg = m > 0 ? '⏹ Stopped — you focused ' + m + ' minute' + (m === 1 ? '' : 's') + '.'
+                  : '⏹ Stopped — no full minute yet, nothing logged.';
+    }
+    await focusStopQuiet(t);
+    renderAll();
+    toast(msg);
+  }
+  async function focusPauseToggle() {
+    const t = focusTask();
+    if (!t || !t.focusActive) return;
+    const fa = t.focusActive;
+    const now = Date.now();
+    if (fa.pausedAt) { fa.endsAt += now - fa.pausedAt; fa.pausedAt = null; }
+    else if (fa.endsAt - now > 0) fa.pausedAt = now;
+    await store.commit([{ store: STORES.tasks, op: 'put', value: t }]);
+    renderAll();
+  }
+  async function focusPhaseDone() {
+    const t = focusTask();
+    if (!t || !t.focusActive) return;
+    const fa = t.focusActive;
+    const now = Date.now();
+    const c = focusCfg();
+    if (fa.phase === 'focus') {
+      const doneMin = fa.durMin;
+      focusLogAppend(t, now, doneMin, true);
+      const isLong = (t.focusSessions % fa.longEvery) === 0;
+      const bmin = isLong ? fa.longMin : fa.breakMin;
+      fa.phase = isLong ? 'long' : 'break';
+      fa.durMin = bmin;
+      fa.endsAt = now + bmin * 60000;
+      fa.pausedAt = null;
+      await store.commit([{ store: STORES.tasks, op: 'put', value: t }]);
+      if (c.notify && window.ZTNotify) {
+        ZTNotify.focusNotice('🍅 ' + doneMin + ' minutes focused',
+          'Session on \u201c' + truncate(t.title, 40) + '\u201d done — take a ' + bmin + '-minute ' + (isLong ? 'long ' : '') + 'break.');
+      }
+      toast('🍅 ' + doneMin + ' minutes focused — ' + (isLong ? 'long break' : 'break') + ' ' + bmin + ' min.');
+      if (c.autoComplete && t.status === 'active') await toggleTask(t.id); // the ONE explicit opt-in path
+    } else {
+      fa.phase = 'focus';
+      fa.durMin = c.work; fa.breakMin = c.short; fa.longMin = c.long; fa.longEvery = c.longEvery;
+      fa.endsAt = now + c.work * 60000;
+      fa.pausedAt = null;
+      await store.commit([{ store: STORES.tasks, op: 'put', value: t }]);
+      if (c.notify && window.ZTNotify) {
+        ZTNotify.focusNotice('☕ Break over', c.work + ' minutes back to \u201c' + truncate(t.title, 40) + '\u201d.');
+      }
+    }
+    renderAll();
+  }
+  let focusTimer = null;
+  function focusTickOn() {
+    if (focusTimer) return;
+    focusTimer = setInterval(() => {
+      const t = focusTask();
+      if (!t || !t.focusActive) { clearInterval(focusTimer); focusTimer = null; renderFocus(); return; }
+      if (!t.focusActive.pausedAt && t.focusActive.endsAt - Date.now() <= 0) { focusPhaseDone(); return; }
+      renderFocus();
+    }, 1000);
+  }
+  function renderFocus() {
+    if (!els.focusBar) return;
+    const t = focusTask();
+    const fa = t && t.focusActive;
+    if (!fa) {
+      if (!els.focusBar.hidden) { els.focusBar.hidden = true; els.focusBar.innerHTML = ''; }
+      return;
+    }
+    const tot = Math.floor(focusRemainingMs(fa, Date.now()) / 1000);
+    const clock = String(Math.floor(tot / 60)).padStart(2, '0') + ':' + String(tot % 60).padStart(2, '0');
+    const phase = fa.phase === 'focus'
+      ? '🍅 Focus · ' + esc(truncate(t.title, 40)) + (fa.pausedAt ? ' · paused' : '')
+      : (fa.phase === 'long' ? '🌙 Long break' : '☕ Break') + ' · back to ' + esc(truncate(t.title, 28));
+    els.focusBar.hidden = false;
+    els.focusBar.innerHTML =
+      '<span class="fz-phase">' + phase + '</span>' +
+      '<b class="fz-time">' + clock + '</b>' +
+      '<span class="fz-ctl">' +
+      (fa.pausedAt
+        ? '<button class="btn btn-sm btn-primary" data-fz="resume" type="button">Resume</button>'
+        : '<button class="btn btn-sm btn-ghost" data-fz="pause" type="button">Pause</button>') +
+      '<button class="btn btn-sm btn-ghost" data-fz="stop" type="button">Stop</button>' +
+      '</span>';
+  }
+  function focusStartModal(taskId) {
+    const t = byId(taskId);
+    if (!t) return;
+    const c = focusCfg();
+    const ov = document.createElement('div');
+    ov.className = 'modal-overlay';
+    const card = document.createElement('div');
+    card.className = 'modal modal-focus';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.innerHTML =
+      '<h3>🍅 Start Focus</h3>' +
+      '<p class="modal-body muted small">' + esc(t.title) + (t.dueDate ? ' · due ' + esc(t.dueDate) : '') + (t.recurrence ? ' · ↻ recurring' : '') + '</p>' +
+      '<div class="fz-presets">' +
+        '<button type="button" class="btn btn-primary" data-fp="c">' + c.work + '/' + c.short + ' <small>settings</small></button>' +
+        (c.work === 25 && c.short === 5 ? '' : '<button type="button" class="btn btn-ghost" data-fp="25/5">25/5</button>') +
+        (c.work === 50 && c.short === 10 ? '' : '<button type="button" class="btn btn-ghost" data-fp="50/10">50/10</button>') +
+        '<button type="button" class="btn btn-ghost" data-fp="custom">Custom…</button>' +
+      '</div>' +
+      '<div class="fz-custom" hidden>' +
+        '<label>Work <input type="number" id="fzCustWork" min="1" max="180" step="1" value="' + c.work + '"> min</label>' +
+        '<label>Break <input type="number" id="fzCustBreak" min="1" max="120" step="1" value="' + c.short + '"> min</label>' +
+        '<button type="button" class="btn btn-sm btn-primary" data-fp="go">Start</button>' +
+      '</div>' +
+      '<div class="modal-actions"><button type="button" class="btn btn-ghost" data-fp="">Cancel</button></div>';
+    ov.appendChild(card);
+    const done = () => { document.removeEventListener('keydown', onKey, true); ov.remove(); };
+    const onKey = (e) => { if (e.key === 'Escape') done(); };
+    ov.addEventListener('click', (e) => {
+      if (e.target === ov) { done(); return; }
+      const b = e.target.closest('[data-fp]');
+      if (!b) return;
+      const pick = b.dataset.fp;
+      if (!pick) { done(); return; }
+      if (pick === 'c') { done(); focusStart(t.id, c.work, c.short); return; }
+      if (pick === '25/5') { done(); focusStart(t.id, 25, 5); return; }
+      if (pick === '50/10') { done(); focusStart(t.id, 50, 10); return; }
+      if (pick === 'custom') {
+        const cust = card.querySelector('.fz-custom');
+        if (cust.hidden) { cust.hidden = false; const w = card.querySelector('#fzCustWork'); if (w) w.focus(); }
+        return;
+      }
+      if (pick === 'go') {
+        const w = Math.min(180, Math.max(1, Math.round(Number(card.querySelector('#fzCustWork').value)) || 25));
+        const br = Math.min(120, Math.max(1, Math.round(Number(card.querySelector('#fzCustBreak').value)) || 5));
+        done();
+        focusStart(t.id, w, br);
+      }
+    });
+    document.addEventListener('keydown', onKey, true);
+    els.modalHost.appendChild(ov);
+  }
+  async function focusBoot() {
+    const holders = S.tasks.filter((x) => x.focusActive);
+    if (!holders.length) return;
+    const now = Date.now();
+    const c = focusCfg();
+    const ops = [];
+    let resumeId = null;
+    let catchUp = null; // { min, title, taskId }
+    for (const t of holders) {
+      let changed = false;
+      for (let i = 0; i < 24; i++) {
+        const fa = t.focusActive;
+        if (!fa || fa.pausedAt || fa.endsAt > now) break;
+        changed = true;
+        if (fa.phase === 'focus') {
+          const doneMin = fa.durMin;
+          focusLogAppend(t, fa.endsAt, doneMin, true);
+          const isLong = (t.focusSessions % fa.longEvery) === 0;
+          fa.phase = isLong ? 'long' : 'break';
+          fa.durMin = isLong ? fa.longMin : fa.breakMin;
+          fa.endsAt = fa.endsAt + fa.durMin * 60000;
+          if (!catchUp) catchUp = { min: doneMin, title: t.title, taskId: t.id };
+        } else {
+          fa.phase = 'focus';
+          fa.durMin = c.work;
+          fa.endsAt = fa.endsAt + c.work * 60000;
+        }
+      }
+      if (changed) ops.push({ store: STORES.tasks, op: 'put', value: t });
+      if (t.focusActive && !t.focusActive.pausedAt && t.focusActive.endsAt > Date.now() && !resumeId) resumeId = t.id;
+    }
+    if (ops.length) await store.commit(ops);
+    if (catchUp) {
+      toast('🍅 Session completed while away — ' + catchUp.min + ' minutes focused on \u201c' + truncate(catchUp.title, 30) + '\u201d.');
+      if (c.notify && window.ZTNotify) {
+        ZTNotify.focusNotice('🍅 ' + catchUp.min + ' minutes focused', 'Your session on \u201c' + truncate(catchUp.title, 40) + '\u201d finished.');
+      }
+    }
+    if (resumeId) { S.ui.focus.taskId = resumeId; focusTickOn(); }
+    if (catchUp && c.autoComplete) {
+      const at = byId(catchUp.taskId);
+      if (at && at.status === 'active') await toggleTask(at.id);
+    }
+    renderAll();
+  }
+
   /* ------------------------- Productivity dashboard -------------------------
    * NOT a data source. Every tile, bar and row is derived at render time from
    * the same S.tasks / S.projects / S.reminders arrays the list and calendar
@@ -2659,8 +2938,22 @@
       .filter((r) => r.status === 'pending' && r.enabled !== false && byId(r.taskId))
       .sort((a, b) => a.triggerAt - b.triggerAt);
     const rate = done.length + act.length ? Math.round((done.length / (done.length + act.length)) * 100) : null;
+    let focusMin = 0;
+    let focusSessions = 0;
+    let focusWeek = 0;
+    const projFocus = {};
+    const taskFocus = [];
+    for (const t of live) {
+      focusMin += Number(t.focusTotal) || 0;
+      focusSessions += Number(t.focusSessions) || 0;
+      for (const e of (Array.isArray(t.focusLog) ? t.focusLog : [])) if (e.at >= wkStart) focusWeek += e.min;
+      if (t.projectId && (t.focusTotal || 0) > 0) projFocus[t.projectId] = (projFocus[t.projectId] || 0) + t.focusTotal;
+      if ((t.focusTotal || 0) > 0) taskFocus.push({ title: t.title, min: t.focusTotal });
+    }
+    taskFocus.sort((a, b) => b.min - a.min);
     return { now, today, wkStart, completedToday, dueTodayOpen, over, g, denom, pct, streak,
-      completedWeek, createdWeek, upcoming, rem, doneCount: done.length, rate, weekDays };
+      completedWeek, createdWeek, upcoming, rem, doneCount: done.length, rate, weekDays,
+      focusMin, focusSessions, focusWeek, projFocus, taskFocus };
   }
 
   function dashRel(ms) {
@@ -2692,6 +2985,7 @@
       '<div class="dash-row" data-drow="' + esc(t.id) + '">' +
       '<button class="dash-check" type="button" data-dact="done" aria-label="Complete" title="' +
         (t.recurrence ? 'Complete this occurrence — rolls to the next date' : 'Complete') + '">✓</button>' +
+      '<button class="dash-fzbtn" type="button" data-dact="focus" aria-label="Start focus session" title="Start Focus — Pomodoro on this task">🍅</button>' +
       '<span class="dash-rtitle">' + esc(truncate(t.title, 52)) + '</span>' +
       '<span class="dash-rmeta">' + (tag ? '<b class="' + tag + '">' + (tag === 'late' ? 'overdue' : 'high') + '</b>' : '') +
       (t.dueDate ? '<span>' + esc(((formatDue(t.dueDate, false) || {}).txt) || t.dueDate) + (t.dueTime ? ' ' + esc(t.dueTime) : '') + '</span>' : '') +
@@ -2715,6 +3009,22 @@
       (m.denom ? '<div class="dash-prog-num">' + m.completedToday + ' / ' + m.denom + ' completed</div>'
                : '<div class="dash-prog-num">Nothing scheduled today — the day is wide open 🌿</div>');
 
+    const hm = (mins) => (mins >= 60 ? (Math.round(mins / 6) / 10) + ' h' : mins + ' min');
+    const projNames = {};
+    for (const p of (S.projects || [])) projNames[p.id] = p.name;
+    const focusCard = (m.focusMin || m.focusSessions)
+      ? ('<div class="dash-stats"><div class="dash-stat"><b>' + hm(m.focusMin) + '</b><span>total focus time</span></div>' +
+         '<div class="dash-stat"><b>' + m.focusSessions + '</b><span>session' + (m.focusSessions === 1 ? '' : 's') + ' completed</span></div>' +
+         '<div class="dash-stat"><b>' + hm(m.focusWeek) + '</b><span>this week</span></div></div>' +
+         (Object.keys(m.projFocus).length
+           ? '<div class="dash-gname">By project</div>' + Object.keys(m.projFocus)
+               .map((pid) => '<div class="dash-rrow"><span class="dash-rtitle">' + esc(truncate(projNames[pid] || 'a project', 30)) + '</span><span class="when2">' + hm(m.projFocus[pid]) + '</span></div>').join('')
+           : '') +
+         (m.taskFocus.length
+           ? '<div class="dash-gname">Most focused tasks</div>' + m.taskFocus.slice(0, 3)
+               .map((x) => '<div class="dash-rrow"><span class="dash-rtitle">' + esc(truncate(x.title, 34)) + '</span><span class="when2">' + hm(x.min) + '</span></div>').join('')
+           : ''))
+      : '<div class="dash-empty">No focus sessions yet — hit 🍅 on any task (25/5 from Settings → Focus).</div>';
     const stat = (label, value) => '<div class="dash-stat"><b>' + value + '</b><span>' + label + '</span></div>';
     const statsCard =
       stat('completed today', m.completedToday) + stat('completed this week', m.completedWeek) +
@@ -2781,6 +3091,7 @@
         (hasToday ? todayCard : '<div class="dash-empty">Nothing on today\u2019s board. New task from the composer, or browse the unscheduled backlog below.</div>') +
       '</div>' +
       '<div class="dash-card"><h3>Today\u2019s Progress</h3>' + progCard + '</div>' +
+      '<div class="dash-card"><h3>Focus</h3>' + focusCard + '</div>' +
       '<div class="dash-card"><h3>Statistics</h3><div class="dash-stats">' + statsCard + '</div></div>' +
       '<div class="dash-card"><h3>This week — completions by day</h3>' + chartCard + '</div>' +
       '<div class="dash-card"><h3>Projects</h3>' + projCard + '</div>' +
@@ -2800,6 +3111,8 @@
       }
     };
     els.dashHost.addEventListener('click', (e) => {
+      const fz = e.target.closest('[data-dact="focus"]');
+      if (fz) { const h = fz.closest('[data-drow]'); if (h) focusStartModal(h.getAttribute('data-drow')); return; }
       const chk = e.target.closest('[data-dact="done"]');
       if (chk) { const host = chk.closest('[data-drow]'); if (host) toggleTask(host.getAttribute('data-drow')); return; }
       const rw = e.target.closest('[data-drow]');
@@ -3050,7 +3363,7 @@
       if (btn && btn.dataset.act === 'edit') { openComposer({ mode: 'edit', taskId: id }); return; }
       if (btn && btn.dataset.act === 'delete') { deleteTask(id); return; }
       if (btn && btn.dataset.act === 'series') { const tt = byId(id); if (tt) seriesDialog(tt).then((a) => onSeriesAction(a, tt)); return; }
-      if (btn && btn.dataset.act === 'series') { const tt = byId(id); if (tt) seriesDialog(tt).then((a) => onSeriesAction(a, tt)); return; }
+      if (btn && btn.dataset.act === 'focus') { focusStartModal(id); return; }
       // Clicking the task body opens the editor
       if (e.target.closest('.task-main')) openComposer({ mode: 'edit', taskId: id });
     });
@@ -3135,6 +3448,32 @@
     els.reminderSelect.addEventListener('change', (e) => {
       S.settings.exportReminderDays = Number(e.target.value);
       commitSettings();
+    });
+    const fzNum = (id, key, lo, hi) => {
+      if (!els[id]) return;
+      els[id].addEventListener('change', () => {
+        const raw = Math.round(Number(els[id].value));
+        const v = Math.min(hi, Math.max(lo, Number.isFinite(raw) ? raw : lo));
+        if (String(v) !== els[id].value) els[id].value = v; // reflect clamping
+        focusSavePatch({ [key]: v });
+      });
+    };
+    fzNum('fzWork', 'work', 1, 180);
+    fzNum('fzShort', 'short', 1, 60);
+    fzNum('fzLong', 'long', 1, 120);
+    fzNum('fzEvery', 'longEvery', 1, 12);
+    if (els.focusBar) els.focusBar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-fz]');
+      if (!b) { const tt = focusTask(); if (tt) openComposer({ mode: 'edit', taskId: tt.id }); return; }
+      if (b.dataset.fz === 'pause' || b.dataset.fz === 'resume') focusPauseToggle();
+      else if (b.dataset.fz === 'stop') focusStop();
+    });
+    if (els.fzNotify) els.fzNotify.addEventListener('change', (e) => { focusSavePatch({ notify: e.target.checked }); toast(e.target.checked ? 'Focus sessions will announce themselves.' : 'Focus sessions will stay quiet.'); });
+    if (els.fzAuto) els.fzAuto.addEventListener('change', (e) => {
+      focusSavePatch({ autoComplete: e.target.checked });
+      toast(e.target.checked
+        ? '⚠ A finished session will complete the task automatically.'
+        : 'Tasks will only be completed by you — sessions just record focus time.');
     });
     els.subtaskAuto.addEventListener('change', (e) => {
       S.settings.subtaskAutoComplete = e.target.checked;

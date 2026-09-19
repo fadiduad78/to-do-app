@@ -42,7 +42,8 @@ if the server is unreachable, every original guarantee still holds.
   task reminders (body phrases the lead time — “Finish Python project is due
   in 30 minutes.”), overdue alerts with a configurable no-spam policy (once
   per task, or repeat every N hours until handled), daily/weekly summaries, habit
-  check-ins, project-deadline warnings and Pomodoro timers. Permission is only
+  check-ins, project-deadline warnings and Focus-Mode (Pomodoro) phase
+  notices. Permission is only
   ever requested from an explicit “Enable Notifications” button — never on
   load. Alerts use `registration.showNotification` (persistent, with
   Complete/Snooze/Open action buttons where the OS allows them — browsers
@@ -79,6 +80,19 @@ if the server is unreachable, every original guarantee still holds.
   derived at render time from the same task/project/reminder records;
   checking a task off on the dashboard calls the very same `toggleTask` the
   list row uses, and opening/closing the view writes zero bytes.
+- **Focus Mode (Pomodoro)**: every task row has a 🍅 **Start Focus** button →
+  pick **25/5**, **50/10** or **Custom…** — a session bar drops in with the
+  countdown (25:00) and **Pause / Resume / Stop**, and when the clock hits
+  zero it says *“25 minutes focused”* (toast + optional system notification).
+  Focus auto-cycles (work → short break → work…), earning a **long break**
+  every N sessions — all configurable in ⚙ Settings → Focus (work, short,
+  long, sessions-before-long, notify, and an *opt-in* “complete the task when
+  a session ends”, off by default). Time is tracked per task *and* per
+  project (dashboard → Focus card) because the aggregates + capped session
+  log + live snapshot ride on the task record itself — the timer therefore
+  survives refresh, sleep and sync, ticks with zero storage writes, and
+  catches up honestly after being closed early. Pausing mid-day never breaks
+  a streak; stopping before a full minute logs nothing.
 - **Installable as a PWA** (`manifest.webmanifest` + generated launcher icons
   + theme-color): on Android (and iOS when added to Home Screen) the installed
   app keeps the service worker alive for notification delivery, and the
@@ -206,6 +220,41 @@ Old data degrades honestly: completions made before this feature have no
 ledger, so they count toward totals and the completion rate but not toward
 per-day tiles, streaks or the chart.
 
+## Focus Mode (task-bound Pomodoro)
+
+`Start Focus` writes one snapshot on the task — `focusActive: { phase:
+'focus'|'break'|'long', endsAt, pausedAt, durMin, breakMin, longMin,
+longEvery }` — and everything else derives from wall-clock at render time
+(the same philosophy as reminders: *stored instants, never ticking state*).
+
+- **Tracking fields on the record:** `focusTotal` (minutes, monotonic),
+  `focusSessions` (completed count — early stops don't increment it) and
+  `focusLog` (capped at the 128 most recent `{at, min}` entries). The
+  dashboard’s Focus card, the row’s 🍅 badge, per-project totals and sync all
+  read these; there is no separate focus store, and none of it is recoverable
+  from thin air — sanitize rules in `coerceTask` (client **and** server)
+  clamp garbage back to zeros/defaults so a corrupt record can never wedge
+  the timer.
+- **One session app-wide:** starting Focus on another task quietly closes
+  (and honest-logs) the previous one. Trashing a task abandons its session
+  with a toast; partial focus ≥1 min is still logged.
+- **Long breaks:** a focus phase that completes session #N where
+  `N % longEvery == 0` gets `long` minutes instead of `short`. The cycle
+  auto-continues until you press Stop.
+- **Catch-up:** a session whose clock expired while the tab was closed is
+  finalized on boot — minutes logged, break (or long break) started, notice
+  delivered through the `nPomo` notification channel (deduped, in-app card
+  fallback). Auto-complete, if enabled, applies to a completed *focus phase*
+  only through the normal `toggleTask` path (so recurring tasks roll,
+  reminders skip, undo works — nothing special-cased).
+- **Never auto-completes** unless `S.settings.focus.autoComplete` was
+  explicitly switched on in Settings → Focus. Default: off, pinned by §21.
+
+Tests: `server/test-ui.mjs` **§21** (26 checks — menus, controls, persisted
+settings, deterministic boot catch-up, long-break parity, both opt-in sides,
+one-timer rule, trash honesty, zero-per-second writes) and
+`server/test-storage.mjs` (coerce/cap/default-clamp cases).
+
 ## Where your data is stored
 
 | Location | Key / store | Contents |
@@ -303,7 +352,8 @@ tasks, trash }`. You can also hand-edit it (carefully) and re-import.
   cross-tab sync, quota handling). This is where the safety logic lives.
 - `notify.js` — the whole notification layer: permission flow (explicit-only),
   OS delivery via the service worker or the Notification constructor, in-app
-  fallback cards, summaries/habits/deadline/pomodoro scheduling, the dedup
+  fallback cards, summaries/habits/deadline scheduling + Focus-Mode notice
+  delivery (`focusNotice` — the session engine itself lives in `app.js`), the dedup
   ledger and the Settings → Notifications UI. Loaded between `cloud.js` and
   `app.js`.
 - `sw.js` — service worker: persistent notification display + routing clicks

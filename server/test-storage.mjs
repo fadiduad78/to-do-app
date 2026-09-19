@@ -402,5 +402,26 @@ const snapLG = JSON.parse(mem.get('todo_backup_v1'));
 ok(snapLG.tasks.find((x) => x.id === 'lg1').completions.length === 1,
   'ledger fields ride the mirror export like every other task field (backup/sync fidelity)');
 
+// ---- Focus Mode fields ----
+mem.set('todo_backup_v1', JSON.stringify({ app: 'zerotodo', schemaVersion: 5, savedAt: Date.now(), settings: {}, tasks: [
+  { id: 'fA', title: 'Junk focus', createdAt: 1000, updatedAt: 1000, focusTotal: -4, focusSessions: 'x',
+    focusLog: [{ at: 'a', min: 5 }, { at: Date.now(), min: 9 }, { at: Date.now() + 1, min: 200 }, null, 7],
+    focusActive: { phase: 'zebra', endsAt: Date.now() } },
+  { id: 'fB', title: 'Wild session', createdAt: 1000, updatedAt: 1000,
+    focusActive: { phase: 'break', endsAt: Date.now() + 1, durMin: 9999, breakMin: 0, longMin: -2, longEvery: 'x', pausedAt: 'no' } },
+  { id: 'fC', title: 'Fat log', createdAt: 1000, updatedAt: 1000, focusLog: Array.from({ length: 300 }, (_, i) => ({ at: 1000 + i, min: 1 })) },
+], trash: [], projects: [], subtasks: [], reminders: [] }));
+const FZ = ZT.createStore({});
+const recFZ = await FZ.recover();
+const fzOf = (id) => recFZ.state.tasks.find((x) => x.id === id);
+ok(fzOf('fA').focusTotal === 0 && fzOf('fA').focusSessions === 0 && fzOf('fA').focusActive === null,
+  'focus coerce: negative/NaN aggregates → 0, bogus phase → live session dropped');
+ok(fzOf('fA').focusLog.length === 2 && fzOf('fA').focusLog[0].min === 9 && fzOf('fA').focusLog[1].min === 200,
+  'focus log keeps only valid {at,min} entries, sorted by time');
+ok(fzOf('fC').focusLog.length === 128 && fzOf('fC').focusLog[127].at === 1000 + 299,
+  'focus log capped at the 128 newest entries (bounded records survive sync)');
+ok(fzOf('fB').focusActive.durMin === 25 && fzOf('fB').focusActive.breakMin === 5 && fzOf('fB').focusActive.longEvery === 4 && fzOf('fB').focusActive.pausedAt === null,
+  'out-of-range session snapshot fields fall back to sane defaults — a corrupt record can never wedge the timer');
+
 console.log(failed ? `\n${failed} storage check(s) FAILED` : '\nall storage checks green');
 process.exit(failed ? 1 : 0);

@@ -924,3 +924,21 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
   .dash-prog { font-size: 13px; letter-spacing: 1px; }
   .dash-hero { padding: 12px 13px; }
 }
+
+/* ---------- Focus Mode (task-bound Pomodoro) ---------- */
+.focus-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: linear-gradient(135deg, var(--accent-soft), var(--panel)); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 14px; margin: 6px 0 10px; }
+.focus-bar[hidden] { display: none; }
+.fz-phase { font-size: 13px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fz-time { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 30px; font-weight: 700; letter-spacing: 0.04em; color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1; }
+.fz-ctl { display: flex; gap: 8px; flex: none; }
+.badge.focus { background: var(--warn-soft); color: var(--warn); }
+.modal-focus .fz-presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+.modal-focus .fz-presets .btn small { opacity: 0.72; font-weight: 500; }
+.modal-focus .fz-custom { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 8px 0 2px; flex-wrap: wrap; }
+.modal-focus .fz-custom input { width: 64px; }
+.dash-fzbtn { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--border); background: transparent; font-size: 11px; line-height: 1; cursor: pointer; opacity: 0.7; padding: 0; }
+.dash-fzbtn:hover { border-color: var(--accent); opacity: 1; }
+@media (max-width: 560px) {
+  .focus-bar { padding: 8px 10px; gap: 8px; }
+  .fz-time { font-size: 24px; }
+}

@@ -135,6 +135,9 @@
     <button id="newTaskBtn" class="btn btn-primary">＋ New task</button>
   </section>
 
+  <!-- The live Pomodoro session (a view over t.focusActive on the task record). -->
+  <section id="focusBar" class="focus-bar" hidden aria-label="Focus session" aria-live="polite"></section>
+
   <!-- A pending draft (from a previous session) can be resumed or discarded without opening the form. -->
   <div id="draftResume" class="draft-resume" hidden>
     <span>✎ Unsaved draft: <b class="draft-label"></b></span>
@@ -197,6 +200,15 @@
       <input type="checkbox" id="subtaskAuto">
     </label>
 
+    <h2 style="margin-top:14px">Focus</h2>
+    <label class="setting-row"><span>Work duration</span><span><input type="number" id="fzWork" min="1" max="180" step="1" size="3"> min</span></label>
+    <label class="setting-row"><span>Short break</span><span><input type="number" id="fzShort" min="1" max="60" step="1" size="3"> min</span></label>
+    <label class="setting-row"><span>Long break</span><span><input type="number" id="fzLong" min="1" max="120" step="1" size="3"> min</span></label>
+    <label class="setting-row"><span>Sessions before long break</span><span><input type="number" id="fzEvery" min="1" max="12" step="1" size="3"></span></label>
+    <label class="setting-row setting-check"><span>Notify when a session finishes</span><input type="checkbox" id="fzNotify"></label>
+    <label class="setting-row setting-check"><span>Mark the task complete when a session ends</span><input type="checkbox" id="fzAuto"></label>
+    <p class="muted small">Start a session from any task's 🍅 button — presets 25/5, 50/10 or Custom. Focus time is tracked per task and project; a task is never completed automatically unless the option above is on.</p>
+
     <h2 style="margin-top:14px">Notifications</h2>
     <div id="notifBox" class="notif-box">
       <div class="setting-row notif-perm" id="notifPermRow"></div>
@@ -219,13 +231,8 @@
       </div>
       <label class="setting-row setting-check"><span>Habit reminders (daily-repeat tasks)</span><input type="checkbox" id="nHabits"></label>
       <div class="notif-timing"><label>At <input type="time" id="nHabitAt"></label></div>
-      <label class="setting-row setting-check"><span>Pomodoro notifications</span><input type="checkbox" id="nPomo"></label>
-      <div class="notif-timing">
-        <label>Focus <input type="number" id="nPomoFocus" min="1" max="90" step="1" size="3"> min</label>
-        <label>Break <input type="number" id="nPomoBreak" min="1" max="30" step="1" size="3"> min</label>
-        <button type="button" class="btn btn-sm btn-ghost" id="nPomoStart">▶ Start</button>
-        <button type="button" class="btn btn-sm btn-ghost" id="nPomoStop" hidden>■ Stop</button>
-      </div>
+      <label class="setting-row setting-check"><span>Focus session notifications</span><input type="checkbox" id="nPomo"></label>
+      <div class="notif-timing"><label class="muted small">Notifies when a 🍅 session ends and when a break finishes — timings live in ⚙ Settings → Focus.</label></div>
       <label class="setting-row setting-check"><span>Project deadline warnings</span><input type="checkbox" id="nProj"></label>
       <div class="notif-timing"><label>Warn within <input type="number" id="nProjDays" min="0" max="30" step="1" size="3"> days of a project's due date</label></div>
       <div class="notif-timing"><label>Default snooze <select id="nSnooze">

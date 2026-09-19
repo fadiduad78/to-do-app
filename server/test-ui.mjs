@@ -664,7 +664,7 @@ await sleep(300);
   ok($('#notifBox') && $('#nMaster') && $('#nReminders') && $('#nOverdue') && $('#nDaily') && $('#nWeekly')
     && $('#nHabits') && $('#nPomo') && $('#nProj'),
     'Settings → Notifications: all 8 spec switches present (master/reminders/overdue/daily/weekly/habits/pomodoro/project)');
-  ok($('#nOdMode') && $('#nDailyAt') && $('#nWeeklyAt') && $('#nHabitAt') && $('#nPomoFocus') && $('#nProjDays'),
+  ok($('#nOdMode') && $('#nDailyAt') && $('#nWeeklyAt') && $('#nHabitAt') && $('#fzWork') && $('#nProjDays'),
     'each channel has its own timing/policy controls');
   ok(/Notifications are blocked\. Enable them in browser settings\./.test($('#notifPermRow').textContent),
     'denied permission → exactly the spec’s blocked sentence');
@@ -776,16 +776,9 @@ await sleep(300);
   ok(nTitle('Project deadline') === 1, 'project due within projDays → exactly one “Project deadline” warning per day');
   ok(swCalls.some((c) => c.title === 'Project deadline' && /Launch site/.test(c.opts.body || '') && /due in 1 day/.test(c.opts.body || '')), 'deadline warning names the project + countdown');
 
-  /* -------- pomodoro notifications -------- */
+  /* -------- focus-mode notifications (task-bound engine; see §21) -------- */
   await setCk('#nPomo', true);
-  await setVal('#nPomoFocus', '0.02'); await setVal('#nPomoBreak', '0.02');
-  $('#nPomoStart').click(); await sleep(1500);
-  ok(nTitle('Pomodoro') >= 1, 'pomodoro focus end → “Pomodoro” notification through the same dedup pipeline');
-  ok($('#nPomoStop') && !$('#nPomoStop').hidden, 'settings show a Stop control while a session runs');
-  $('#nPomoStop').click(); await sleep(250);
-  const pomoNow = nTitle('Pomodoro');
-  await sleep(1600);
-  ok(nTitle('Pomodoro') === pomoNow, 'Stop kills the timer — no runaway pomodoro alerts');
+  ok($('#nPomo') && !$('#nPomoStart') && !$('#nPomoFocus'), 'legacy transient Pomodoro removed — the nPomo switch now gates Focus-Mode phase notices');
 
   /* -------- settings persistence -------- */
   await sleep(400);
@@ -1090,6 +1083,15 @@ await sleep(300);
       await pclick('#dashBtn');
       await new Promise((r) => setTimeout(r, 150));
 
+      // state: focus session bar
+      await page.evaluate(() => { const b = document.querySelector('#taskList .task [data-act=\"focus\"]'); if (b) b.click(); });
+      await wait('focus-menu', () => !!document.querySelector('.modal-focus')).catch(() => {});
+      await page.evaluate(() => { const c = document.querySelector('.modal-focus [data-fp=\"25/5\"]') || document.querySelector('.modal-focus [data-fp=\"c\"]'); if (c) c.click(); });
+      await wait('focus-bar', () => !document.getElementById('focusBar').hidden).catch(() => {});
+      checks.push(['focus-bar', await scan(vw)]);
+      await page.evaluate(() => { const s = document.querySelector('#focusBar [data-fz=\"stop\"]'); if (s) s.click(); });
+      await new Promise((r) => setTimeout(r, 200));
+
       // state: project modal (bottom sheet)
       await pclick('#projectBar [data-act="new"]');
       await wait('modal-open', () => !!document.querySelector('#modalHost .modal'));
@@ -1111,7 +1113,7 @@ await sleep(300);
         layoutFails++; lastVw = vw;
         console.log(`  ✗ mobile layout @${vw}px — overflow: ${overflow.map((o) => o[0] + ' ' + JSON.stringify(o[1].offenders && o[1].offenders.length ? o[1].offenders : o[1].docScroll)).join('; ') || 'none'} | <16px inputs: ${JSON.stringify(fontFail)} | targets: ${JSON.stringify(targets)}`);
       } else {
-        console.log(`  ✓ mobile layout @${vw}px: all 9 states overflow-free, inputs ≥16px, tap targets ok`);
+        console.log(`  ✓ mobile layout @${vw}px: all 10 states overflow-free, inputs ≥16px, tap targets ok`);
       }
     }
     ok(layoutFails === 0, `real Chromium @320/360/375/414: no horizontal overflow in any state, no iOS-zoom inputs, touch targets sized${layoutFails ? ' (failed at ' + lastVw + 'px — see log above)' : ''}`);
@@ -1644,6 +1646,113 @@ await sleep(300);
   $('#dashBtn').click(); await sleep(160);
   ok($('#dashboard').hidden === true && $('#taskList').hidden === false, 'closing the dashboard returns to the list');
   domD.window.close();
+}
+
+/* ================== 21. Focus Mode — task-bound Pomodoro ================== */
+{
+  console.log('\n--- 21. focus mode ---');
+  /* ---- A. live UI: row button → presets → bar controls (main window) ---- */
+  const row = $$('#taskList .task:not(.project-row)')[0];
+  const rowTitle = row.querySelector('.task-title').textContent.trim();
+  ok(!!row.querySelector('[data-act="focus"]'), 'every task row carries the 🍅 Start Focus control');
+  row.querySelector('[data-act="focus"]').click(); await sleep(160);
+  const fcard = $('#modalHost .modal-focus');
+  ok(fcard && /25\/5/.test(fcard.textContent) && /50\/10/.test(fcard.textContent) && /Custom/.test(fcard.textContent),
+    'preset menu offers 25/5, 50/10 and Custom (plus the settings pair)');
+  fcard.querySelector('[data-fp="50/10"]').click(); await sleep(250);
+  ok(!$('#focusBar').hidden && /🍅 Focus/.test($('.fz-phase').textContent), 'the session bar appears, labelled as Focus');
+  ok(/^(49|50):[0-5]\d$/.test($('.fz-time').textContent), 'timer counts down from the picked length (shows ' + $('.fz-time').textContent + ')');
+  let lastRec = JSON.stringify(remMirror().tasks.find((x) => x.title === rowTitle).focusActive);
+  await sleep(1400);
+  ok(JSON.stringify(remMirror().tasks.find((x) => x.title === rowTitle).focusActive) === lastRec,
+    'ticking writes NOTHING per second — the bar re-derives from stored instants');
+  const t1 = $('.fz-time').textContent;
+  $('.fz-ctl [data-fz="pause"]').click(); await sleep(1350);
+  ok(/Resume/.test($('.fz-ctl').textContent) && $('.fz-time').textContent === t1, 'Pause freezes the clock and swaps to Resume');
+  $('.fz-ctl [data-fz="resume"]').click(); await sleep(1350);
+  ok($('.fz-time').textContent !== t1, 'Resume continues from the frozen instant (wall-clock math, not a paused JS timer)');
+  $('.fz-ctl [data-fz="stop"]').click(); await sleep(300);
+  ok($('#focusBar').hidden, 'Stop hides the bar');
+  const stoppedT = tskOf(rowTitle);
+  ok((stoppedT.focusTotal || 0) === 0 && !stoppedT.focusActive, 'stopping before a full minute logs nothing and leaves no session state');
+
+  /* ---- B. Settings → Focus persists (work duration drives the defaults) ---- */
+  $('#settingsBtn').click(); await sleep(180);
+  const w = $('#fzWork'); w.value = '7'; w.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(260);
+  ok(remMirror().settings.focus.work === 7, 'Work duration 7 min persisted to settings (synced with everything else)');
+  const ev = $('#fzEvery'); ev.value = '99'; ev.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(260);
+  ok(remMirror().settings.focus.longEvery === 12 && $('#fzEvery').value === '12', 'out-of-range input is clamped, reflected in the field, then persisted');
+  $('#settingsBtn').click(); await sleep(140);
+
+  /* ---- C. deterministic boot: catch-up, long-break logic, tracking, notification ---- */
+  const NOW21 = Date.now();
+  const mkSeed = (fa, sessions, auto) => ({
+    app: 'zerotodo', schemaVersion: 5, savedAt: NOW21,
+    settings: { focus: { work: 25, short: 5, long: 15, longEvery: 4, autoComplete: !!auto } },
+    tasks: [{ id: 'f1', title: 'Build Expense Tracker', status: 'active', priority: 'med', projectId: 'fp1',
+      createdAt: NOW21 - 86400e3, updatedAt: NOW21, focusTotal: 0, focusSessions: sessions || 0, focusLog: [], focusActive: fa }],
+    trash: [], subtasks: [],
+    projects: [{ id: 'fp1', name: 'Expenses', icon: '💸', color: '#4f46e5', status: 'active', createdAt: 1, updatedAt: 1, sortOrder: 1 }],
+    reminders: [],
+  });
+  const bootFocus = async (seed) => {
+    const dm = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+    dm.window.HTMLElement.prototype.scrollIntoView = function () {};
+    dm.window.localStorage.setItem('todo_backup_v1', JSON.stringify(seed));
+    dm.window.eval(storageSrc); dm.window.eval(appSrc);
+    await sleep(900);
+    return dm;
+  };
+  // 25:00 session expired 1 min ago, it was pomodoro #4 of 4 → LONG break starts
+  const domE = await bootFocus(mkSeed({ phase: 'focus', endsAt: NOW21 - 60000, pausedAt: null, durMin: 25, breakMin: 5, longMin: 15, longEvery: 4 }, 3, false));
+  const docE = domE.window.document;
+  const mE = JSON.parse(domE.window.localStorage.getItem('todo_backup_v1'));
+  const fE = mE.tasks.find((x) => x.id === 'f1');
+  ok(fE.focusTotal === 25 && fE.focusSessions === 4 && fE.focusLog.length === 1 && fE.focusLog[0].min === 25,
+    'boot catch-up recorded the session that finished while away: +25 min, 4th session, one ledger entry');
+  ok(fE.focusActive && fE.focusActive.phase === 'long' && fE.focusActive.endsAt > Date.now(),
+    'session 4 of 4 → LONG break auto-started (not the short one) — the cycle is alive after a refresh');
+  ok(!docE.getElementById('focusBar').hidden && /Long break/.test(docE.querySelector('.fz-phase').textContent), 'the bar reassembled on load, showing the long break');
+  ok(/25 minutes focused/.test([...docE.querySelectorAll('.toast, .toast-rem')].map((x) => x.textContent).join(' | ')),
+    'completion surfaced WITHOUT the app being open: in-app card (no-Notification env degrades) says “25 minutes focused”');
+  ok(docE.querySelector('.badge.focus') && /25m/.test(docE.querySelector('.badge.focus').textContent), 'the task row badges its focus time (🍅 25m)');
+  docE.getElementById('dashBtn').click(); await sleep(260);
+  const dashE = docE.querySelector('#dashHost').textContent;
+  ok(/total focus time/.test(dashE) && /25 min/.test(dashE) && /Expenses/.test(dashE) && /Build Expense Tracker/.test(dashE),
+    'dashboard Focus card: total, per-project (Expenses 25 min) and per-task tracking — all derived');
+  const snap21 = domE.window.localStorage.getItem('todo_backup_v1');
+  await sleep(1300);
+  ok(domE.window.localStorage.getItem('todo_backup_v1') === snap21, 'the running break tick stores nothing either (derived-time design)');
+
+  // autoComplete ON → the task completes when a session ends; OFF (above) must NOT have
+  ok(fE.status === 'active', 'with the opt-in OFF the task stayed active through completion + long break (never auto-completes)');
+  const domF = await bootFocus(Object.assign(mkSeed({ phase: 'focus', endsAt: NOW21 - 30000, pausedAt: null, durMin: 25, breakMin: 5, longMin: 15, longEvery: 4 }, 0, true)));
+  const mF = JSON.parse(domF.window.localStorage.getItem('todo_backup_v1'));
+  const fF = mF.tasks.find((x) => x.id === 'f1');
+  ok(fF.status === 'completed' && fF.focusTotal === 25, 'with the explicit opt-in ON, a finished session DOES complete the task (single-record change, history intact)');
+  ok(fF.focusActive && fF.focusActive.phase === 'break', '…and the cycle then rolls into the SHORT break (session 1 of 4)');
+
+  /* ---- D. one session at a time + trash abandons honestly (fresh nodes —
+     the settings commits re-rendered the list, detaching old elements) ---- */
+  const rowA = $$('#taskList .task:not(.project-row)')[0];
+  const titleA = rowA.querySelector('.task-title').textContent.trim();
+  rowA.querySelector('[data-act="focus"]').click(); await sleep(140);
+  $('#modalHost .modal-focus [data-fp="c"]').click(); await sleep(320);
+  ok(/🍅 Focus/.test($('.fz-phase').textContent) && /0?7:00|06:5\d/.test($('.fz-time').textContent),
+    'new session uses the PERSISTED 7-minute work duration (' + $('.fz-time').textContent + ')');
+  const rowB = $$('#taskList .task:not(.project-row)')[1];
+  const titleB = rowB.querySelector('.task-title').textContent.trim();
+  rowB.querySelector('[data-act="focus"]').click(); await sleep(140);
+  $('#modalHost .modal-focus [data-fp="c"]').click(); await sleep(340);
+  ok(!tskOf(titleA).focusActive && tskOf(titleB).focusActive,
+    'starting Focus elsewhere stops the previous session — exactly ONE timer app-wide');
+  $$('#taskList .task').find((x) => x.querySelector('.task-title').textContent.trim() === titleB).querySelector('[data-act="delete"]').click(); await sleep(360);
+  ok($('#focusBar').hidden, 'trashing the focused task abandons the session — the bar disappears');
+  const trashedT = remMirror().tasks.find((x) => x.title === titleB);
+  ok(trashedT === undefined || !trashedT.focusActive, 'the trashed copy carries no live session (abandoned, partial time logged or not)');
+
+  domE.window.close(); domF.window.close();
+  ok(true, 'focus-mode section completed without uncaught errors');
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
