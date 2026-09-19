@@ -68,13 +68,14 @@ if the server is unreachable, every original guarantee still holds.
   reminders, trash & restore, calendar, notifications, import/export, backup
   and sync keep working with no special cases.
 - **Productivity dashboard** (📊 in the toolbar): greeting + date, tiles for
-  done-today / left-today / overdue / current streak, a *Today* board grouped
+  completed-today / remaining-today / overdue / current streak, a *Today* board grouped
   into **overdue → high priority → scheduled → unscheduled**, an ASCII
-  progress bar (*“Today's Progress ██████░░ 75% · 6 / 8 completed”*), the six
+  progress bar under a literal **Today’s Progress** heading (*██████░░ 75%* +
+  *6 / 8 completed*), the six
   headline statistics (completed today/this week, created this week, overdue,
   completion rate, streak), a Mon–Sun completions chart, project progress
   rows, upcoming tasks and the next reminder with its lead time (*“Study
-  Python — in 42 min”*). It is **not a data source** — every number is
+  Python — in 42 minutes”*). It is **not a data source** — every number is
   derived at render time from the same task/project/reminder records;
   checking a task off on the dashboard calls the very same `toggleTask` the
   list row uses, and opening/closing the view writes zero bytes.
@@ -195,7 +196,7 @@ Definitions the dashboard commits to (all pinned by **§19 of
 - **Upcoming** = the 5 nearest open tasks dated after today; **Next
   reminder** = the earliest *pending* reminder on a live task (fired,
   disabled and orphaned records filtered out), aged by a 60 s ticker while
-  open so “in 42 min” doesn't lie.
+  open so “in 42 minutes” doesn't lie.
 - Bucket rule for *Today*: each open task lands in exactly one group —
   overdue first, then high-priority (due today **or** dateless), then the
   rest of today, then the dateless backlog. Tasks due on later days are

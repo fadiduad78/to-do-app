@@ -2667,7 +2667,7 @@
     if (ms <= 0) return 'now';
     const min = Math.round(ms / 60000);
     if (min < 1) return 'in <1 min';
-    if (min < 90) return 'in ' + min + ' min';
+    if (min < 90) return 'in ' + min + (min === 1 ? ' minute' : ' minutes');
     const h = Math.floor(min / 60);
     if (h < 24) return 'in ' + h + ' h ' + (min % 60) + ' min';
     return 'in ' + Math.round(h / 24) + ' days';
@@ -2771,16 +2771,16 @@
         '<div class="dash-streak' + (m.streak > 0 ? ' hot' : '') + '" title="Consecutive days with at least one completion">' +
         (m.streak > 0 ? '🔥 ' + m.streak + '-day streak' : 'no streak yet — check something off today') + '</div></div>' +
         '<div class="dash-tiles">' +
-          tile(m.completedToday, 'done today') +
-          tile(m.dueTodayOpen.length, 'left today') +
+          tile(m.completedToday, 'completed today') +
+          tile(m.dueTodayOpen.length, 'remaining today') +
           tile(m.over.length, 'overdue', m.over.length ? 'warn' : '') +
-          tile(m.streak, 'day streak', m.streak ? 'hot' : '') +
+          tile(m.streak, 'current streak', m.streak ? 'hot' : '') +
         '</div>' +
       '</div>' +
       '<div class="dash-card dash-today"><h3>Today</h3>' +
         (hasToday ? todayCard : '<div class="dash-empty">Nothing on today\u2019s board. New task from the composer, or browse the unscheduled backlog below.</div>') +
       '</div>' +
-      '<div class="dash-card"><h3>Progress</h3>' + progCard + '</div>' +
+      '<div class="dash-card"><h3>Today\u2019s Progress</h3>' + progCard + '</div>' +
       '<div class="dash-card"><h3>Statistics</h3><div class="dash-stats">' + statsCard + '</div></div>' +
       '<div class="dash-card"><h3>This week — completions by day</h3>' + chartCard + '</div>' +
       '<div class="dash-card"><h3>Projects</h3>' + projCard + '</div>' +
