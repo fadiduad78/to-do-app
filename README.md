@@ -25,6 +25,11 @@ if the server is unreachable, every original guarantee still holds.
 - Subtasks (checklists) per task, projects with progress, and a **📅 Calendar**
   (Month / Week / Day) — all *views over the same task records*: rescheduling
   by drag-and-drop updates the task's own `dueDate`/`dueTime`, never a copy.
+- **Reminders** per task (any number): at time of task, 5/10/15/30 min, 1/2 h,
+  1/2 days before, or a custom date+time — persisted as records (not
+  `setTimeout`), so they catch up after a refresh or closed tab, never fire
+  twice, and skip work that's completed or trashed. Recurring tasks
+  (daily/weekly/monthly) re-arm their reminders on every cycle.
 - Filters: All / Active / Completed / Trash, plus **by tag**, plus full-text
   search over title + description.
 - Reordering: drag-and-drop (desktop) **and** ↑/↓ buttons (touch-friendly).

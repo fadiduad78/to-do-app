@@ -31,7 +31,7 @@ const ok = (cond, name) => {
 
 /* ------------------------------ constants ------------------------------ */
 
-ok(ZT.constants.SCHEMA_VERSION === 4, 'SCHEMA_VERSION bumped to 4 (v2 projects, v3 subtasks, v4 calendar times)');
+ok(ZT.constants.SCHEMA_VERSION === 5, 'SCHEMA_VERSION bumped to 5 (v2 projects, v3 subtasks, v4 times, v5 reminders+recurrence)');
 ok(ZT.constants.STORES.projects === 'projects', 'STORES exposes the projects store');
 
 /* ------------------------------- migration ------------------------------ */
@@ -47,7 +47,7 @@ const v1 = {
   settings: { theme: 'dark' },
 };
 const v2 = ZT.helpers.migratePayload(v1);
-ok(v2.schemaVersion === 4, 'v1 payload migrates all the way to schemaVersion 4');
+ok(v2.schemaVersion === 5, 'v1 payload migrates all the way to schemaVersion 5');
 ok(Array.isArray(v2.projects) && v2.projects.length === 0, 'migration adds an empty projects list');
 ok(v2.tasks.find((t) => t.id === 't1').projectId === 'ghost', 'existing projectId survives migration');
 ok(v2.tasks.find((t) => t.id === 't2').projectId === null, 'field-free task gets projectId: null');
@@ -55,11 +55,11 @@ ok(v2.tasks.find((t) => t.id === 't1').title === 'Old', 'task data untouched by 
 ok(v2.settings.theme === 'dark', 'settings survive migration');
 // v0 payloads (the very old backups) run migrations 0 then 1 → must land at 2
 const fromZero = ZT.helpers.migratePayload({ schemaVersion: 0, tasks: [{ id: 'z', title: 'Z', status: 'active', createdAt: 1, updatedAt: 1 }] });
-ok(fromZero.schemaVersion === 4 && fromZero.tasks[0].projectId === null, 'v0 payload upgrades all the way to v4');
+ok(fromZero.schemaVersion === 5 && fromZero.tasks[0].projectId === null, 'v0 payload upgrades all the way to v5');
 // idempotent: running migration over an already-v2 payload via cleanPath is a no-op
 ok(v2.projects === v2.projects && v2.tasks.length === 2, 'migration keeps payload shape');
 const v3 = ZT.helpers.migratePayload({ schemaVersion: 2, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1 }], subtasks: [{ id: 's1', parentTaskId: 't1', title: 'kept', completed: false, position: 0, createdAt: 1, updatedAt: 1 }] });
-ok(v3.schemaVersion === 4 && v3.subtasks.length === 1 && v3.subtasks[0].title === 'kept', 'v2 payload with subtasks passes the chain untouched');
+ok(v3.schemaVersion === 5 && v3.subtasks.length === 1 && v3.subtasks[0].title === 'kept', 'v2 payload with subtasks passes the chain untouched');
 ok(ZT.helpers.migratePayload({ schemaVersion: 2, tasks: [] }).subtasks.length === 0, 'v2 payload without subtasks defaults the array');
 
 /* ------------------------------ coerceProject --------------------------- */
@@ -121,7 +121,7 @@ ok(ZT.helpers.backupNewer({ savedAt: 9000, tasks: [], trash: [], projects: [] },
 /* --------------------------- dueTime (v4) -------------------------------- */
 
 const m4 = ZT.helpers.migratePayload({ schemaVersion: 3, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1, dueTime: '08:30' }], subtasks: [] });
-ok(m4.schemaVersion === 4 && m4.tasks[0].dueTime === '08:30', 'v3 payload keeps a valid dueTime through migration');
+ok(m4.schemaVersion === 5 && m4.tasks[0].dueTime === '08:30', 'v3 payload keeps a valid dueTime through migration');
 const m4b = ZT.helpers.migratePayload({ schemaVersion: 3, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1 }] });
 ok(m4b.tasks[0].dueTime === null, 'v3 payload without dueTime gets an explicit null (calendar = view, not a copy)');
 const m4c = ZT.helpers.migratePayload({ schemaVersion: 3, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1, dueTime: '25:99' }] });
@@ -136,7 +136,57 @@ const vt = ZT.helpers.validatePayload({
 ok(vt.tasks[0].dueTime === '23:15' && vt.tasks[0].dueDate === '2026-09-19', 'dueTime+dueDate parse together');
 ok(vt.tasks.length === 2 && vt.tasks[1].dueTime === null, 'non-string dueTime → null; task still imported');
 
-/* ------------------------------ coerceSubtask ----------------------------- */
+/* --------------------- reminders + recurrence (v5) ----------------------- */
+
+const m5 = ZT.helpers.migratePayload({ schemaVersion: 4, tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1 }] });
+ok(m5.schemaVersion === 5 && Array.isArray(m5.reminders) && m5.reminders.length === 0, 'v4 payload gains an empty reminders array');
+ok(m5.tasks[0].recurrence === null && m5.trash !== undefined, 'v4→v5 defaults task.recurrence to null');
+const m5b = ZT.helpers.migratePayload({
+  schemaVersion: 4,
+  tasks: [{ id: 't1', title: 'A', status: 'active', createdAt: 1, updatedAt: 1, recurrence: 'daily' }],
+  reminders: [{ id: 'r1', taskId: 't1', triggerAt: 123, reminderType: 'h1' }],
+});
+ok(m5b.reminders.length === 1 && m5b.tasks[0].recurrence === 'daily', 'v4 payload WITH reminders/recurrence passes through untouched');
+
+const cr = (raw) => { const out = []; return { ok: ZT.helpers.coerceReminder(raw, out), out: out[0] }; }
+let r1 = cr({ id: 'r1', taskId: 't1', triggerAt: '1700000000000', reminderType: 'weird', status: 'nope', createdAt: 5, updatedAt: 9 });
+ok(r1.ok && r1.out.triggerAt === 1700000000000 && r1.out.reminderType === 'custom' && r1.out.status === 'pending',
+  'coerceReminder: string triggerAt → number, unknown type → custom (fires at its instant), unknown status → pending');
+r1 = cr({ id: 'r2', taskId: 't1', triggerAt: 5, reminderType: 'd1', delivered: true });
+ok(r1.out.status === 'triggered', 'delivered:true without a status derives triggered (spec fields stay consistent)');
+r1 = cr({ id: 'r3', taskId: 't1', triggerAt: 5, reminderType: 'h1', status: 'dismissed' });
+ok(r1.out.dismissed === true, 'status dismissed implies dismissed flag');
+ok(!cr({ taskId: 't1', triggerAt: 5 }).ok && !cr({ id: 'x', triggerAt: 5 }).ok && !cr({ id: 'x', taskId: 't' }).ok,
+  'reminders without id / taskId / triggerAt are refused (never a half-schedule)');
+ok(!cr({ id: 'x', taskId: 't', triggerAt: 'soon' }).ok, 'non-numeric triggerAt refused');
+r1 = cr({ id: 'x', taskId: 't', triggerAt: 5, reminderType: 'custom', customDate: '2026-13-99', customTime: '25:00' });
+ok(r1.ok && r1.out.customDate === null && r1.out.customTime === null, 'invalid custom date/time strings normalize to null (triggerAt still rules)');
+
+const cp5 = ZT.helpers.cleanPayload({
+  tasks: [{ id: 'keep', title: 'K', status: 'active', createdAt: 1, updatedAt: 1 }],
+  trash: [{ id: 'dead', title: 'D', status: 'active', createdAt: 1, updatedAt: 1, trashedAt: 2 }],
+  reminders: [
+    { id: 'a', taskId: 'keep', triggerAt: 9, reminderType: 'm5' },
+    { id: 'a', taskId: 'keep', triggerAt: 9, reminderType: 'm5' },
+    { id: 'b', taskId: 'dead', triggerAt: 8, reminderType: 'h1' },
+    { id: 'c', taskId: 'ghost', triggerAt: 7, reminderType: 'h1' },
+  ],
+});
+ok(cp5.reminders.length === 2 && cp5.dropped === 2, 'cleanPayload: reminder dedupe by id + orphan drop (trash-owned KEEPS its schedule for restore)');
+
+const v58 = ZT.helpers.validatePayload({
+  app: 'zerotodo', schemaVersion: 5,
+  tasks: [{ id: 't', title: 'A', status: 'active', createdAt: 1, updatedAt: 1, recurrence: 'weekly' }],
+  reminders: [{ id: 'r', taskId: 't', triggerAt: 10, reminderType: 'custom', customDate: '2026-12-01', customTime: '08:30' }],
+});
+ok(v58.tasks[0].recurrence === 'weekly' && v58.reminders[0].customDate === '2026-12-01', 'import: recurrence + custom reminder fields parse');
+const v5bad = ZT.helpers.validatePayload({
+  app: 'zerotodo', schemaVersion: 5,
+  tasks: [{ id: 't', title: 'A', status: 'active', createdAt: 1, updatedAt: 1, recurrence: 'fortnightly' }],
+});
+ok(v5bad.tasks[0].recurrence === null, 'bogus recurrence degrades to null (never breaks the task)');
+
+/* coerceSubtask */
 
 const sinkS = [];
 ok(ZT.helpers.coerceSubtask({ id: 's1', parentTaskId: 't1', title: ' Design db ', completed: true, customDeep: 7 }, sinkS) === true,
@@ -193,7 +243,7 @@ ok(await A.commit([
 ]), 'commit with project ops succeeds');
 
 const backup = JSON.parse(A.exportData());
-ok(backup.schemaVersion === 4, 'export carries schemaVersion 4');
+ok(backup.schemaVersion === 5, 'export carries schemaVersion 5');
 ok(backup.projects.length === 1 && backup.projects[0].name === 'Launch', 'export includes projects');
 const subA = { id: 'sA', parentTaskId: 'tA', title: 'Design database', completed: false, completedAt: null, position: 0, createdAt: now, updatedAt: now };
 A.state.subtasks.push(subA);

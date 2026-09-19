@@ -171,7 +171,7 @@ function bucketFor(username) {
   if (!b) {
     b = {
       username,
-      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], projects: [], subtasks: [], tombstones: {} },
+      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], projects: [], subtasks: [], reminders: [], tombstones: {} },
       saveTimer: null, loaded: false, ready: null,
       sse: new Set(),
       sbDirty: false, sbRunning: false, sbDelay: 4000, sbLastOk: 0, sbLastError: '',
@@ -239,6 +239,7 @@ function coerceTask(raw, isTrash) {
   t.description = typeof raw.description === 'string' ? raw.description : '';
   t.dueDate = typeof raw.dueDate === 'string' && raw.dueDate ? raw.dueDate : null;
   t.dueTime = typeof raw.dueTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.dueTime) ? raw.dueTime : null;
+  t.recurrence = raw.recurrence === 'daily' || raw.recurrence === 'weekly' || raw.recurrence === 'monthly' ? raw.recurrence : null;
   t.priority = raw.priority === 'low' || raw.priority === 'high' ? raw.priority : 'med';
   t.status = raw.status === 'completed' ? 'completed' : 'active';
   t.tags = Array.isArray(raw.tags)
@@ -249,6 +250,29 @@ function coerceTask(raw, isTrash) {
   t.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : now;
   if (isTrash) t.trashedAt = Number(raw.trashedAt) || now;
   return t;
+}
+
+/** Reminder records (schema v5). Lenient like the client: keep unknowns,
+ * drop only what can't fire (no id / no taskId / no finite triggerAt). */
+const REMINDER_TYPES = ['onTime', 'm5', 'm10', 'm15', 'm30', 'h1', 'h2', 'd1', 'd2', 'custom'];
+const REMINDER_STATUSES = ['pending', 'triggered', 'dismissed', 'skipped', 'failed'];
+function coerceReminder(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (typeof raw.id !== 'string' || !raw.id) return null;
+  if (typeof raw.taskId !== 'string' || !raw.taskId) return null;
+  const trig = Number(raw.triggerAt);
+  if (!Number.isFinite(trig)) return null;
+  const now = Date.now();
+  const r = { ...raw };
+  r.triggerAt = trig;
+  r.reminderType = REMINDER_TYPES.indexOf(raw.reminderType) >= 0 ? raw.reminderType : 'custom';
+  r.status = REMINDER_STATUSES.indexOf(raw.status) >= 0 ? raw.status : (raw.delivered ? 'triggered' : (raw.dismissed ? 'dismissed' : 'pending'));
+  r.enabled = raw.enabled !== false;
+  r.delivered = !!r.delivered || r.status === 'triggered' || r.status === 'failed';
+  r.dismissed = !!r.dismissed || r.status === 'dismissed';
+  r.createdAt = Number(raw.createdAt) || now;
+  r.updatedAt = Number(raw.updatedAt) || r.createdAt;
+  return r;
 }
 
 function normalizeState(raw) {
@@ -284,6 +308,14 @@ function normalizeState(raw) {
       if (s && !seenS.has(s.id)) { seenS.add(s.id); subtasks.push(s); }
     }
   }
+  const reminders = [];
+  {
+    const seenR = new Set();
+    for (const r of (Array.isArray(raw.reminders) ? raw.reminders : [])) {
+      const rm = coerceReminder(r);
+      if (rm && !seenR.has(rm.id)) { seenR.add(rm.id); reminders.push(rm); }
+    }
+  }
   return {
     rev: Number.isFinite(Number(raw.rev)) ? Number(raw.rev) : 0,
     savedAt: Number(raw.savedAt) || 0,
@@ -292,6 +324,7 @@ function normalizeState(raw) {
     trash: pick(raw.trash, true),
     projects,
     subtasks,
+    reminders,
     tombstones,
   };
 }
@@ -354,6 +387,16 @@ function pruneExpired(b) {
     } else keepProj.push(p);
   }
   if (projChanged) { b.state.projects = keepProj; changed = true; }
+  // Fired/dismissed/skipped reminder HISTORY ages out after 30 days (no
+  // tombstones — they were never deletions). PENDING ones are the schedule
+  // itself and never age: they may legitimately point far into the future.
+  let remChanged = false;
+  const keepRem = [];
+  for (const r of b.state.reminders) {
+    if (r.status !== 'pending' && now - (r.updatedAt || 0) > TRASH_RETENTION_MS) remChanged = true;
+    else keepRem.push(r);
+  }
+  if (remChanged) { b.state.reminders = keepRem; changed = true; }
   for (const [id, at] of Object.entries(b.state.tombstones)) {
     if (now - at > TOMBSTONE_TTL_MS) { delete b.state.tombstones[id]; changed = true; }
   }
@@ -377,13 +420,14 @@ function mergeRecords(localArr, remoteArr) {
  * restore) only removes copies in the store it left. A tombstone kills records
  * not newer than it — a later edit/restore legitimately revives a record.
  */
-function applyTombstones(tasks, trash, projects, subtasks, tombstones) {
+function applyTombstones(tasks, trash, projects, subtasks, reminders, tombstones) {
   const kill = (arr, scope) => arr.filter((r) => !(tombstones[scope + ':' + r.id] >= (r.updatedAt || 0)));
   return {
     tasks: kill(tasks, 'tasks'),
     trash: kill(trash, 'trash'),
     projects: kill(projects || [], 'projects'),
     subtasks: kill(subtasks || [], 'subtasks'),
+    reminders: kill(reminders || [], 'reminders'),
   };
 }
 
@@ -403,6 +447,7 @@ function ingest(b, body) {
     trash: (body.state && body.state.trash) || [],
     projects: (body.state && body.state.projects) || [],
     subtasks: (body.state && body.state.subtasks) || [],
+    reminders: (body.state && body.state.reminders) || [],
     tombstones: body.tombstones || {},
   });
 
@@ -417,12 +462,14 @@ function ingest(b, body) {
     for (const t of incoming.trash) delete newTombstones['trash:' + t.id];
     for (const p of incoming.projects) delete newTombstones['projects:' + p.id];
     for (const s of incoming.subtasks) delete newTombstones['subtasks:' + s.id];
+    for (const r of incoming.reminders) delete newTombstones['reminders:' + r.id];
     merged = {
       settings: incoming.settings,
       tasks: incoming.tasks,
       trash: enforceLiveWins(incoming.tasks, incoming.trash),
       projects: incoming.projects,
       subtasks: incoming.subtasks,
+      reminders: incoming.reminders,
       savedAt: Math.max(b.state.savedAt, incoming.savedAt || Date.now()),
     };
   } else {
@@ -430,13 +477,15 @@ function ingest(b, body) {
     const trash = mergeRecords(b.state.trash, incoming.trash);
     const projects = mergeRecords(b.state.projects, incoming.projects);
     const subtasks = mergeRecords(b.state.subtasks, incoming.subtasks);
-    const alive = applyTombstones(tasks, trash, projects, subtasks, newTombstones);
+    const reminders = mergeRecords(b.state.reminders, incoming.reminders);
+    const alive = applyTombstones(tasks, trash, projects, subtasks, reminders, newTombstones);
     merged = {
       settings: (incoming.savedAt || 0) >= b.state.savedAt ? incoming.settings : b.state.settings,
       tasks: alive.tasks,
       trash: enforceLiveWins(alive.tasks, alive.trash),
       projects: alive.projects,
       subtasks: alive.subtasks,
+      reminders: alive.reminders,
       savedAt: Math.max(b.state.savedAt, incoming.savedAt || 0) || Date.now(),
     };
     for (const t of merged.tasks) {
@@ -455,10 +504,14 @@ function ingest(b, body) {
       const k = 'subtasks:' + s.id;
       if (newTombstones[k] && (s.updatedAt || 0) > newTombstones[k]) delete newTombstones[k];
     }
+    for (const r of merged.reminders) {
+      const k = 'reminders:' + r.id;
+      if (newTombstones[k] && (r.updatedAt || 0) > newTombstones[k]) delete newTombstones[k];
+    }
   }
 
-  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.projects, b.state.subtasks, b.state.settings]);
-  const after = JSON.stringify([merged.tasks, merged.trash, merged.projects, merged.subtasks, merged.settings]);
+  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.projects, b.state.subtasks, b.state.reminders, b.state.settings]);
+  const after = JSON.stringify([merged.tasks, merged.trash, merged.projects, merged.subtasks, merged.reminders, merged.settings]);
   const changed = before !== after;
 
   b.state = { ...b.state, ...merged, tombstones: newTombstones, rev: b.state.rev + 1 };
@@ -732,7 +785,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/config') {
       return sendJSON(res, 200, {
-        app: 'zerotodo-server', version: 6, authRequired: authRequired(),
+        app: 'zerotodo-server', version: 7, authRequired: authRequired(),
         storage: sbEnabled() ? 'supabase (Postgres) + local cache' : 'local file only',
       });
     }

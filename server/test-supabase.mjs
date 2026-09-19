@@ -156,6 +156,19 @@ try {
   const bob = (await sr.json()).token;
   let bState = await getState(bob);
   ok(bState.tasks.length === 0, 'bob (second account) starts EMPTY — no adoption');
+  // v5: reminders are records inside the same state doc — no second store.
+  aState = await getState(alice);
+  const srem = { id: 'sr1', taskId: aState.tasks[0].id, triggerAt: Date.now() + 3600e3, reminderType: 'onTime', status: 'pending', enabled: true, delivered: false, dismissed: false, createdAt: Date.now(), updatedAt: Date.now() };
+  const rpush = await (await fetch(BASE + '/api/sync', { method: 'POST', headers: bearer(alice), body: JSON.stringify({ clientId: 'test', baseRev: aState.rev, mode: 'merge', state: { savedAt: Date.now(), settings: {}, tasks: [], trash: [], reminders: [srem] }, tombstones: {} }) })).json();
+  ok(rpush.reminders && rpush.reminders.length === 1, 'reminder synced into alice\'s state doc (no new table)');
+  ok(await poll(() => db.byuser.alice && (db.byuser.alice.reminders || []).some((x) => x.id === 'sr1'), 45000), 'reminder persisted to the Postgres row');
+  await stopApp(app.child);
+  rmSync(path.join(dir, 'state.json'), { force: true });
+  app = await startApp(dir); await app.ready;
+  const afterR = await getState(alice);
+  ok(afterR.reminders.length === 1 && afterR.reminders[0].id === 'sr1' && afterR.tasks.length === aState.tasks.length,
+    'restart with empty disk: reminders restored from Postgres still attached to their task');
+
   r = await push(alice, 'alice secret', 'a1', (await getState(alice)).rev);
   ok(r.status === 200, 'alice push ok');
   ok((await getState(bob)).tasks.length === 0, 'bob still sees nothing of alice\'s data');

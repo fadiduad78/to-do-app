@@ -45,11 +45,12 @@
   /* ----------------------------- Constants ------------------------------ */
 
   const DB_NAME = 'zerotodo';
-  const DB_VERSION = 3; // v2 added 'projects', v3 adds 'subtasks' (idempotent upgrades below)
+  const DB_VERSION = 4; // v2 projects, v3 subtasks, v4 reminders (idempotent upgrades below)
   const STORE_TASKS = 'tasks';
   const STORE_TRASH = 'trash';
   const STORE_PROJECTS = 'projects';
   const STORE_SUBTASKS = 'subtasks';
+  const STORE_REMINDERS = 'reminders';
   const STORE_META = 'meta';
 
   // Versioned localStorage keys: a future format can ship a *_v2 key without
@@ -60,7 +61,7 @@
 
   // The data-shape version written by this app. When you change the task or
   // settings shape, bump this and add a MIGRATIONS[oldVersion] step below.
-  const SCHEMA_VERSION = 4;
+  const SCHEMA_VERSION = 5;
 
   // Trash retention: items are auto-purged 30 days after being trashed.
   const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -137,8 +138,22 @@
         )),
       };
     },
-    // Future: 4(payload) { return { ...payload, /* transform */ }; }
-    // …and bump SCHEMA_VERSION to 5.
+    // v4 → v5: the Reminder engine + recurring tasks. Additive: the
+    // reminders array defaults to empty (no old task ever had one), tasks get
+    // an explicit recurrence (null = not recurring). triggerAt — the ONLY
+    // scheduling field — is absolute epoch ms, computed from the task's
+    // local dueDate/dueTime, so a timezone change can never shift a date:
+    // the strings stay the truth, epochs are derived.
+    4(payload) {
+      return {
+        ...payload,
+        reminders: Array.isArray(payload.reminders) ? payload.reminders : [],
+        tasks: (payload.tasks || []).map((t) => ('recurrence' in t ? t : { ...t, recurrence: null })),
+        trash: (payload.trash || []).map((t) => ('recurrence' in t ? t : { ...t, recurrence: null })),
+      };
+    },
+    // Future: 5(payload) { return { ...payload, /* transform */ }; }
+    // …and bump SCHEMA_VERSION to 6.
   };
 
   /**
@@ -200,6 +215,7 @@
         if (!db.objectStoreNames.contains(STORE_META)) db.createObjectStore(STORE_META, { keyPath: 'key' });
         if (!db.objectStoreNames.contains(STORE_PROJECTS)) db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(STORE_SUBTASKS)) db.createObjectStore(STORE_SUBTASKS, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains(STORE_REMINDERS)) db.createObjectStore(STORE_REMINDERS, { keyPath: 'id' });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB.'));
@@ -264,6 +280,10 @@
     // task remains the ONE source of truth for its dates — the calendar view
     // reads/writes exactly these two fields.
     t.dueTime = typeof raw.dueTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.dueTime) ? raw.dueTime : null;
+    // Recurring tasks: the calendar/reminder engines derive everything else
+    // from these + status. Advancing a cycle rewrites dueDate/dueTime.
+    t.recurrence = raw.recurrence === 'daily' || raw.recurrence === 'weekly' || raw.recurrence === 'monthly'
+      ? raw.recurrence : null;
     if (isTrash) t.trashedAt = Number(raw.trashedAt) || now;
     into.push(t);
     return true;
@@ -326,6 +346,51 @@
     return true;
   }
 
+  /* Reminder record (schema v5). NEVER depends on a live JS timer: the
+     record IS the schedule — the engine re-arms from it on every boot.
+     Fields per spec: id, taskId, triggerAt, reminderType, enabled,
+     delivered, dismissed, createdAt, updatedAt (+ status/custom/* extras). */
+  const REMINDER_TYPES = ['onTime', 'm5', 'm10', 'm15', 'm30', 'h1', 'h2', 'd1', 'd2', 'custom'];
+  const REMINDER_STATUSES = ['pending', 'triggered', 'dismissed', 'skipped', 'failed'];
+
+  function coerceReminder(raw, into) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    if (typeof raw.id !== 'string' || !raw.id) return false;
+    if (typeof raw.taskId !== 'string' || !raw.taskId) return false;
+    const trig = Number(raw.triggerAt);
+    if (!Number.isFinite(trig)) return false; // no fire time = not a reminder
+    const now = Date.now();
+    const r = { ...raw }; // lenient: preserve unknown fields, like the others
+    r.taskId = raw.taskId;
+    // An unknown type degrades to 'custom' (fires at its stored instant) —
+    // never dropped, so an import from a newer build still notifies.
+    r.reminderType = REMINDER_TYPES.indexOf(raw.reminderType) >= 0 ? raw.reminderType : 'custom';
+    r.triggerAt = trig;
+    r.enabled = raw.enabled !== false;
+    r.delivered = !!raw.delivered;
+    r.dismissed = !!raw.dismissed;
+    r.status = REMINDER_STATUSES.indexOf(raw.status) >= 0 ? raw.status
+      : (r.delivered ? 'triggered' : (r.dismissed ? 'dismissed' : 'pending'));
+    // The booleans the spec names and the status enum must never disagree.
+    if (r.status === 'dismissed') r.dismissed = true;
+    if (r.status === 'skipped') r.dismissed = false;
+    if (r.status === 'triggered' || r.status === 'failed') r.delivered = true;
+    // Real-calendar validation (a Date round-trip), not just shape: 2026-13-99
+    // or 2026-02-30 must not silently roll into another month.
+    let cd = null;
+    if (typeof raw.customDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.customDate)) {
+      const parts = raw.customDate.split('-').map(Number);
+      const probe = new Date(parts[0], parts[1] - 1, parts[2]);
+      if (probe.getFullYear() === parts[0] && probe.getMonth() === parts[1] - 1 && probe.getDate() === parts[2]) cd = raw.customDate;
+    }
+    r.customDate = cd;
+    r.customTime = typeof raw.customTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.customTime) ? raw.customTime : null;
+    r.createdAt = Number(raw.createdAt) || now;
+    r.updatedAt = Number(raw.updatedAt) || r.createdAt;
+    into.push(r);
+    return true;
+  }
+
   /**
    * Lenient validation of a full payload (used for the localStorage backup,
    * import files, and recovery). Returns { ok, schemaVersion, savedAt,
@@ -344,12 +409,14 @@
       trash: [],
       projects: [],
       subtasks: [],
+      reminders: [],
       settings: null,
     };
     for (const raw of data.tasks) coerceTask(raw, out.tasks);
     if (Array.isArray(data.trash)) for (const raw of data.trash) coerceTask(raw, out.trash, true);
     if (Array.isArray(data.projects)) for (const raw of data.projects) coerceProject(raw, out.projects);
     if (Array.isArray(data.subtasks)) for (const raw of data.subtasks) coerceSubtask(raw, out.subtasks);
+    if (Array.isArray(data.reminders)) for (const raw of data.reminders) coerceReminder(raw, out.reminders);
     if (data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) out.settings = data.settings;
     return out;
   }
@@ -389,11 +456,22 @@
       if (coerceTask(raw, trash, true)) seenTrash.add(raw.id);
       else dropped++;
     }
+    // Reminders attach to a task — a live OR trashed one (restore must still
+    // find its schedule). Anything pointing at nothing is stale → dropped.
+    const ownerIds = new Set([...tasks, ...trash].map((t) => t.id));
+    const seenRem = new Set();
+    const reminders = [];
+    for (const raw of (payload && Array.isArray(payload.reminders) ? payload.reminders : [])) {
+      if (seenRem.has(raw && raw.id) || !ownerIds.has(raw && raw.taskId)) { dropped++; continue; }
+      if (coerceReminder(raw, reminders)) seenRem.add(raw.id);
+      else dropped++;
+    }
     return {
       tasks,
       trash,
       projects,
       subtasks,
+      reminders,
       settings: (payload && payload.settings && typeof payload.settings === 'object') ? payload.settings : {},
       dropped,
     };
@@ -425,6 +503,11 @@
       const other = idbSub.get(s.id);
       if (!other || (s.updatedAt || 0) > (other.updatedAt || 0)) return true;
     }
+    const idbRem = new Map((idb.reminders || []).map((r) => [r.id, r]));
+    for (const r of backup.reminders || []) {
+      const other = idbRem.get(r.id);
+      if (!other || (r.updatedAt || 0) > (other.updatedAt || 0)) return true;
+    }
     return false;
   }
 
@@ -450,7 +533,7 @@
     let idbAvailable = null;   // null = unknown, true/false after first attempt
     // The authoritative in-memory state. The UI mutates it directly (via
     // store.state); commit() persists it. A failed write never touches it.
-    const memory = { tasks: [], trash: [], projects: [], subtasks: [], settings: { ...DEFAULT_SETTINGS } };
+    const memory = { tasks: [], trash: [], projects: [], subtasks: [], reminders: [], settings: { ...DEFAULT_SETTINGS } };
     let lastSavedAt = 0;
     let dirty = false;         // true while memory is ahead of disk (write failed)
     let resyncing = false;
@@ -478,14 +561,15 @@
 
     async function loadFromIDB() {
       const d = await ensureDB();
-      const data = await readTx(d, [STORE_TASKS, STORE_TRASH, STORE_PROJECTS, STORE_SUBTASKS, STORE_META], (tx) => {
+      const data = await readTx(d, [STORE_TASKS, STORE_TRASH, STORE_PROJECTS, STORE_SUBTASKS, STORE_REMINDERS, STORE_META], (tx) => {
         const t = reqToPromise(tx.objectStore(STORE_TASKS).getAll());
         const tr = reqToPromise(tx.objectStore(STORE_TRASH).getAll());
         const pj = reqToPromise(tx.objectStore(STORE_PROJECTS).getAll());
         const sb = reqToPromise(tx.objectStore(STORE_SUBTASKS).getAll());
+        const rm = reqToPromise(tx.objectStore(STORE_REMINDERS).getAll());
         const m = reqToPromise(tx.objectStore(STORE_META).get('meta'));
-        return Promise.all([t, tr, pj, sb, m]).then(([tasks, trash, projects, subtasks, meta]) => ({
-          tasks, trash, projects, subtasks, meta: meta ? meta.value : null,
+        return Promise.all([t, tr, pj, sb, rm, m]).then(([tasks, trash, projects, subtasks, reminders, meta]) => ({
+          tasks, trash, projects, subtasks, reminders, meta: meta ? meta.value : null,
         }));
       });
       return data;
@@ -515,6 +599,7 @@
         trash: memory.trash,
         projects: memory.projects,
         subtasks: memory.subtasks,
+        reminders: memory.reminders,
       });
     }
 
@@ -538,6 +623,7 @@
           trash: shape.trash,
           projects: shape.projects,
           subtasks: shape.subtasks,
+          reminders: shape.reminders || [],
           settings: shape.settings || {},
         },
         error: null,
@@ -580,7 +666,7 @@
      */
     function validateOp(op) {
       if (!op || typeof op !== 'object') throw new Error('invalid operation');
-      if (op.store !== STORE_TASKS && op.store !== STORE_TRASH && op.store !== STORE_PROJECTS && op.store !== STORE_SUBTASKS && op.store !== STORE_META) {
+      if (op.store !== STORE_TASKS && op.store !== STORE_TRASH && op.store !== STORE_PROJECTS && op.store !== STORE_SUBTASKS && op.store !== STORE_REMINDERS && op.store !== STORE_META) {
         throw new Error('unknown store: ' + op.store);
       }
       if (op.op === 'put') {
@@ -594,6 +680,9 @@
         } else if (op.store === STORE_SUBTASKS) {
           const sink = [];
           if (!coerceSubtask(v, sink)) throw new Error('subtask failed validation (needs string id + parentTaskId + title)');
+        } else if (op.store === STORE_REMINDERS) {
+          const sink = [];
+          if (!coerceReminder(v, sink)) throw new Error('reminder failed validation (needs string id + taskId + finite triggerAt)');
         } else {
           // Reuse the same coercion rules as recovery: no id/title → refuse.
           const sink = [];
@@ -690,6 +779,7 @@
         for (const t of memory.trash) ops.push({ store: STORE_TRASH, op: 'put', value: t });
         for (const p of memory.projects) ops.push({ store: STORE_PROJECTS, op: 'put', value: p });
         for (const s of memory.subtasks) ops.push({ store: STORE_SUBTASKS, op: 'put', value: s });
+        for (const r of memory.reminders) ops.push({ store: STORE_REMINDERS, op: 'put', value: r });
         if (idbAvailable !== false) {
           try {
             const disk = await loadFromIDB();
@@ -697,10 +787,13 @@
             const trashIds = new Set(memory.trash.map((t) => t.id));
             const projIds = new Set(memory.projects.map((p) => p.id));
             const subIds = new Set(memory.subtasks.map((s) => s.id));
+            // (reminders id-set lives just below, after the disk read)
             for (const t of disk.tasks) if (!taskIds.has(t.id)) ops.push({ store: STORE_TASKS, op: 'delete', key: t.id });
             for (const t of disk.trash) if (!trashIds.has(t.id)) ops.push({ store: STORE_TRASH, op: 'delete', key: t.id });
             for (const p of disk.projects || []) if (!projIds.has(p.id)) ops.push({ store: STORE_PROJECTS, op: 'delete', key: p.id });
             for (const s of disk.subtasks || []) if (!subIds.has(s.id)) ops.push({ store: STORE_SUBTASKS, op: 'delete', key: s.id });
+            const remIds = new Set(memory.reminders.map((r) => r.id));
+            for (const r of disk.reminders || []) if (!remIds.has(r.id)) ops.push({ store: STORE_REMINDERS, op: 'delete', key: r.id });
           } catch (_) { /* disk unreadable — re-putting everything is still best effort */ }
         }
         return await commit(ops, { isResync: true });
@@ -773,6 +866,7 @@
             trash: idbData.trash,
             projects: idbData.projects,
             subtasks: idbData.subtasks,
+            reminders: idbData.reminders,
             settings: (idbData.meta && idbData.meta.settings) || {},
             savedAt: (idbData.meta && idbData.meta.savedAt) || 0,
           };
@@ -791,6 +885,7 @@
             trash: backup.state.trash,
             projects: backup.state.projects || [],
             subtasks: backup.state.subtasks || [],
+            reminders: backup.state.reminders || [],
             settings: backup.state.settings || {},
             savedAt: backup.state.savedAt,
           };
@@ -802,8 +897,8 @@
       }
 
       // -- 3. choose the source of truth ------------------------------------
-      const idbHas = idbState && (idbState.tasks.length || idbState.trash.length || idbState.projects.length || idbState.subtasks.length);
-      const bakHas = backupState && (backupState.tasks.length || backupState.trash.length || (backupState.projects || []).length || (backupState.subtasks || []).length);
+      const idbHas = idbState && (idbState.tasks.length || idbState.trash.length || idbState.projects.length || idbState.subtasks.length || idbState.reminders.length);
+      const bakHas = backupState && (backupState.tasks.length || backupState.trash.length || (backupState.projects || []).length || (backupState.subtasks || []).length || (backupState.reminders || []).length);
 
       let payload = null;
       let source = 'fresh';
@@ -824,15 +919,26 @@
       }
 
       // -- 4. adopt into memory + prune expired trash -----------------------
-      const clean = payload || { tasks: [], trash: [], projects: [], subtasks: [], settings: {} };
+      const clean = payload || { tasks: [], trash: [], projects: [], subtasks: [], reminders: [], settings: {} };
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
       memory.projects = clean.projects;
       memory.subtasks = clean.subtasks || [];
+      memory.reminders = clean.reminders || [];
+      // Reminders that already fired (or were dismissed/skipped) lose their
+      // meaning after the 30-day window — prune them from history. PENDING
+      // ones are NEVER pruned here: the engine owes them a catch-up fire.
+      const remExpired = memory.reminders.filter((r) => r.status !== 'pending' && now2 - r.updatedAt > TRASH_RETENTION_MS);
+      if (remExpired.length) {
+        const goneR = new Set(remExpired.map((r) => r.id));
+        memory.reminders = memory.reminders.filter((r) => !goneR.has(r.id));
+        notices.push({ kind: 'info', message: 'Removed ' + remExpired.length + ' old reminder record(s) from history.' });
+      }
       memory.settings = { ...DEFAULT_SETTINGS, ...(clean.settings || {}) };
       lastSavedAt = clean.savedAt || Date.now();
 
       const now = Date.now();
+      const now2 = now;
       const expired = memory.trash.filter((t) => now - (t.trashedAt || 0) > TRASH_RETENTION_MS);
       if (expired.length) {
         memory.trash = memory.trash.filter((t) => (t.trashedAt || 0) > now - TRASH_RETENTION_MS);
@@ -845,6 +951,9 @@
         memory.projects = memory.projects.filter((p) => !gone.has(p.id));
         notices.push({ kind: 'info', message: 'Removed ' + expiredProj.length + ' project(s) that had been in the trash for more than 30 days.' });
       }
+
+      // -- 4b. reminder history pruning used the recovery clock --------------
+      // (now2 defined above where the prune runs)
 
       // -- 5. make disk agree with the recovered state ----------------------
       try {
@@ -880,12 +989,14 @@
         trash: fresh.trash,
         projects: fresh.projects,
         subtasks: fresh.subtasks,
+        reminders: fresh.reminders,
         settings: (fresh.meta && fresh.meta.settings) || {},
       });
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
       memory.projects = clean.projects;
       memory.subtasks = clean.subtasks;
+      memory.reminders = clean.reminders || [];
       memory.settings = { ...DEFAULT_SETTINGS, ...clean.settings };
       lastSavedAt = (fresh.meta && fresh.meta.savedAt) || Date.now();
       dirty = false; // disk is authoritative again
@@ -972,11 +1083,12 @@
       startSync,
       refreshFromOtherTab,
       /** Adopt an imported dataset (caller then calls resync()). */
-      replaceMemory(tasks, trash, projects, subtasks) {
+      replaceMemory(tasks, trash, projects, subtasks, reminders) {
         memory.tasks = tasks;
         memory.trash = trash;
         memory.projects = Array.isArray(projects) ? projects : [];
         memory.subtasks = Array.isArray(subtasks) ? subtasks : [];
+        memory.reminders = Array.isArray(reminders) ? reminders : [];
       },
       /** Serialize the current state as a downloadable backup file. */
       exportData: () => serializeBackup(Date.now()),
@@ -995,7 +1107,7 @@
       TRASH_RETENTION_MS,
       DEFAULT_SETTINGS,
       SCHEMA_VERSION,
-      STORES: { tasks: STORE_TASKS, trash: STORE_TRASH, projects: STORE_PROJECTS, subtasks: STORE_SUBTASKS, meta: STORE_META },
+      STORES: { tasks: STORE_TASKS, trash: STORE_TRASH, projects: STORE_PROJECTS, subtasks: STORE_SUBTASKS, reminders: STORE_REMINDERS, meta: STORE_META },
     },
     helpers: {
       uuid,
@@ -1006,6 +1118,9 @@
       backupNewer,
       coerceProject,
       coerceSubtask,
+      coerceReminder,
+      REMINDER_TYPES,
+      REMINDER_STATUSES,
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

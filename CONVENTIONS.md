@@ -50,7 +50,18 @@ supports one nesting level, subtree walks are visited-set cycle-safe).
    objects. Anything holding a task reference across a sync (tests, or code
    that captured a row) goes stale: **re-query the live state by id at
    mutation time**, never mutate a captured object (see test-client detach).
-6. **Tests** — extend all five suites (`server/test.mjs`,
+6. **Attached records** (subtasks via `parentTaskId`, reminders via `taskId`):
+   hard-delete cascades ride the SAME commit as the task purge; every load
+   path (recovery, cross-tab adopt, import, cloud adopt) drops attached
+   records whose owner exists in neither tasks nor trash — trashed owners KEEP
+   theirs so restore is complete. Times: the user's wall-clock strings
+   (`dueDate`/`dueTime`/`customDate`/`customTime`) are the truth; `triggerAt`
+   is a derived epoch ms re-computed from those on every reconcile — a
+   timezone change shifts instants consistently and never rewrites a date.
+   Scheduling lives in the RECORDS, never in a live timer: boot = load →
+   detect overdue → catch up ("Missed") → settle ledgered ones silently
+   (`zt_rem_fired_v1`) → re-arm; timers are only a prompt-fire optimization.
+7. **Tests** — extend all five suites (`server/test.mjs`,
    `test-storage.mjs`, `test-supabase.mjs`, `test-client.mjs`,
    `test-ui.mjs`).
    `test-storage.mjs` runs the real `storage.js` in Node (LS-only engine),

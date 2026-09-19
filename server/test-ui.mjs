@@ -91,7 +91,7 @@ ok($('#taskList .sub-row.is-done .sub-title').parentElement.classList.contains('
 
 /* 4. persistence: the LS mirror that survives a browser refresh */
 const mirror = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
-ok(mirror.schemaVersion === 4 && mirror.subtasks.length === 5, 'localStorage mirror carries 5 subtasks at schema v4');
+ok(mirror.schemaVersion === 5 && mirror.subtasks.length === 5, 'localStorage mirror carries 5 subtasks at schema v5');
 ok(mirror.subtasks.filter((s) => s.completed).length === 3, 'completed flags in the mirror');
 ok(mirror.subtasks.every((s) => s.completedAt !== null || !s.completed), 'completedAt set when done');
 
@@ -405,8 +405,205 @@ const dragTo = async (chipSel, targetSel) => {
 {
   const m = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
   const ids = m.tasks.map((x) => x.id);
-  ok(m.schemaVersion === 4 && new Set(ids).size === ids.length, 'mirror at schema v4, task ids unique after all calendar ops');
+  ok(m.schemaVersion === 5 && new Set(ids).size === ids.length, 'mirror at schema v5, task ids unique after all calendar ops');
   ok(m.tasks.find((x) => x.title === 'Cal Alpha').dueTime === '09:00' && m.tasks.find((x) => x.title === 'Cal Beta').dueDate === IN3, 'refresh source-of-truth: edits live on the tasks themselves (dueTime/dueDate), nowhere else');
+}
+
+/* ===================== 13. Reminder engine + recurrence ===================== */
+if ($('#calBtn').classList.contains('on')) { $('#calBtn').click(); await sleep(160); } // list must be showing
+const mrow = () => $$('#remRows .rem-row');
+const setRowType = async (i, v) => { const sel = mrow()[i].querySelector('select'); sel.value = v; sel.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(60); };
+const setCustom = async (i, d, tm) => {
+  const inputs = mrow()[i].querySelectorAll('input');
+  inputs[0].value = d; inputs[0].dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(40);
+  inputs[1].value = tm; inputs[1].dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(40);
+};
+const remMirror = () => JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+const remsFor = (title) => { const tk = remMirror().tasks.find((x) => x.title === title); return tk ? remMirror().reminders.filter((r) => r.taskId === tk.id) : []; };
+const locEpoch = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi, 0, 0).getTime();
+
+/* multiple reminders of different kinds on ONE new task */
+$('#newTaskBtn').click(); await sleep(80);
+$('#f-title').value = 'Renew visa'; $('#f-due').value = '2026-10-05';
+$('#addRemBtn').click(); await setRowType(0, 'd1');
+$('#addRemBtn').click(); await setRowType(1, 'h1');
+$('#addRemBtn').click(); await setRowType(2, 'custom'); await setCustom(2, '2026-12-01', '08:30');
+$('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(350);
+{
+  const rs = remsFor('Renew visa');
+  ok(rs.length === 3 && rs.every((r) => r.status === 'pending' && r.enabled && !r.delivered), 'three reminders saved: pending + enabled (spec list incl. custom)');
+  ok(rs.find((r) => r.reminderType === 'd1').triggerAt === locEpoch(2026, 10, 4, 9, 0) - 0, '1-day-before = dueDate 09:00 default − 24h (local zone)');
+  ok(rs.find((r) => r.reminderType === 'h1').triggerAt === locEpoch(2026, 10, 5, 9, 0) - 3600e3, '1-hour-before computed from task due instant');
+  ok(rs.find((r) => r.reminderType === 'custom').customDate === '2026-12-01' && rs.find((r) => r.reminderType === 'custom').triggerAt === locEpoch(2026, 12, 1, 8, 30), 'custom date/time stored as strings + derived epoch (tz-safe)');
+  const idsBefore = rs.map((r) => r.id).sort().join('|');
+  /* reopen editor: existing pending rows are editable, not duplicated */
+  const visRow = $$('#taskList .task').find((li) => li.textContent.includes('Renew visa'));
+  visRow.querySelector('[data-act="edit"]').click(); await sleep(120);
+  ok(mrow().length === 3, 'edit mode re-shows the 3 pending reminders as editable rows');
+  await setRowType(1, 'm10'); // 1h-before → 10min-before
+  mrow()[0].querySelector('.rem-rm').click(); await sleep(80); // remove the d1 row
+  $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await sleep(300);
+  const rs2 = remsFor('Renew visa');
+  ok(rs2.length === 2, 'editor removal deletes exactly one reminder (2 remain, no duplicates)');
+  ok(!rs2.some((r) => r.reminderType === 'd1'), 'removed reminder is gone from storage');
+  const kept = rs2.find((r) => idsBefore.includes(r.id));
+  ok(kept && kept.reminderType === 'm10' && kept.triggerAt === locEpoch(2026, 10, 5, 9, 0) - 10 * 60e3, 're-typed row keeps its id and re-derives triggerAt (edit-in-place)');
+  ok(!!doc.querySelector('#taskList .badge.rem'), 'task row shows the 🔔 badge for pending reminders');
+  ok(/2 pending reminder\(s\), next:/.test(doc.querySelector('#taskList .badge.rem').title), 'badge tooltip counts + previews next fire');
+}
+
+/* relative reminder without a due date → refused, not mis-scheduled */
+$('#newTaskBtn').click(); await sleep(80);
+$('#f-title').value = 'No date task';
+$('#addRemBtn').click(); await setRowType(0, 'm5');
+$('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(250);
+ok(remsFor('No date task').length === 0 && remMirror().tasks.some((x) => x.title === 'No date task'), 'relative reminder on an undated task: not saved (task still created, never silently fires at epoch)');
+
+/* completion + skip/revive on a plain task */
+await (async () => {
+  $('#newTaskBtn').click(); await sleep(80);
+  $('#f-title').value = 'One-off'; $('#f-due').value = '2026-09-25';
+  $('#addRemBtn').click(); await setRowType(0, 'd1');
+  $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await sleep(300);
+})();
+{
+  const row = $$('#taskList .task').find((li) => li.textContent.includes('One-off'));
+  row.querySelector('button.check').click(); await sleep(300);
+  ok(remsFor('One-off')[0].status === 'skipped', 'completing a task SKIPS its pending reminders (no nagging for finished work)');
+  const row2 = $$('#taskList .task').find((li) => li.textContent.includes('One-off'));
+  row2.querySelector('button.check').click(); await sleep(300);
+  ok(remsFor('One-off')[0].status === 'pending' && remsFor('One-off')[0].delivered === false, 'un-completing revives the future reminder back to pending');
+}
+
+/* overdue-at-save → fires as "Missed" exactly once (persisted dedup) */
+$('#newTaskBtn').click(); await sleep(80);
+$('#f-title').value = 'Pay tax'; $('#f-due').value = '2026-09-18';
+$('#addRemBtn').click(); await setRowType(0, 'onTime');
+$('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(450);
+{
+  const r = remsFor('Pay tax')[0];
+  ok(r.status === 'triggered' && r.delivered === true, 'overdue reminder caught up at save-time: triggered + delivered flag set');
+  ok(!!doc.querySelector('.toast-rem') && /Missed reminder — Pay tax/.test(doc.querySelector('.toast-rem').textContent), 'overdue fires as a "Missed reminder" in-app alert (safe overdue handling)');
+  const ledger = JSON.parse(window.localStorage.getItem('zt_rem_fired_v1') || '{}');
+  ok(!!ledger[r.id], 'localStorage fire-ledger records the id (cross-tab duplicate guard)');
+  const firedAt = r.firedAt;
+  const taxRow = $$('#taskList .task').find((li) => li.textContent.includes('Pay tax'));
+  taxRow.querySelector('[data-act="edit"]').click(); await sleep(120);
+  $('#f-desc').value = 'paid by transfer';
+  $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await sleep(350);
+  const r2 = remsFor('Pay tax')[0];
+  ok(r2.firedAt === firedAt && r2.status === 'triggered' && $$('.toast-rem').filter((e) => /Pay tax/.test(e.textContent)).length === 1,
+    'editing a task whose reminder already fired NEVER re-notifies (firedAt stable, single alert)');
+}
+
+/* dismiss button on the alert */
+$('#newTaskBtn').click(); await sleep(80);
+$('#f-title').value = 'Call mom'; $('#f-due').value = TODAY; $('#f-time').value = '00:00';
+$('#addRemBtn').click(); await setRowType(0, 'onTime');
+$('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(450);
+{
+  const dis = $$('.toast-rem [data-remdismiss]').pop();
+  ok(!!dis, 'a fired alert offers Dismiss');
+  dis.click(); await sleep(250);
+  const r = remMirror().reminders.find((x) => x.id === (remsFor('Call mom')[0] && remsFor('Call mom')[0].id)) || remsFor('Call mom')[0];
+  ok(r && r.status === 'dismissed' && r.dismissed === true, 'dismiss → status dismissed + dismissed flag stay consistent');
+}
+
+/* recurrence: daily completion rolls dueDate + re-arms the reminder */
+$('#newTaskBtn').click(); await sleep(80);
+$('#f-title').value = 'Chores'; $('#f-due').value = '2026-09-20';
+$('#f-recurrence').value = 'daily'; $('#f-recurrence').dispatchEvent(new window.Event('change', { bubbles: true }));
+$('#addRemBtn').click(); await setRowType(0, 'm5');
+$('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(320);
+{
+  const before = remsFor('Chores')[0];
+  ok(before.status === 'pending' && before.triggerAt === locEpoch(2026, 9, 20, 9, 0) - 5 * 60e3, 'daily task armed with a 5-min-before reminder');
+  let row = $$('#taskList .task').find((li) => li.textContent.includes('Chores'));
+  row.querySelector('button.check').click(); await sleep(350);
+  let tk = remMirror().tasks.find((x) => x.title === 'Chores');
+  ok(tk.status === 'active' && tk.dueDate === '2026-09-21', 'completing a DAILY task rolls it to tomorrow (same task, same id)');
+  let r = remsFor('Chores')[0];
+  ok(r.status === 'pending' && r.triggerAt === locEpoch(2026, 9, 21, 9, 0) - 5 * 60e3 && r.delivered === false, 'reminder re-armed against the new occurrence');
+  row = $$('#taskList .task').find((li) => li.textContent.includes('Chores'));
+  row.querySelector('button.check').click(); await sleep(350);
+  tk = remMirror().tasks.find((x) => x.title === 'Chores');
+  ok(tk.dueDate === '2026-09-22', 'second cycle → Sep 22 (cycle math on the stored date string)');
+  ok(remsFor('Chores')[0].id === r.id, 're-arm edits the SAME reminder record (no dupes per cycle)');
+}
+/* monthly clamp: Jan 31 → Feb 28 (never Mar 2) */
+$('#newTaskBtn').click(); await sleep(80);
+$('#f-title').value = 'Rent'; $('#f-due').value = '2026-01-31';
+$('#f-recurrence').value = 'monthly'; $('#f-recurrence').dispatchEvent(new window.Event('change', { bubbles: true }));
+$('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(300);
+{
+  let row = $$('#taskList .task').find((li) => li.textContent.includes('Rent'));
+  row.querySelector('button.check').click(); await sleep(350);
+  ok(remMirror().tasks.find((x) => x.title === 'Rent').dueDate === '2026-02-28', 'monthly Jan 31 → Feb 28 (real calendar clamp)');
+}
+
+/* footer count + draft carries the editor state */
+{
+  ok(/reminder\(s\) armed/.test($('#footerCounts').textContent), 'footer counts armed reminders');
+  $('#newTaskBtn').click(); await sleep(80);
+  $('#f-title').value = 'Draft kid'; $('#f-due').value = '2026-11-01';
+  $('#addRemBtn').click(); await setRowType(0, 'h2');
+  await sleep(1400);
+  const d = JSON.parse(window.localStorage.getItem('todo_draft_v1') || '{}');
+  ok(d.remRows && d.remRows.length === 1 && d.remRows[0].reminderType === 'h2', 'draft autosave carries reminder rows (survives crash before save)');
+  $('#cancelTaskBtn').click(); await sleep(80);
+}
+
+/* RESTART CATCH-UP: fresh boot from the mirror — detect overdue, skip unsafe,
+   re-arm future, no duplicate notifications (this is THE spec scenario). */
+{
+  const seed = {
+    app: 'zerotodo', type: 'backup', schemaVersion: 5, savedAt: Date.now() + 60000, settings: {},
+    tasks: [
+      { id: 'bt1', title: 'Overdue live', status: 'active', dueDate: '2026-09-18', dueTime: null, priority: 'med', tags: [], projectId: null, recurrence: null, createdAt: 1, updatedAt: 1, sortOrder: 0, description: '' },
+      { id: 'bt2', title: 'Done one', status: 'completed', dueDate: '2026-09-18', dueTime: null, priority: 'med', tags: [], projectId: null, recurrence: null, createdAt: 1, updatedAt: 1, sortOrder: 0, description: '' },
+      { id: 'bt3', title: 'Future one', status: 'active', dueDate: '2026-10-01', dueTime: null, priority: 'med', tags: [], projectId: null, recurrence: null, createdAt: 1, updatedAt: 1, sortOrder: 0, description: '' },
+      { id: 'bt5', title: 'Other tab one', status: 'active', dueDate: '2026-09-18', dueTime: null, priority: 'med', tags: [], projectId: null, recurrence: null, createdAt: 1, updatedAt: 1, sortOrder: 0, description: '' },
+    ],
+    trash: [{ id: 'bt4', title: 'Trashed one', status: 'active', dueDate: '2026-09-18', dueTime: null, priority: 'med', tags: [], projectId: null, recurrence: null, trashedAt: 2, createdAt: 1, updatedAt: 1, sortOrder: 0, description: '' }],
+    projects: [], subtasks: [],
+    reminders: [
+      { id: 'br1', taskId: 'bt1', triggerAt: Date.now() - 7200e3, reminderType: 'onTime', enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: 1, updatedAt: 1 },
+      { id: 'br2', taskId: 'bt5', triggerAt: Date.now() - 7200e3, reminderType: 'onTime', enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: 1, updatedAt: 1 },
+      { id: 'br3', taskId: 'bt3', triggerAt: Date.now() + 86400e3, reminderType: 'd1', enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: 1, updatedAt: 1 },
+      { id: 'br4', taskId: 'bt4', triggerAt: Date.now() - 7200e3, reminderType: 'onTime', enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: 1, updatedAt: 1 },
+    ],
+  };
+  const dom3 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom3.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dom3.window.localStorage.setItem('todo_backup_v1', JSON.stringify(seed));
+  dom3.window.localStorage.setItem('zt_rem_fired_v1', JSON.stringify({ br2: Date.now() - 1000 })); // pretend br2 was already handled in another tab
+  dom3.window.eval(storageSrc); dom3.window.eval(appSrc);
+  await sleep(900);
+  const m3 = JSON.parse(dom3.window.localStorage.getItem('todo_backup_v1'));
+  const g = (id) => m3.reminders.find((r) => r.id === id);
+  ok(g('br1').status === 'triggered' && g('br1').delivered === true, 'boot: overdue pending reminder for a live task → caught up + delivered');
+  ok(g('br2').status === 'triggered' && g('br2').delivered === true, 'boot: ledger-marked reminder is NOT re-notified (duplicate prevented), record settles');
+  ok(g('br3').status === 'pending', 'boot: future reminder stays pending (re-armed from the record, no in-memory-only timer)');
+  ok(g('br4').status === 'skipped', 'boot: reminder of a TRASHED task is skipped, never fired');
+  const toasts3 = [...dom3.window.document.querySelectorAll('.toast-rem')].map((e) => e.textContent);
+  ok(toasts3.length === 1 && /Overdue live/.test(toasts3[0]), 'exactly ONE alert for the one genuinely-missed reminder (completed/trashed/ledgered stay silent)');
+  dom3.window.close();
+}
+
+/* refresh persistence: reminders ride the same mirror as everything else */
+{
+  const m4 = remMirror();
+  ok(m4.schemaVersion === 5 && m4.reminders.length >= 6, 'mirror (the refresh source of truth) carries the reminder records at schema v5');
+  ok(m4.reminders.every((r) => m4.tasks.some((t) => t.id === r.taskId)), 'no orphan reminders persist — cleanup on every path held');
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

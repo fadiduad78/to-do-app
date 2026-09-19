@@ -149,6 +149,22 @@ try {
   ok(timed.dueDate === '2026-09-19' && timed.dueTime === '09:30', 'task dueTime rides through the server in the task itself (no second date store)');
   s = await sync('B', s.json.rev, { tasks: [task('new1', 'Timed', ts(8), { dueDate: '2026-09-19', dueTime: '25:99' })], trash: [] }, {}, 'merge');
   ok(s.json.tasks.find((x) => x.id === 'new1').dueTime === null, 'invalid dueTime normalized server-side; valid date untouched');
+  /* ---- reminders (v5): ride the SAME state doc — records, not timers ---- */
+  const rem = (id, taskId, upd, extra = {}) => ({
+    id, taskId, triggerAt: ts(20), reminderType: 'h1', enabled: true, delivered: false,
+    dismissed: false, status: 'pending', createdAt: ts(1), updatedAt: upd, ...extra,
+  });
+  s = await sync('A', s.json.rev, { tasks: [task('rt1', 'Renew visa', ts(10), { dueDate: '2026-12-01' })], trash: [], reminders: [rem('r1', 'rt1', ts(11)), rem('r-bad', 'rt1', ts(11), { triggerAt: 'nope' })] }, {}, 'merge');
+  ok(s.json.reminders.length === 1 && s.json.reminders[0].reminderType === 'h1', 'reminders sync inside the state doc; reminder without a finite triggerAt is refused (task kept)');
+  s = await sync('B', s.json.rev, { tasks: [task('rt1', 'Renew visa EDITED', ts(12))], trash: [], reminders: [rem('r1', 'rt1', ts(13), { reminderType: 'd1', extraFlag: 7 })] }, {}, 'merge');
+  const r1 = s.json.reminders.find((x) => x.id === 'r1');
+  ok(r1.reminderType === 'd1' && r1.extraFlag === 7, 'LWW: fresher reminder wins and unknown fields survive coercion');
+  s = await sync('A', s.json.rev, { tasks: [], trash: [], reminders: [rem('r1', 'rt1', ts(6))] }, { 'reminders:r1': ts(14) }, 'merge');
+  ok(!s.json.reminders.some((x) => x.id === 'r1') && s.json.tombstones['reminders:r1'] >= ts(14), 'reminders-scoped tombstone kills a stale re-push (deleted schedule stays deleted)');
+  s = await sync('B', s.json.rev, { tasks: [], trash: [], reminders: [rem('r1', 'rt1', ts(25))] }, {}, 'merge');
+  ok(s.json.reminders.some((x) => x.id === 'r1'), 'edit-beats-delete: a NEWER re-add revives the reminder (mirrors tasks/projects)');
+  const cfg = await (await fetch(BASE + '/api/config')).json();
+  ok(cfg.version === 7, 'server advertises version 7 (understands reminders)');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [{ id: 'pI', name: 'B wins', createdAt: ts(1), updatedAt: ts(99) }] }, {}, 'merge');
   ok(s.json.projects[0].name === 'B wins', 'project edits LWW-merge like tasks');
   s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [] }, { 'projects:pI': ts(120) }, 'merge');

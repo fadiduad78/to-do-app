@@ -40,6 +40,7 @@
     filterTabs: $('filterTabs'), tagChips: $('tagChips'),
     projectBar: $('projectBar'), projectDetail: $('projectDetail'),
     calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
+    fRecurrence: $('f-recurrence'), remRows: $('remRows'), addRemBtn: $('addRemBtn'),
     taskList: $('taskList'), emptyState: $('emptyState'),
     trashBar: $('trashBar'), trashCount: $('trashCount'), emptyTrashBtn: $('emptyTrashBtn'),
     settingsPanel: $('settingsPanel'), themeSelect: $('themeSelect'), reminderSelect: $('reminderSelect'),
@@ -75,7 +76,7 @@
     },
     onQuotaCleared() { dismissBanner('quota'); },
     onBackupWarn(msg) { showBanner({ kind: 'warn', id: 'backup-warn', sticky: true, message: msg }); },
-    onExternalChange() { renderAll(); }, // another tab committed — disk is truth
+    onExternalChange() { renderAll(); remReconcile(); }, // another tab committed — disk is truth
   }) : null;
 
   // `S` is the live in-memory state owned by the storage engine. The UI
@@ -114,6 +115,7 @@
     S.settings.calendarFilters = (S.settings.calendarFilters && typeof S.settings.calendarFilters === 'object') ? S.settings.calendarFilters : {};
     S.ui.cal.view = S.settings.calendarView;
     S.ui.cal.anchor = ymd(new Date());
+    S.reminders = S.reminders || []; // v5 — the engine guarantees the array
 
     store.startSync();
 
@@ -123,7 +125,7 @@
     // failures are caught inside and surfaced via the ☁ pill.
     if (window.ZTCloud) {
       try {
-        await window.ZTCloud.attach({ store, getState: () => S, onChange: () => renderAll() });
+        await window.ZTCloud.attach({ store, getState: () => S, onChange: () => { renderAll(); remReconcile(); } });
       } catch (e) {
         console.warn('[zerotodo] cloud attach failed (staying local-only):', e);
       }
@@ -141,6 +143,7 @@
     checkDraftOnLoad();
     checkExportReminder();
     startRelativeClock();
+    remInit(); // load → detect overdue → catch up safely → reschedule (persisted schedule)
   }
 
   let noticesSeq = 0;
@@ -577,6 +580,7 @@
           '<div class="task-meta">' +
             '<span class="badge prio-' + t.priority + '">' + prioLabel + '</span>' +
             (due && !inTrash ? '<span class="badge due ' + due.cls + '">' + due.text + '</span>' : '') +
+            (!inTrash && remPendingFor(t.id) ? '<span class="badge rem" title="' + remPendingFor(t.id) + ' pending reminder(s), next: ' + esc(remNextLabel(t.id)) + '">🔔 ' + remPendingFor(t.id) + '</span>' : '') +
             (function () {
               if (!t.projectId) return '';
               const pj = S.projects.find((p) => p.id === t.projectId);
@@ -640,7 +644,8 @@
     const liveProj = S.projects.filter((p) => !p.deletedAt).length;
     els.footerCounts.textContent = S.tasks.length + ' task(s) · ' + done + ' completed · ' + S.trash.length + ' in trash'
       + (liveProj ? ' · ' + liveProj + ' project(s)' : '')
-      + (S.subtasks.length ? ' · ' + S.subtasks.filter((s) => s.completed).length + '/' + S.subtasks.length + ' subtasks' : '');
+      + (S.subtasks.length ? ' · ' + S.subtasks.filter((s) => s.completed).length + '/' + S.subtasks.length + ' subtasks' : '')
+      + (S.reminders.some((r) => r.status === 'pending') ? ' · ' + S.reminders.filter((r) => r.status === 'pending').length + ' reminder(s) armed' : '');
   }
 
   function updateStorageInfo() {
@@ -681,6 +686,15 @@
     els.fProject.value = prefill && prefill.projectId != null
       ? prefill.projectId
       : (editing ? (editing.projectId || '') : (S.settings.filterProject || ''));
+    els.fRecurrence.value = (prefill && prefill.recurrence != null ? prefill.recurrence : (editing ? (editing.recurrence || '') : '')) || '';
+    // Reminder editor: editable rows = pending/skipped; fired history stays put.
+    S.ui.remRows = prefill && Array.isArray(prefill.remRows)
+      ? prefill.remRows.map((x) => ({ ...x }))
+      : (editing
+        ? S.reminders.filter((r) => r.taskId === editing.id && (r.status === 'pending' || r.status === 'skipped'))
+            .map((r) => ({ id: r.id, reminderType: r.reminderType, customDate: r.customDate || '', customTime: r.customTime || '', status: r.status }))
+        : []);
+    renderRemRows();
     els.fTitle.classList.remove('invalid');
     els.composer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     setTimeout(() => els.fTitle.focus(), 60);
@@ -698,12 +712,14 @@
   function readForm() {
     return {
       title: els.fTitle.value,
+      recurrence: els.fRecurrence.value || null,
       description: els.fDesc.value.trim(),
       dueDate: els.fDue.value || null,
       dueTime: els.fTime.value || null,
       priority: els.fPriority.value,
       tags: els.fTags.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
       projectId: els.fProject.value || null,
+      remRows: (S.ui.remRows || []).map((x) => ({ ...x })),
     };
   }
 
@@ -721,9 +737,10 @@
       const t = byId(S.ui.editingId);
       Object.assign(t, {
         title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
-        priority: v.priority, tags: v.tags, projectId: v.projectId, updatedAt: now,
+        priority: v.priority, tags: v.tags, projectId: v.projectId, recurrence: v.recurrence, updatedAt: now,
       });
       ops = [{ store: STORES.tasks, op: 'put', value: t }];
+      remSyncTask(t, v.remRows, ops);
     } else {
       // New tasks slot in at the top (lowest sortOrder).
       const min = S.tasks.reduce((m, t) => Math.min(m, t.sortOrder), S.tasks.length ? Infinity : 0);
@@ -733,14 +750,17 @@
         title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
         priority: v.priority, tags: v.tags,
         projectId: v.projectId,
+        recurrence: v.recurrence,
         status: 'active',
         sortOrder: S.tasks.length ? base - 1 : 0,
         createdAt: now, updatedAt: now,
       };
       S.tasks.push(t);
       ops = [{ store: STORES.tasks, op: 'put', value: t }];
+      remSyncTask(t, v.remRows, ops);
     }
     const ok = await store.commit(ops); // write-through: persisted immediately
+    remReconcile(); // arm/reschedule from the new records (persisted schedule)
     clearDraft();
     closeComposer();
     renderAll();
@@ -757,13 +777,13 @@
   function currentDraft() {
     if (!S.ui.composerOpen) return null;
     const v = readForm();
-    if (!v.title.trim() && !v.description && !v.dueDate && !v.tags.length) return null;
+    if (!v.title.trim() && !v.description && !v.dueDate && !v.tags.length && !v.remRows.length) return null;
     return {
       kind: S.ui.editingId ? 'edit' : 'new',
       taskId: S.ui.editingId,
       title: v.title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
       priority: v.priority, tags: v.tags,
-      projectId: v.projectId,
+      projectId: v.projectId, recurrence: v.recurrence, remRows: v.remRows,
       savedAt: Date.now(),
     };
   }
@@ -842,10 +862,52 @@
   async function toggleTask(id) {
     const t = byId(id);
     if (!t) return;
-    t.status = t.status === 'completed' ? 'active' : 'completed';
-    t.updatedAt = Date.now();
-    await store.commit([{ store: STORES.tasks, op: 'put', value: t }]);
+    const now = Date.now();
+    const ops = [];
+    if (t.status === 'completed') {
+      t.status = 'active';
+      t.updatedAt = now;
+      ops.push({ store: STORES.tasks, op: 'put', value: t });
+      remReviveSkipped(t.id, ops, now); // re-check reminders of the un-completed task
+    } else if (t.recurrence) {
+      // Recurring: completing rolls the task to its next occurrence instead
+      // of leaving it done — dueDate is rewritten in place (same task, same
+      // id), and its cycle-linked reminders are re-armed against the new date.
+      const base = t.dueDate || ymd(new Date());
+      t.dueDate = remNextOccurrence(base, t.recurrence);
+      t.status = 'active';
+      t.updatedAt = now;
+      ops.push({ store: STORES.tasks, op: 'put', value: t });
+      let rearmed = 0;
+      for (const r of S.reminders) {
+        if (r.taskId !== t.id || r.reminderType === 'custom') continue; // custom times are absolute, not per-cycle
+        r.status = 'pending'; r.delivered = false; r.dismissed = false;
+        r.triggerAt = remComputeTrigger(r, t);
+        if (r.triggerAt == null) {
+          ops.push({ store: STORES.reminders, op: 'delete', key: r.id });
+          S.reminders = S.reminders.filter((x) => x.id !== r.id);
+          continue;
+        }
+        r.updatedAt = now;
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+        rearmed++;
+      }
+      toast('Recurring task completed — rolled to ' + t.dueDate + (rearmed ? ' · ' + rearmed + ' reminder(s) re-armed' : ''));
+    } else {
+      t.status = 'completed';
+      t.updatedAt = now;
+      ops.push({ store: STORES.tasks, op: 'put', value: t });
+      // A finished task must not nag: its pending reminders become skipped.
+      for (const r of S.reminders) {
+        if (r.taskId === t.id && r.status === 'pending') {
+          r.status = 'skipped'; r.updatedAt = now;
+          ops.push({ store: STORES.reminders, op: 'put', value: r });
+        }
+      }
+    }
+    await store.commit(ops);
     renderAll();
+    remReconcile();
   }
 
   /** Soft delete: move to trash (single atomic tx touching both stores). */
@@ -872,12 +934,15 @@
     delete t.trashedAt;
     t.updatedAt = Date.now(); // the move must beat the soft-delete tombstone during cloud sync
     S.tasks.push(t);
-    const ok = await store.commit([
+    const ops = [
       { store: STORES.trash, op: 'delete', key: id },
       { store: STORES.tasks, op: 'put', value: t },
-    ]);
+    ];
+    remReviveSkipped(id, ops, Date.now()); // reminders that were skipped while trashed come back
+    const ok = await store.commit(ops);
     renderAll();
     if (ok) toast('Task restored.');
+    remReconcile();
   }
 
   async function destroyTask(id) {
@@ -896,8 +961,14 @@
     const doomed = new Set(subtreeIds(id));
     S.trash = S.trash.filter((x) => x.id !== id);
     S.subtasks = S.subtasks.filter((x) => !doomed.has(x.id));
+    // Reminders die with the task forever — deletes (→ tombstones) ride the
+    // SAME commit, so no device keeps a schedule for a task that's gone.
+    const doomedRem = S.reminders.filter((r) => doomed.has(r.taskId)).map((r) => r.id);
+    S.reminders = S.reminders.filter((r) => !doomed.has(r.taskId));
     await store.commit([{ store: STORES.trash, op: 'delete', key: id }]
-      .concat([...doomed].map((sid) => ({ store: STORES.subtasks, op: 'delete', key: sid }))));
+      .concat([...doomed].map((sid) => ({ store: STORES.subtasks, op: 'delete', key: sid })))
+      .concat(doomedRem.map((rid) => ({ store: STORES.reminders, op: 'delete', key: rid }))));
+    remArm();
     renderAll();
     toast('Deleted forever' + (doomed.size ? ' — ' + doomed.size + ' subtask(s) with it.' : '.'));
   }
@@ -925,6 +996,9 @@
     for (const t of S.trash) for (const sid of subtreeIds(t.id)) doomedSubs.add(sid);
     for (const sid of doomedSubs) ops.push({ store: STORES.subtasks, op: 'delete', key: sid });
     S.subtasks = S.subtasks.filter((x) => !doomedSubs.has(x.id));
+    const doomedIds = new Set(S.trash.map((t) => t.id));
+    for (const r of S.reminders) if (doomedIds.has(r.taskId)) ops.push({ store: STORES.reminders, op: 'delete', key: r.id });
+    S.reminders = S.reminders.filter((r) => !doomedIds.has(r.taskId));
     S.trash = [];
     for (const p of deadProjects) {
       ops.push({ store: STORES.projects, op: 'delete', key: p.id });
@@ -1565,7 +1639,7 @@
     return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + '" data-tid="' + esc(t.id) + '" draggable="true"' +
       ' title="' + esc((t.dueTime ? t.dueTime + ' — ' : '') + t.title) + '">' +
       '<i class="cal-dot" aria-hidden="true"></i>' + (t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') +
-      (done ? '✓ ' : '') + esc(truncate(t.title, 22)) + '</span>';
+      (remPendingFor(t.id) ? '🔔' : '') + (done ? '✓ ' : '') + esc(truncate(t.title, 22)) + '</span>';
   }
   function calMonthCell(ds, dim) {
     const st = calStats(ds);
@@ -1788,6 +1862,271 @@
     document.addEventListener('keydown', onCalKeys);
   }
 
+  /* ---------------------------- Reminder engine ----------------------------
+   */
+  /* The schedule lives IN the reminder records (persisted alongside the
+     tasks — same stores, same sync, same backups). setTimeout is only ever
+     an optimization to fire promptly while the page is open; on every boot
+     remInit() re-derives state from the records: catch up overdue ones
+     (as "Missed"), never double-fire (delivered flag + a localStorage
+     ledger guards against a second tab), and re-arm future ones. */
+
+  const REM_OFFSET_MIN = { onTime: 0, m5: 5, m10: 10, m15: 15, m30: 30, h1: 60, h2: 120, d1: 1440, d2: 2880 };
+  const REM_TYPE_LABELS = [
+    ['onTime', 'At time of task'], ['m5', '5 minutes before'], ['m10', '10 minutes before'],
+    ['m15', '15 minutes before'], ['m30', '30 minutes before'], ['h1', '1 hour before'],
+    ['h2', '2 hours before'], ['d1', '1 day before'], ['d2', '2 days before'], ['custom', 'Custom date/time'],
+  ];
+  const REM_FIRE_KEY = 'zt_rem_fired_v1'; // { reminderId: firedAt } — cross-tab dedup
+  let remTimer = null;
+  let remBeat = null;
+
+  /* Timezone rule: everything the user picks is stored as wall-clock strings
+     (task dueDate/dueTime, reminder customDate/customTime) and converted to
+     an epoch ms for the LOCAL zone at compute time. Epochs display through the
+     local zone too. A timezone change therefore never rewrites a date — it
+     consistently re-derives the instant. */
+  function localEpoch(ds, ts, fallbackHM) {
+    if (typeof ds !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(ds)) return null;
+    const p = ds.split('-').map(Number);
+    let hh = 9, mi = 0;
+    const src = (typeof ts === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(ts)) ? ts : (fallbackHM || '09:00');
+    const q = src.split(':').map(Number);
+    hh = q[0]; mi = q[1];
+    return new Date(p[0], p[1] - 1, p[2], hh, mi, 0, 0).getTime();
+  }
+  function dueEpochFor(t) { return t && t.dueDate ? localEpoch(t.dueDate, t.dueTime, '09:00') : null; }
+  function remComputeTrigger(r, t) {
+    if (r.reminderType === 'custom') return localEpoch(r.customDate, r.customTime, '09:00');
+    const base = dueEpochFor(t);
+    return base == null ? null : base - (REM_OFFSET_MIN[r.reminderType] || 0) * 60000;
+  }
+  function remNextOccurrence(ds, kind) {
+    const [y, m, d] = ds.split('-').map(Number);
+    if (kind === 'weekly') return ymd(new Date(y, m - 1, d + 7));
+    if (kind === 'monthly') {
+      const last = new Date(y, m + 1, 0).getDate(); // days in the NEXT month (m here is 1-based)
+      return ymd(new Date(y, m, Math.min(d, last))); // Jan 31 → Feb 28, never Mar 2
+    }
+    return ymd(new Date(y, m - 1, d + 1));
+  }
+  function remTaskOf(id) { return S.tasks.find((t) => t.id === id) || S.trash.find((t) => t.id === id) || null; }
+  function remPendings(taskId) { return S.reminders.filter((r) => r.taskId === taskId && r.status === 'pending' && r.enabled); }
+  function remPendingFor(taskId) { return remPendings(taskId).length; }
+  function remNextLabel(taskId) {
+    const n = remPendings(taskId).slice().sort((a, b) => a.triggerAt - b.triggerAt)[0];
+    return n ? new Date(n.triggerAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  }
+  function remFmt(ms) { return new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+
+  function remLedger() {
+    try { return JSON.parse(window.localStorage.getItem(REM_FIRE_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function remLedgerMark(id) {
+    const m = remLedger();
+    m[id] = Date.now();
+    const keys = Object.keys(m);
+    if (keys.length > 300) {
+      keys.sort((a, b) => m[a] - m[b]).slice(0, keys.length - 300).forEach((k) => { delete m[k]; });
+    }
+    try { window.localStorage.setItem(REM_FIRE_KEY, JSON.stringify(m)); } catch (_) {}
+  }
+
+  /* --------- the editor rows inside the composer --------- */
+  function renderRemRows() {
+    const rows = S.ui.remRows || [];
+    els.remRows.innerHTML = rows.map((rw, i) => {
+      const opts = REM_TYPE_LABELS.map(([v, l]) =>
+        '<option value="' + v + '"' + (rw.reminderType === v ? ' selected' : '') + '>' + l + '</option>').join('');
+      return '<div class="rem-row" data-ri="' + i + '">' +
+        (rw.status && rw.status !== 'pending' ? '<span class="rem-status st-' + rw.status + '">' + rw.status + '</span>' : '') +
+        '<select data-rfield="reminderType" aria-label="Reminder type">' + opts + '</select>' +
+        (rw.reminderType === 'custom'
+          ? '<input type="date" data-rfield="customDate" value="' + esc(rw.customDate || '') + '" aria-label="Custom reminder date">' +
+            '<input type="time" data-rfield="customTime" value="' + esc(rw.customTime || '') + '" aria-label="Custom reminder time">'
+          : '') +
+        '<button type="button" class="btn btn-sm btn-ghost rem-rm" data-rfield="remove" aria-label="Remove reminder" title="Remove reminder">✕</button>' +
+        '</div>';
+    }).join('') || '<span class="rem-none">No reminder</span>';
+  }
+  function remRowEdit(e) {
+    const host = e.target.closest('.rem-row');
+    if (!host) return;
+    const field = e.target.dataset.rfield;
+    if (!field) return;
+    const rw = (S.ui.remRows || [])[Number(host.dataset.ri)];
+    if (!rw) return;
+    rw[field] = e.target.value;
+    if (field === 'reminderType') renderRemRows(); // 'custom' swaps in date/time inputs
+    scheduleDraft();
+  }
+
+  /** Rebuild a task's *pending* reminders from the editor rows. Fired or
+   *  dismissed history is preserved. New/kept rows get recomputed triggerAt
+   *  values; removed pending rows are deleted (→ tombstone → other devices). */
+  function remSyncTask(t, rows, ops) {
+    const now = Date.now();
+    const editable = S.reminders.filter((r) => r.taskId === t.id && (r.status === 'pending' || r.status === 'skipped'));
+    const kept = new Set();
+    for (const rw of (rows || [])) {
+      if (rw.id) kept.add(rw.id);
+    }
+    for (const old of editable) {
+      if (!kept.has(old.id)) {
+        ops.push({ store: STORES.reminders, op: 'delete', key: old.id });
+        S.reminders = S.reminders.filter((x) => x.id !== old.id);
+      }
+    }
+    let created = 0; let droppedNoDate = 0;
+    for (const rw of (rows || [])) {
+      let r = rw.id ? S.reminders.find((x) => x.id === rw.id && x.taskId === t.id) : null;
+      if (!r) {
+        r = { id: helpers.uuid(), taskId: t.id, createdAt: now, customDate: null, customTime: null };
+        S.reminders.push(r);
+      }
+      r.reminderType = REM_OFFSET_MIN.hasOwnProperty(rw.reminderType) || rw.reminderType === 'custom' ? rw.reminderType : 'onTime';
+      r.customDate = rw.customDate || null;
+      r.customTime = rw.customTime || null;
+      r.enabled = true; r.delivered = false; r.dismissed = false; r.status = 'pending';
+      r.triggerAt = remComputeTrigger(r, t);
+      if (r.triggerAt == null) {
+        // relative reminder but the task has no due date → cannot schedule;
+        // the record is not saved rather than silently firing at epoch.
+        S.reminders = S.reminders.filter((x) => x.id !== r.id);
+        droppedNoDate++;
+        continue;
+      }
+      r.updatedAt = now;
+      created++;
+      ops.push({ store: STORES.reminders, op: 'put', value: r });
+    }
+    if (droppedNoDate) toast(droppedNoDate + ' reminder(s) need a due date on the task — not saved.');
+    return created;
+  }
+
+  /* --------- the engine: catch-up, dedup, arm, fire --------- */
+
+  async function remFireDue() {
+    if (!S || !S.reminders) return false;
+    const now = Date.now();
+    const dueList = S.reminders.filter((r) => r.status === 'pending' && r.enabled && r.triggerAt <= now);
+    if (!dueList.length) return false;
+    const ledger = remLedger();
+    const ops = [];
+    const alerts = [];
+    for (const r of dueList) {
+      const t = remTaskOf(r.taskId);
+      if (!t || t.status === 'completed' || (S.trash || []).some((x) => x.id === r.taskId)) {
+        r.status = 'skipped'; r.updatedAt = now; // safe handling: never nag for finished/deleted work
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+        continue;
+      }
+      if (ledger[r.id]) { // already notified (this tab or another) — just settle the record
+        r.status = 'triggered'; r.delivered = true; r.updatedAt = now;
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+        continue;
+      }
+      r.status = 'triggered'; r.delivered = true; r.firedAt = now; r.updatedAt = now;
+      ops.push({ store: STORES.reminders, op: 'put', value: r });
+      alerts.push({ r, t, lateMs: now - r.triggerAt });
+      remLedgerMark(r.id); // mark BEFORE notifying — a crash mid-notify must not refire
+    }
+    if (!ops.length) return false;
+    await store.commit(ops);
+    for (const al of alerts) remNotify(al.r, al.t, al.lateMs);
+    renderAll();
+    return true;
+  }
+
+  function remNotify(r, t, lateMs) {
+    const missed = lateMs > 60000;
+    const msg = (missed ? '⏰ Missed reminder — ' : '🔔 Reminder — ') + t.title +
+      (missed ? ' (was due ' + remFmt(r.triggerAt) + ')' : '');
+    if (window.Notification && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(t.title, { body: msg, tag: 'zt-rem-' + r.id });
+        if (n && n.onclick === null) { try { n.onclick = () => { window.focus && window.focus(); openComposer({ mode: 'edit', taskId: t.id }); }; } catch (_) {} }
+      } catch (_) {
+        r.status = 'failed'; r.updatedAt = Date.now(); // delivery error IS recorded…
+        store.commit([{ store: STORES.reminders, op: 'put', value: r }]);
+        // …but the in-app toast below still informs the user, so nothing is lost.
+      }
+    }
+    // In-app alert with Open / Dismiss — works even with no notification permission.
+    const el = document.createElement('div');
+    el.className = 'toast show toast-rem';
+    el.innerHTML = '<span>' + esc(msg) + '</span>' +
+      '<button type="button" class="btn btn-sm btn-ghost" data-remopen="' + esc(t.id) + '">Open</button>' +
+      '<button type="button" class="btn btn-sm btn-ghost" data-remdismiss="' + esc(r.id) + '">Dismiss</button>';
+    els.toastHost.appendChild(el);
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 10000);
+  }
+
+  function remArm() {
+    if (remTimer) { clearTimeout(remTimer); remTimer = null; }
+    if (!S || !S.reminders) return;
+    const now = Date.now();
+    let next = Infinity;
+    for (const r of S.reminders) if (r.status === 'pending' && r.enabled && r.triggerAt > now) next = Math.min(next, r.triggerAt);
+    if (next !== Infinity) {
+      remTimer = setTimeout(() => { remTimer = null; remReconcile().catch(() => {}); },
+        Math.min(Math.max(next - now, 250), 2000000000));
+    }
+  }
+
+  /** Re-derive pending schedules from the tasks (single source of truth for
+   *  dates). Runs on boot, after every relevant commit, after cloud adopts
+   *  and on the heartbeat. Recompute covers: task date edits, timezone
+   *  shifts, and recurring cycles. */
+  async function remReconcile() {
+    if (!S || !S.reminders || !S.ui) return;
+    const now = Date.now();
+    const ops = [];
+    for (const r of S.reminders) {
+      if (r.status !== 'pending' || !r.enabled) continue;
+      const t = remTaskOf(r.taskId);
+      let nt = null;
+      if (t) nt = remComputeTrigger(r, t);
+      if (nt == null) {
+        r.status = 'skipped'; r.updatedAt = now;
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+        continue;
+      }
+      if (nt !== r.triggerAt) {
+        r.triggerAt = nt; r.updatedAt = now;
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+      }
+    }
+    if (ops.length) await store.commit(ops);
+    await remFireDue();
+    remArm();
+  }
+
+  function remReviveSkipped(taskId, ops, now) {
+    for (const r of S.reminders) {
+      if (r.taskId !== taskId || r.status !== 'skipped') continue;
+      const t = remTaskOf(taskId);
+      const nt = t ? remComputeTrigger(r, t) : null;
+      if (nt != null && nt > now) {
+        r.status = 'pending'; r.delivered = false; r.dismissed = false;
+        r.triggerAt = nt; r.updatedAt = now;
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+      }
+    }
+  }
+
+  function remInit() {
+    remReconcile().catch(() => {});
+    if (remBeat) clearInterval(remBeat);
+    // Safety-net heartbeat: throttled-tab and clock-skew catch-up. The
+    // records (not the timer) are the schedule, so a missed tick only means
+    // a later fire, and a killed tab means a boot-time "Missed" fire.
+    remBeat = setInterval(() => { remReconcile().catch(() => {}); }, 30000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') remReconcile().catch(() => {});
+    });
+  }
+
   /* --------------------------- Filters & search --------------------------- */
 
   async function setFilterMode(m) {
@@ -1875,7 +2214,7 @@
 
     // Adopt the imported dataset, then make disk converge to it (full
     // read-modify-write resync: put all, delete orphans, mirror, broadcast).
-    store.replaceMemory(clean.tasks, clean.trash, clean.projects, clean.subtasks);
+    store.replaceMemory(clean.tasks, clean.trash, clean.projects, clean.subtasks, clean.reminders);
     // Local settings (theme, reminder cadence) are device preferences — keep
     // them; the imported tasks/trash replace ours entirely.
     const okc = await store.resync();
@@ -1927,7 +2266,7 @@
     els.cancelTaskBtn.onclick = () => closeComposer(); // draft stays on disk
 
     // Composer input → debounced draft autosave
-    for (const el of [els.fTitle, els.fDesc, els.fDue, els.fTime, els.fPriority, fProjectSelect(), els.fTags]) {
+    for (const el of [els.fTitle, els.fDesc, els.fDue, els.fTime, els.fRecurrence, els.fPriority, fProjectSelect(), els.fTags]) {
       el.addEventListener('input', () => {
         el.classList.remove('invalid');
         scheduleDraft();
@@ -2098,6 +2437,43 @@
     });
 
     els.emptyTrashBtn.onclick = emptyTrash;
+
+    // Reminder editor (composer rows) + alert toast actions
+    els.addRemBtn.onclick = () => {
+      S.ui.remRows = S.ui.remRows || [];
+      S.ui.remRows.push({ reminderType: S.tasks.find((x) => x.id === S.ui.editingId) ? 'onTime' : 'm10' });
+      renderRemRows();
+      scheduleDraft();
+    };
+    els.remRows.addEventListener('change', remRowEdit);
+    els.remRows.addEventListener('input', remRowEdit);
+    els.remRows.addEventListener('click', (e) => {
+      const rm = e.target.closest('[data-rfield="remove"]');
+      if (!rm) return;
+      const host = rm.closest('.rem-row');
+      const i = Number(host && host.dataset.ri);
+      if (!Number.isFinite(i)) return;
+      S.ui.remRows.splice(i, 1);
+      renderRemRows();
+      scheduleDraft();
+    });
+    els.toastHost.addEventListener('click', (e) => {
+      const open = e.target.closest('[data-remopen]');
+      if (open) {
+        openComposer({ mode: 'edit', taskId: open.dataset.remopen });
+        const box = open.closest('.toast'); if (box) box.remove();
+        return;
+      }
+      const dis = e.target.closest('[data-remdismiss]');
+      if (dis) {
+        const r = S.reminders.find((x) => x.id === dis.dataset.remdismiss);
+        if (r) {
+          r.status = 'dismissed'; r.dismissed = true; r.updatedAt = Date.now();
+          store.commit([{ store: STORES.reminders, op: 'put', value: r }]).then(() => renderAll());
+        }
+        const box = dis.closest('.toast'); if (box) box.remove();
+      }
+    });
 
     // Calendar module (view over tasks; keyboard + drag handlers inside)
     wireCalendar();

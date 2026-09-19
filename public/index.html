@@ -69,6 +69,24 @@
           <input id="f-tags" type="text" placeholder="e.g. work, home" autocomplete="off">
         </label>
       </div>
+      <div class="form-row">
+        <label class="field">
+          <span>Repeat</span>
+          <select id="f-recurrence">
+            <option value="">No repeat</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </label>
+        <div class="field rem-block">
+          <div class="rem-head">
+            <span>🔔 Reminders</span>
+            <button type="button" class="btn btn-sm btn-ghost" id="addRemBtn">＋ Add reminder</button>
+          </div>
+          <div id="remRows" class="rem-rows"></div>
+        </div>
+      </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" id="saveTaskBtn">Add task</button>
         <button type="button" class="btn btn-ghost" id="cancelTaskBtn">Cancel</button>

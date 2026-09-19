@@ -268,6 +268,32 @@ memory.subtasks = [];
 await store.commit([{ store: 'subtasks', op: 'delete', key: 'sA' }]);
 await wait(1400);
 
+console.log('10. reminders (v5): the schedule IS a record — synced, tombstoned, adopted');
+{
+  const tR = rec('tR', 'renew visa', Date.now() + 900, { dueDate: '2026-12-01' });
+  memory.tasks.push(tR);
+  const rem1 = { id: 'rem1', taskId: 'tR', triggerAt: Date.now() + 3600e3, reminderType: 'h1',
+    enabled: true, delivered: false, dismissed: false, status: 'pending', createdAt: Date.now(), updatedAt: Date.now() + 400 };
+  memory.reminders = (memory.reminders || []).concat([rem1]);
+  await store.commit([{ store: 'tasks', op: 'put', value: tR }, { store: 'reminders', op: 'put', value: rem1 }]);
+  await wait(1400);
+  let stR = await serverState();
+  ok(stR.reminders.length === 1 && stR.reminders[0].reminderType === 'h1' && stR.reminders[0].taskId === 'tR',
+    'reminder pushed in the SAME commit as its task (one state doc — no second store, no timer dependency)');
+  ok(memory.reminders.length === 1 && memory.reminders[0].id === 'rem1', 'echo adoption keeps exactly ONE reminder record (no duplication)');
+  const cur = memory.reminders.find((x) => x.id === 'rem1');
+  cur.delivered = true; cur.status = 'triggered'; cur.updatedAt = Date.now() + 800;
+  await store.commit([{ store: 'reminders', op: 'put', value: cur }]);
+  await wait(1400);
+  stR = await serverState();
+  ok(stR.reminders[0].status === 'triggered' && stR.reminders[0].delivered === true, 'fired-state rides the wire (a re-booted device never re-notifies)');
+  memory.reminders = memory.reminders.filter((x) => x.id !== 'rem1'); // like app.js: mutate state, then commit
+  await store.commit([{ store: 'reminders', op: 'delete', key: 'rem1' }]);
+  await wait(1400);
+  stR = await serverState();
+  ok(stR.reminders.length === 0 && stR.tombstones['reminders:rem1'] > 0, 'reminder deletion = store-scoped tombstone on the server (all devices drop it)');
+}
+
 child.kill('SIGKILL');
 console.log(failed ? `\nFAILED: ${failed} check(s)` : '\nAll client integration tests passed.');
 process.exit(failed ? 1 : 0);

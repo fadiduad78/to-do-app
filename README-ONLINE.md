@@ -210,12 +210,12 @@ safety copy — nothing is silently overwritten.)
 ## Test it (dev)
 
 ```bash
-node server/test.mjs          # 53 checks: accounts, sessions, merge, tombstones, replace, projects+subtasks, dueTime, persistence, SSE
-node server/test-storage.mjs  # 68 checks: the real public/storage.js in Node — v1→v4 migration, coercion (incl. dueTime), backups, retention
+node server/test.mjs          # 58 checks: accounts, sessions, merge, tombstones, replace, projects+subtasks+reminders, persistence, SSE
+node server/test-storage.mjs  # 80 checks: the real public/storage.js in Node — v1→v5 migration, coercion (dueTime, reminders, recurrence), backups, retention
 node server/test-supabase.mjs # 22 checks: mock PostgREST — free-plan restart survival, per-user rows, adoption
-node server/test-client.mjs   # 29 checks: the real public/cloud.js against a live server (project/subtask/dueTime sync semantics)
+node server/test-client.mjs   # 33 checks: the real public/cloud.js against a live server (project/subtask/dueTime/reminder sync semantics)
 npm i --no-save jsdom && node server/test-ui.mjs
-                              # 79 checks: the real index.html + storage.js + app.js in a headless DOM —
-                              # every subtask + project + calendar UI behavior (dialogs, cards, archive,
-                              # undo, Month/Week/Day views, drag-reschedule, quick-create, refresh)
+                              # 113 checks: the real index.html + storage.js + app.js in a headless DOM —
+                              # subtask + project + calendar behavior, the reminder editor, overdue
+                              # catch-up on boot, duplicate-proofing, dismiss, recurrence re-arming
 ```
