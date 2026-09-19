@@ -181,5 +181,62 @@ doc2.querySelector('.sub-toggle').click();
 await sleep(150);
 ok(doc2.querySelectorAll('#taskList .sub-row:not(.sub-add)').length === 5, 'after refresh: checklist renders with 5 rows');
 
+/* 11. Projects UI flow — regression for the empty-modal bug:
+       create via dialog, open, detail header, add task, tick → 100%,
+       ⋯ menu non-empty, archive, delete toast, mirror persistence. */
+doc.querySelector('#projectBar [data-act="new"]').click();
+await sleep(120);
+ok(!!doc.querySelector('#modalHost .modal #pf-name'), 'New project dialog renders its form (name field present)');
+doc.querySelector('#pf-name').value = 'Renovation';
+// NOTE: no emoji inside querySelector — jsdom's nwsapi can't match non-BMP
+// chars in attribute selectors (browsers can; this is harness-only). Index 3 = 🎯.
+doc.querySelectorAll('#modalHost .pf-icon')[3].click();
+doc.querySelector('#modalHost [data-m="save"]').click();
+await sleep(250);
+let card = doc.querySelector('#projectBar .project-card');
+ok(!!card && /Renovation/.test(card.textContent) && card.textContent.includes('🎯'), 'project card appears with chosen icon+name');
+card.querySelector('.pc-open').click();
+await sleep(250);
+ok(doc.querySelector('#projectDetail').hidden === false && /0% complete/.test(doc.querySelector('#projectDetail').textContent), 'project view opens: detail header with 0% progress');
+ok(!doc.querySelector('#emptyState').hidden && /Nothing in this project/.test(doc.querySelector('#emptyState').textContent), 'empty project shows its own empty-state message');
+doc.querySelector('#projectDetail [data-act="add"]').click();
+await sleep(120);
+ok(doc.querySelector('#f-project').value === card.dataset.pid, 'Add-task from detail opens composer PRE-SELECTED to the project');
+doc.querySelector('#f-title').value = 'Paint kitchen';
+doc.querySelector('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(250);
+card = doc.querySelector('#projectBar .project-card');
+ok(/0\/1/.test(card.textContent), 'card progress shows 0/1 after task added');
+ok(doc.querySelector('#taskList .task .proj-ref'), 'task row shows the project chip');
+doc.querySelector('#taskList .task .check').click(); // complete the task
+await sleep(250);
+card = doc.querySelector('#projectBar .project-card');
+ok(/1\/1/.test(card.textContent) && /100%/.test(doc.querySelector('#projectDetail').textContent), 'tick → 1/1 on card and detail 100% complete');
+card.querySelector('[data-act="menu"]').click();
+await sleep(120);
+ok(/Rename \/ edit/.test(doc.querySelector('#modalHost .modal').textContent), '⋯ project menu renders its actions (non-empty overlay)');
+doc.querySelector('#modalHost [data-m="close"]').click();
+await sleep(80);
+doc.querySelector('#projectDetail [data-act="delete"]').click();
+await sleep(120);
+const delBtn = doc.querySelector('#modalHost .btn-danger');
+ok(!!delBtn, 'project delete asks for confirmation');
+delBtn.click();
+await sleep(250);
+ok(!!doc.querySelector('#undoProjBtn'), 'deleted project offers 8s undo toast');
+doc.querySelector('#undoProjBtn').click();
+await sleep(250);
+card = doc.querySelector('#projectBar .project-card');
+ok(!!card, 'undo restores the project card');
+card.querySelector('.pc-open').click(); // re-open the project view (as a user clicks it)
+await sleep(150);
+ok(doc.querySelector('#projectDetail').hidden === false, 'reopened card shows the detail header again');
+doc.querySelector('#projectDetail [data-act="archive"]').click();
+await sleep(250);
+ok(doc.querySelector('#projectBar').textContent.includes('Archived (1)'), 'archive moves the card behind the Archived toggle');
+const mirror3 = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+ok(mirror3.projects.length === 1 && mirror3.projects[0].name === 'Renovation' && mirror3.projects[0].archived === true, 'project (incl. archived flag) persisted to the refresh mirror');
+ok(mirror3.tasks.some((x) => x.title === 'Paint kitchen' && x.projectId === mirror3.projects[0].id && x.status === 'completed'), 'task keeps projectId + completion in the mirror');
+
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
 process.exit(failed ? 1 : 0);

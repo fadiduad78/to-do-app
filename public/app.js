@@ -1410,6 +1410,7 @@
       else if (b.dataset.m === 'archive') toggleArchiveProject(p);
       else if (b.dataset.m === 'delete') deleteProject(p.id);
     });
+    ov.appendChild(card); // ← was missing: menu card never entered the overlay
     els.modalHost.appendChild(ov);
   }
 
@@ -1469,6 +1470,7 @@
       });
     });
     ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+    ov.appendChild(card); // ← the card has to be INSIDE the overlay (was missing!)
     els.modalHost.appendChild(ov);
     nameEl.focus();
   }

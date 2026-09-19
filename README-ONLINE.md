@@ -215,6 +215,6 @@ node server/test-storage.mjs  # 63 checks: the real public/storage.js in Node �
 node server/test-supabase.mjs # 22 checks: mock PostgREST — free-plan restart survival, per-user rows, adoption
 node server/test-client.mjs   # 29 checks: the real public/cloud.js against a live server (project + subtask sync semantics)
 npm i --no-save jsdom && node server/test-ui.mjs
-                              # 32 checks: the real index.html + storage.js + app.js in a headless DOM —
-                              # every subtask UI behavior (add/tick/rename/reorder/delete+undo/setting/search/refresh)
+                              # 48 checks: the real index.html + storage.js + app.js in a headless DOM —
+                              # every subtask + project UI behavior (dialogs, cards, archive, undo, refresh)
 ```
