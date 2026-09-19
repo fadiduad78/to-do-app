@@ -294,6 +294,45 @@ ok(G.state.subtasks.some((x) => x.id === 'sOrph'), 'orphaned subtask survives (n
 ok(await ZT.createStore({ onError() {} }).commit([{ store: 'subtasks', op: 'put', value: { id: 'x' } }]) === false,
   'subtask without parentTaskId/title refused by validateOp');
 
+/* ------------------------------ recurrence engine -------------------------
+   Fixed dates (2026: not a leap year; Sept 21 = Monday). The task record is
+   the ONLY occurrence materialized — these check the derivation itself. */
+{
+  const { recurOf, recurNextAfter, coerceRecurRule, recurMatches } = ZT.helpers;
+  ok(!!recurOf && !!recurNextAfter, 'storage exports the recurrence helpers');
+  ok(recurNextAfter('2026-09-19', '2026-09-19', recurOf('daily')) === '2026-09-20', 'Daily: next = tomorrow');
+  const wd = recurOf('weekdays');
+  ok(wd.unit === 'week' && wd.every === 1 && wd.weekdays.join() === '1,2,3,4,5', 'Weekdays = Mon–Fri weekly pattern');
+  ok(recurNextAfter('2026-09-18', '2026-09-17', wd) === '2026-09-21', 'Weekdays: Fri rolls to Mon (weekend skipped)');
+  ok(recurNextAfter('2026-09-21', '2026-09-21', recurOf('weekly')) === '2026-09-28', 'Weekly: every Monday from a Monday anchor');
+  const mwf = coerceRecurRule({ unit: 'week', every: 1, weekdays: [5, 1, 3, 1, 9, -2, 'x'] });
+  ok(mwf.weekdays.join() === '1,3,5', 'selected weekdays: sorted, deduped, out-of-range dropped');
+  ok(recurNextAfter('2026-09-17', '2026-09-17', mwf) === '2026-09-18', 'Mon+Wed+Fri: Thu anchor → next is Fri');
+  ok(recurNextAfter('2026-09-18', '2026-09-18', mwf) === '2026-09-21', 'Mon+Wed+Fri: Fri → Mon');
+  const bi = coerceRecurRule({ unit: 'week', every: 2 });
+  ok(recurNextAfter('2026-09-21', '2026-09-21', bi) === '2026-10-05', 'every 2 weeks: skips the off-week (spec example)');
+  ok(recurNextAfter('2026-01-05', '2026-01-05', recurOf('monthly')) === '2026-02-05', 'monthly on the 5th');
+  ok(recurNextAfter('2026-01-31', '2026-01-31', recurOf('monthly')) === '2026-02-28', 'monthly on the 31st clamps to Feb 28 (never Mar 2)');
+  ok(recurNextAfter('2026-02-28', '2026-01-31', recurOf('monthly')) === '2026-03-31', '…and returns to the 31st in March');
+  ok(recurNextAfter('2026-03-10', '2026-03-10', coerceRecurRule({ unit: 'month', every: 2 })) === '2026-05-10', 'every 2 months skips April');
+  ok(recurNextAfter('2026-12-31', '2026-12-31', recurOf('yearly')) === '2027-12-31', 'yearly on Dec 31 (spec example)');
+  ok(recurNextAfter('2024-02-29', '2024-02-29', recurOf('yearly')) === '2025-02-28', 'Feb 29 yearly clamps in non-leap years');
+  ok(recurNextAfter('2027-02-28', '2024-02-29', recurOf('yearly')) === '2028-02-29', '…and returns to the 29th in leap years');
+  ok(recurNextAfter('2026-09-19', '2026-09-19', coerceRecurRule({ unit: 'day', every: 3 })) === '2026-09-22', 'custom every-3-days');
+  ok(recurNextAfter('2026-01-01', '2026-01-01', coerceRecurRule({ unit: 'year', every: 99 })) === null, 'beyond the 10-year horizon the series ENDS (no infinite chase, no infinite tasks)');
+  ok(coerceRecurRule({ unit: 'day', every: 0 }).every === 1 && coerceRecurRule({ unit: 'day', every: 500 }).every === 1, 'every is clamped to a sane 1..99');
+  ok(coerceRecurRule({ unit: 'fortnight' }) === null && coerceRecurRule('x') === null, 'garbage rules refuse to coerce (→ treated as weekly)');
+  ok(recurMatches(new Date(2026, 8, 21), recurOf('weekdays'), new Date(2026, 8, 17)) === true && recurMatches(new Date(2026, 8, 19), recurOf('weekdays'), new Date(2026, 8, 17)) === false, 'recurMatches answers per-day (Sat no, Mon yes)');
+  const legacy = ZT.helpers.cleanPayload({ schemaVersion: 5, tasks: [
+    { id: 'l1', title: 'Legacy weekly', status: 'active', createdAt: 1, updatedAt: 1, dueDate: '2026-09-21', recurrence: 'weekly' },
+  ], trash: [], projects: [], subtasks: [], reminders: [], settings: {} });
+  ok(legacy.tasks[0].recurAnchor === '2026-09-21' && legacy.tasks[0].recurRule === null, 'legacy tasks adopt the due date as their series anchor (no migration needed)');
+  const bogus = ZT.helpers.cleanPayload({ schemaVersion: 5, tasks: [
+    { id: 'l2', title: 'Bogus custom', status: 'active', createdAt: 1, updatedAt: 1, dueDate: '2026-09-21', recurrence: 'custom', recurRule: { unit: 'moon' }, recurAnchor: 'yesterday' },
+  ], trash: [], projects: [], subtasks: [], reminders: [], settings: {} });
+  ok(bogus.tasks[0].recurRule === null && bogus.tasks[0].recurAnchor === '2026-09-21', 'invalid rule/anchor degrade to null/due — never a poison record');
+}
+
 /* -------------- reload with FIRED reminders in history (TDZ guard) --------
    A past shipped bug: recover()'s reminder-retention prune referenced the
    `now2` clock before its `const` — a TDZ ReferenceError thrown on EVERY

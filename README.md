@@ -36,8 +36,8 @@ if the server is unreachable, every original guarantee still holds.
 - **Reminders** per task (any number): at time of task, 5/10/15/30 min, 1/2 h,
   1/2 days before, or a custom date+time — persisted as records (not
   `setTimeout`), so they catch up after a refresh or closed tab, never fire
-  twice, and skip work that's completed or trashed. Recurring tasks
-  (daily/weekly/monthly) re-arm their reminders on every cycle.
+  twice, and skip work that's completed or trashed. Recurring tasks re-arm
+  their relative reminders on every cycle.
 - **OS notifications** (desktop + mobile/PWA, delivered by `public/notify.js`):
   task reminders (body phrases the lead time — “Finish Python project is due
   in 30 minutes.”), overdue alerts with a configurable no-spam policy (once
@@ -52,6 +52,21 @@ if the server is unreachable, every original guarantee still holds.
   unsupported browsers (and `file://`) degrade to the same alerts as in-app
   cards with Open / Complete / Snooze 5·10·30·60·Tomorrow. Every channel has
   its own on/off switch + timing in ⚙ Settings → Notifications.
+- **Recurring tasks**: *Does not repeat / Every day / Every weekday (Mon–Fri) /
+  Every week / Every month / Every year / Custom…* — custom covers any
+  "every N days/weeks/months/years" stride with optional specific weekdays
+  (Mon+Wed+Fri, every 2 weeks on Mon & Fri, …). Completing an occurrence
+  **rolls the same record** to the next date instead of creating copies: the
+  list and calendar always show exactly one live instance, plus dashed ghost
+  previews of the upcoming pattern (display-only — zero extra records). A
+  series menu offers *Complete / Skip this occurrence / Edit this occurrence /
+  Edit the series / Stop repeating*; moving a recurring task's date asks
+  whether the shift applies to the occurrence only or the whole series.
+  Month/year rules clamp to the month's length (monthly on the 31st →
+  Feb 28 → Mar 31), and a pattern with no future occurrence within ~10 years
+  completes for good. Recurrence rides on the task record itself, so
+  reminders, trash & restore, calendar, notifications, import/export, backup
+  and sync keep working with no special cases.
 - **Installable as a PWA** (`manifest.webmanifest` + generated launcher icons
   + theme-color): on Android (and iOS when added to Home Screen) the installed
   app keeps the service worker alive for notification delivery, and the
@@ -96,13 +111,56 @@ recovery. The whole contract is pinned by **§17 of `server/test-ui.mjs`**,
 which replays the "Submit assignment" scenario end-to-end (create with 3
 reminders → due change → trash → restore → fire → snooze → complete →
 purge) asserting record ids, statuses, derived trigger instants and the
-rendered calendar DOM at every step.
+rendered calendar DOM at every step. Recurrence rolling, the series sheet and
+the occurrence-vs-series dialog are pinned by **§18** of the same file, and
+the rule arithmetic itself by `server/test-storage.mjs`.
+
+## Recurring tasks
+
+The composer's **Repeat** select stores a kind on the task; *Custom…* opens an
+inline panel (every N × day/week/month/year + weekday buttons). Everything a
+recurring task needs lives on its one record:
+
+| Field | Meaning |
+|---|---|
+| `recurrence` | `daily` / `weekdays` / `weekly` / `monthly` / `yearly` / `custom` (or empty) |
+| `recurRule` | custom only: `{ every: 1–99, unit: 'day'\|'week'\|'month'\|'year', weekdays: [0–6] or null }` — Mon = 1, Sun = 0 |
+| `recurAnchor` | `YYYY-MM-DD` the pattern is counted from (defaults to the due date at creation); weekly = "which weekday", monthly = "which day of month", custom weeks = parity + the weekday set |
+| `dueDate` | always the **current occurrence** |
+
+The brief's examples are the engine's test cases: *Every day*; *Every weekday*
+(Sat → Mon); *Every Monday*; *Monday + Wednesday + Friday* (custom, week
+stride 1); *Every 2 weeks* (even-week parity from the anchor); *Every month on
+the 5th*; *Every year on December 31*. Month lengths clamp instead of skipping
+(31-day anchors land on Feb 28, then return to the 31st).
+
+Semantics, by design:
+
+- **One rolling occurrence.** Complete (or *Skip this occurrence*) advances
+  `dueDate` to the next pattern date — the same id, the same reminders, the
+  same history; nothing multiplies when two devices roll at once.
+- **Reminders follow the roll.** Relative reminder rows are re-armed against
+  the new occurrence (toast: *next is … · N reminder(s) re-armed*); custom
+  absolute times cannot repeat on a schedule, so they must be re-entered per
+  occurrence — the roll never silently drops or drifts them.
+- **Series vs occurrence.** Changing the due date via list/calendar/editor
+  asks: shift the whole series (anchor moves by the same delta, rhythm
+  preserved) or move this occurrence only (anchor untouched — the pattern
+  returns to its rhythm next cycle). Changing the rule or title/notes/priority/tags
+  through *Edit the series* re-anchors silently; *Stop repeating* keeps the
+  current occurrence as a one-off.
+- **Calendar** shows the current occurrence as a real chip (with a ↻ marker)
+  and up to 14 upcoming dates as dashed ghost chips that click into the editor;
+  trashing removes the ghosts, restoring brings them back.
+- **Horizon.** A rule that yields no date within ~10 years completes the task
+  for good (*"no future occurrence within 10 years, marked done."*) rather
+  than storing a broken record.
 
 ## Where your data is stored
 
 | Location | Key / store | Contents |
 |---|---|---|
-| **IndexedDB** (primary) | db `zerotodo` → stores `tasks`, `trash`, `meta` | All live tasks, soft-deleted tasks, and `{schemaVersion, savedAt, settings}` |
+| **IndexedDB** (primary) | db `zerotodo` → stores `tasks`, `trash`, `meta` | All live tasks — recurrence included, since a recurring task is one record that rolls forward — soft-deleted tasks, and `{schemaVersion, savedAt, settings}` |
 | **localStorage** (redundant mirror) | `todo_backup_v1` | A full JSON copy of tasks + trash + settings, rewritten after *every* successful IndexedDB write |
 | **localStorage** (drafts) | `todo_draft_v1` | Your in-progress form text, auto-saved ~1.2 s after you stop typing |
 
@@ -204,10 +262,17 @@ tasks, trash }`. You can also hand-edit it (carefully) and re-import.
 - `app.js` — UI, rendering, and user actions. Every mutation: mutate in-memory
   state → `store.commit(ops)` → re-render.
 - `index.html` / `styles.css` — markup and themeable styles.
-- `test/smoke.mjs` — Node smoke tests for the storage engine (run
-  `node test/smoke.mjs`). They exercise: fresh start, IDB persistence,
+- `server/test.mjs` — Node smoke tests for the storage engine (run
+  `node server/test.mjs`). They exercise: fresh start, IDB persistence,
   IDB-loss → backup restore, backup corruption, quota failure + auto-resync,
   migrations, payload validation, and cross-tab refresh.
+- `server/test-storage.mjs` — the engine headless in Node, including the
+  recurrence math (fixed-date cases for every rule family, clamping, parity
+  and the horizon).
+- `server/test-ui.mjs` — jsdom end-to-end sections (§1–§18): **§18** replays
+  the full recurring flow through the real composer — rule pickers, rolling
+  on completion, the series sheet verbs, the occurrence-vs-series dialog,
+  calendar ghosts, trash/restore of patterns and export fidelity.
 
 To change the data shape in the future: bump `SCHEMA_VERSION` in `storage.js`
 and add a `MIGRATIONS[oldVersion]` step that transforms only known fields

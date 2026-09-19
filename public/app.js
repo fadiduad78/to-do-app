@@ -41,6 +41,7 @@
     projectBar: $('projectBar'), projectDetail: $('projectDetail'),
     calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
     fRecurrence: $('f-recurrence'), remRows: $('remRows'), addRemBtn: $('addRemBtn'),
+    recurPanel: $('recurPanel'), rcEvery: $('rcEvery'), rcUnit: $('rcUnit'), rcDays: $('rcDays'), rcHint: $('rcHint'),
     taskList: $('taskList'), emptyState: $('emptyState'),
     trashBar: $('trashBar'), trashCount: $('trashCount'), emptyTrashBtn: $('emptyTrashBtn'),
     settingsPanel: $('settingsPanel'), themeSelect: $('themeSelect'), reminderSelect: $('reminderSelect'),
@@ -615,6 +616,7 @@
             '<span class="badge prio-' + t.priority + '">' + prioLabel + '</span>' +
             (due && !inTrash ? '<span class="badge due ' + due.cls + '">' + due.text + '</span>' : '') +
             (!inTrash && remPendingFor(t.id) ? '<span class="badge rem" title="' + remPendingFor(t.id) + ' pending reminder(s), next: ' + esc(remNextLabel(t.id)) + '">🔔 ' + remPendingFor(t.id) + '</span>' : '') +
+            (t.recurrence ? '<span class="badge recur" title="' + esc(recurLabel(t)) + ' · completing rolls to the next date; ↻ opens series actions' + '">↻ ' + esc(recurLabel(t)) + '</span>' : '') +
             (function () {
               if (!t.projectId) return '';
               const pj = S.projects.find((p) => p.id === t.projectId);
@@ -634,7 +636,8 @@
           (inTrash
             ? '<button class="btn btn-ghost btn-sm" data-act="restore" title="Restore task">Restore</button>' +
               '<button class="btn btn-danger-ghost btn-sm" data-act="destroy" title="Delete forever">Delete forever</button>'
-            : '<button class="btn btn-ghost btn-sm btn-icon" data-act="up" title="Move up" aria-label="Move up">↑</button>' +
+            : (t.recurrence ? '<button class="btn btn-ghost btn-sm btn-icon" data-act="series" title="Series: complete / skip / edit occurrence or series / stop repeating" aria-label="Recurring series options">↻</button>' : '') +
+              '<button class="btn btn-ghost btn-sm btn-icon" data-act="up" title="Move up" aria-label="Move up">↑</button>' +
               '<button class="btn btn-ghost btn-sm btn-icon" data-act="down" title="Move down" aria-label="Move down">↓</button>' +
               '<button class="btn btn-ghost btn-sm" data-act="edit" title="Edit task">Edit</button>' +
               '<button class="btn btn-danger-ghost btn-sm" data-act="delete" title="Move to trash (undoable)">Delete</button>') +
@@ -722,6 +725,15 @@
       ? prefill.projectId
       : (editing ? (editing.projectId || '') : (S.settings.filterProject || ''));
     els.fRecurrence.value = (prefill && prefill.recurrence != null ? prefill.recurrence : (editing ? (editing.recurrence || '') : '')) || '';
+    {
+      const rr = (prefill && prefill.recurRule) || (editing && editing.recurRule) || null;
+      S.ui.recurPanel = {
+        every: rr && Number(rr.every) >= 1 ? Math.min(99, Math.floor(Number(rr.every))) : 1,
+        unit: rr && ['day', 'week', 'month', 'year'].indexOf(rr.unit) >= 0 ? rr.unit : 'week',
+        weekdays: rr && Array.isArray(rr.weekdays) ? rr.weekdays.filter((x) => Number.isInteger(x) && x >= 0 && x <= 6) : [],
+      };
+      renderRecurPanel();
+    }
     // Reminder editor: editable rows = pending/skipped; fired history stays put.
     S.ui.remRows = prefill && Array.isArray(prefill.remRows)
       ? prefill.remRows.map((x) => ({ ...x }))
@@ -738,7 +750,12 @@
       blk.scrollIntoView({ behavior: 'smooth', block: 'center' });
       els.addRemBtn.focus({ preventScroll: true });
     }
-    setTimeout(() => { if (!opts.focusReminders) els.fTitle.focus(); }, 60);
+    if (opts.focusRecurrence) {
+      const blk = els.fRecurrence.closest('.recur-panel') || els.fRecurrence.closest('label') || els.fRecurrence;
+      blk.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      els.fRecurrence.focus({ preventScroll: true });
+    }
+    setTimeout(() => { if (!opts.focusReminders && !opts.focusRecurrence) els.fTitle.focus(); }, 60);
     refreshDraftResumeUI();
   }
 
@@ -754,6 +771,7 @@
     return {
       title: els.fTitle.value,
       recurrence: els.fRecurrence.value || null,
+      recurRule: els.fRecurrence.value === 'custom' ? curRecurRule() : null,
       description: els.fDesc.value.trim(),
       dueDate: els.fDue.value || null,
       dueTime: els.fTime.value || null,
@@ -777,10 +795,18 @@
     if (S.ui.editingId && byId(S.ui.editingId)) {
       const t = byId(S.ui.editingId);
       const prevDue = { dueDate: t.dueDate, dueTime: t.dueTime };
+      const prevRecur = { recurrence: t.recurrence, rule: t.recurRule ? { ...t.recurRule } : null, anchor: t.recurAnchor, dueDate: t.dueDate };
       Object.assign(t, {
         title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
-        priority: v.priority, tags: v.tags, projectId: v.projectId, recurrence: v.recurrence, updatedAt: now,
+        priority: v.priority, tags: v.tags, projectId: v.projectId,
+        recurrence: v.recurrence, recurRule: v.recurRule, updatedAt: now,
       });
+      if (!t.recurrence) t.recurAnchor = null;
+      else {
+        const ruleChanged = prevRecur.recurrence !== t.recurrence || JSON.stringify(prevRecur.rule) !== JSON.stringify(t.recurRule || null);
+        if (ruleChanged || !t.recurAnchor) t.recurAnchor = t.dueDate || ymd(new Date()); // a NEW pattern starts from what you see now
+        else await askRecurrenceScope(t, prevRecur); // unchanged pattern, moved date: ask who moves
+      }
       ops = [{ store: STORES.tasks, op: 'put', value: t }];
       await askShiftCustomReminders(t, v.remRows, prevDue);
       remSyncTask(t, v.remRows, ops);
@@ -794,6 +820,8 @@
         priority: v.priority, tags: v.tags,
         projectId: v.projectId,
         recurrence: v.recurrence,
+        recurRule: v.recurRule || null,
+        recurAnchor: v.recurrence ? (v.dueDate || ymd(new Date())) : null,
         status: 'active',
         sortOrder: S.tasks.length ? base - 1 : 0,
         createdAt: now, updatedAt: now,
@@ -826,7 +854,7 @@
       taskId: S.ui.editingId,
       title: v.title, description: v.description, dueDate: v.dueDate, dueTime: v.dueTime,
       priority: v.priority, tags: v.tags,
-      projectId: v.projectId, recurrence: v.recurrence, remRows: v.remRows,
+      projectId: v.projectId, recurrence: v.recurrence, recurRule: v.recurRule, remRows: v.remRows,
       savedAt: Date.now(),
     };
   }
@@ -913,44 +941,41 @@
       ops.push({ store: STORES.tasks, op: 'put', value: t });
       remReviveSkipped(t.id, ops, now); // re-check reminders of the un-completed task
     } else if (t.recurrence) {
-      // Recurring: completing rolls the task to its next occurrence instead
-      // of leaving it done — dueDate is rewritten in place (same task, same
-      // id), and its cycle-linked reminders are re-armed against the new date.
-      const base = t.dueDate || ymd(new Date());
-      t.dueDate = remNextOccurrence(base, t.recurrence);
-      t.status = 'active';
-      t.updatedAt = now;
-      ops.push({ store: STORES.tasks, op: 'put', value: t });
-      let rearmed = 0;
-      for (const r of S.reminders) {
-        if (r.taskId !== t.id || r.reminderType === 'custom') continue; // custom times are absolute, not per-cycle
-        r.status = 'pending'; r.delivered = false; r.dismissed = false;
-        r.triggerAt = remComputeTrigger(r, t); r.pinned = false;
-        if (r.triggerAt == null) {
-          ops.push({ store: STORES.reminders, op: 'delete', key: r.id });
-          S.reminders = S.reminders.filter((x) => x.id !== r.id);
-          continue;
-        }
-        r.updatedAt = now;
-        ops.push({ store: STORES.reminders, op: 'put', value: r });
-        rearmed++;
+      // Recurring: completing means DONE FOR THIS CYCLE — the task rolls to
+      // its next occurrence in place (same record, same id, same history).
+      // Exactly ONE occurrence is ever materialized: "no infinite future
+      // tasks" is a structural property, not a cleanup pass. If the rule
+      // produces no future date (horizon/end), the task just completes.
+      const adv = recurAdvance(t, ops, now);
+      if (adv) {
+        t.status = 'active';
+        t.updatedAt = now;
+        ops.push({ store: STORES.tasks, op: 'put', value: t });
+        toast('Completed this occurrence — next is ' + ((formatDue(adv.next) || {}).txt || adv.next) + (adv.rearmed ? ' · ' + adv.rearmed + ' reminder(s) re-armed' : ''));
+      } else {
+        finishComplete(t, ops, now);
+        toast('Recurring task finished — no future occurrence within 10 years, marked done.');
       }
-      toast('Recurring task completed — rolled to ' + t.dueDate + (rearmed ? ' · ' + rearmed + ' reminder(s) re-armed' : ''));
     } else {
-      t.status = 'completed';
-      t.updatedAt = now;
-      ops.push({ store: STORES.tasks, op: 'put', value: t });
-      // A finished task must not nag: its pending reminders become skipped.
-      for (const r of S.reminders) {
-        if (r.taskId === t.id && r.status === 'pending') {
-          r.status = 'skipped'; r.updatedAt = now;
-          ops.push({ store: STORES.reminders, op: 'put', value: r });
-        }
-      }
+      finishComplete(t, ops, now);
     }
     await store.commit(ops);
     renderAll();
     remReconcile();
+  }
+
+  /** The plain completion path: mark done + skip every pending schedule. */
+  function finishComplete(t, ops, now) {
+    t.status = 'completed';
+    t.updatedAt = now;
+    ops.push({ store: STORES.tasks, op: 'put', value: t });
+    // A finished task must not nag: its pending reminders become skipped.
+    for (const r of S.reminders) {
+      if (r.taskId === t.id && r.status === 'pending') {
+        r.status = 'skipped'; r.updatedAt = now;
+        ops.push({ store: STORES.reminders, op: 'put', value: r });
+      }
+    }
   }
 
   /** Soft delete: move to trash (single atomic tx touching both stores). */
@@ -1688,7 +1713,7 @@
       overdue: tasks.filter((t) => t.status !== 'completed' && ds < today).length,
     };
   }
-  function calChip(t) {
+  function calChip(t, ghost) {
     const done = t.status === 'completed';
     const due = formatDue(t.dueDate, done);
     const overCls = due && due.cls === 'overdue' ? ' is-over' : '';
@@ -1699,9 +1724,15 @@
       ? '<span class="cal-rem" data-remtid="' + esc(t.id) + '" role="button" tabindex="-1" title="🔔 ' + nRem +
         ' pending reminder(s) — next: ' + esc(remNextLabel(t.id)) + ' — click to configure">🔔 ' + nRem + '</span>'
       : '';
-    return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + '" data-tid="' + esc(t.id) + '" draggable="true"' +
-      ' title="' + esc((t.dueTime ? t.dueTime + ' — ' : '') + t.title) + '">' +
+    if (ghost) {
+      return '<span class="cal-chip prio-' + t.priority + ' is-ghost" data-gtid="' + esc(t.id) + '"' +
+        ' title="↻ Future occurrence — ' + esc(recurLabel(t)) + ' (click to edit the current occurrence)">' +
+        '<i class="cal-dot" aria-hidden="true"></i>' + (t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') + '↻ ' + esc(truncate(t.title, 18)) + '</span>';
+    }
+    return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + (t.recurrence ? ' is-recur' : '') + '" data-tid="' + esc(t.id) + '" draggable="true"' +
+      ' title="' + esc((t.dueTime ? t.dueTime + ' — ' : '') + t.title + (t.recurrence ? ' — ' + recurLabel(t) : '')) + '">' +
       '<i class="cal-dot" aria-hidden="true"></i>' + (t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') +
+      (t.recurrence ? '<i class="cal-rmark" aria-hidden="true" title="Recurring — completes roll forward">↻</i>' : '') +
       bell + (done ? '✓ ' : '') + esc(truncate(t.title, 22)) + '</span>';
   }
   function calMonthCell(ds, dim) {
@@ -1716,13 +1747,41 @@
       '</span>' +
       '<div class="cal-chips">' + shown.map((t) => calChip(t)).join('') +
         (more > 0 ? '<button class="cal-more" data-cmore="' + ds + '" type="button">+' + more + ' more</button>' : '') +
+        (function () {
+          const gs = recurGhosts.get(ds) || [];
+          if (!gs.length) return '';
+          const vis = more > 0 ? [] : gs.slice(0, Math.max(0, 3 - shown.length));
+          return vis.map((x) => calChip(x, true)).join('') + (gs.length > vis.length ? '<span class="cal-more" title="more recurring occurrences">↻+' + (gs.length - vis.length) + '</span>' : '');
+        })() +
       '</div></div>';
   }
 
+  // Ghosts: FUTURE occurrences of recurring tasks are shown in the calendar
+  // as display-only previews (dashed ↻ chips) — they are never records, so
+  // there is nothing to spam, sync or clean up. Completing rolls the REAL
+  // chip forward and the ghosts recompute.
+  let recurGhosts = new Map();
+  function buildRecurGhosts() {
+    recurGhosts = new Map();
+    for (const t of S.tasks) {
+      if (!t.recurrence || t.status === 'completed' || !calVisible(t)) continue;
+      const rule = helpers.recurOf(t.recurrence, t.recurRule);
+      if (!rule) continue;
+      let ds = t.dueDate || ymd(new Date());
+      for (let i = 0; i < 14; i++) {
+        const nx = helpers.recurNextAfter(ds, t.recurAnchor || (t.dueDate || ds), rule);
+        if (!nx) break;
+        if (!recurGhosts.has(nx)) recurGhosts.set(nx, []);
+        recurGhosts.get(nx).push(t);
+        ds = nx;
+      }
+    }
+  }
   function renderCalendar() {
     const cal = S.ui.cal;
     const a = ymdParse(cal.anchor);
     const f = calFilters();
+    buildRecurGhosts();
     let title = '';
     let body = '';
 
@@ -1751,16 +1810,19 @@
       const allDay = '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span>' +
         days.map((ds) => {
           const ts = calTasksOn(ds).filter((t) => !t.dueTime);
+          const gs = (recurGhosts.get(ds) || []).filter((t) => !t.dueTime);
           return '<div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' +
-            ts.slice(0, 4).map((t) => calChip(t)).join('') + (ts.length > 4 ? '<span class="cal-more">…+' + (ts.length - 4) + '</span>' : '') + '</div>';
+            ts.slice(0, 4).map((t) => calChip(t)).join('') + (ts.length > 4 ? '<span class="cal-more">…+' + (ts.length - 4) + '</span>' : '') +
+            gs.map((x) => calChip(x, true)).join('') + '</div>';
         }).join('') + '</div>';
       let rows = '';
       for (let h = 0; h < 24; h++) {
         const perDay = days.map((ds) => calTasksOn(ds).filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h));
-        if ((h < 6 || h > 22) && !perDay.some((ts) => ts.length)) continue; // collapse quiet hours
+        const perDayG = days.map((ds) => (recurGhosts.get(ds) || []).filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h));
+        if ((h < 6 || h > 22) && !perDay.some((ts) => ts.length) && !perDayG.some((ts) => ts.length)) continue; // collapse quiet hours
         rows += '<div class="cal-row"><span class="cal-hour-lbl">' + String(h).padStart(2, '0') + ':00</span>' +
           days.map((ds, i) => '<div class="cal-cell slot' + (perDay[i].length ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '">' +
-            perDay[i].map((t) => calChip(t)).join('') + '</div>').join('') + '</div>';
+            perDay[i].map((t) => calChip(t)).join('') + perDayG[i].map((x) => calChip(x, true)).join('') + '</div>').join('') + '</div>';
       }
       body = '<div class="cal-week-heads">' + heads + '</div><div class="cal-scroll">' + allDay + rows + '</div>';
     } else { // day
@@ -1771,18 +1833,20 @@
       const allday = st.tasks.filter((t) => !t.dueTime);
       const early = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) < 6);
       const late = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) > 22);
+      const gs = recurGhosts.get(ds) || []; // display-only previews of the series
       let rows = '';
       for (let h = 6; h <= 22; h++) {
         const ts = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h);
+        const tg = gs.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h);
         rows += '<div class="cal-row day"><span class="cal-hour-lbl">' + String(h).padStart(2, '0') + ':00</span>' +
-          '<div class="cal-cell slot' + (ts.length ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '">' +
-          ts.map((t) => calChip(t)).join('') + '</div></div>';
+          '<div class="cal-cell slot' + ((ts.length || tg.length) ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '">' +
+          ts.map((t) => calChip(t)).join('') + tg.map((x) => calChip(x, true)).join('') + '</div></div>';
       }
       body = '<div class="cal-day-summary"><span>' + st.tasks.length + ' task(s)</span><span>·</span>' +
         '<span>' + st.done + ' done</span>' + (st.overdue ? '<span>·</span><span class="cal-over">⚠ ' + st.overdue + ' overdue</span>' : '') +
         '<span class="spacer"></span><span class="cal-mini"><i style="width:' + pct + '%"></i></span><span>' + pct + '%</span>' +
         '<button class="btn btn-sm btn-primary" data-cnew="' + ds + '" type="button">＋ New task</button></div>' +
-        (allday.length ? '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span><div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' + allday.map((t) => calChip(t)).join('') + '</div></div>' : '') +
+        (allday.length || gs.some((x) => !x.dueTime) ? '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span><div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' + allday.map((t) => calChip(t)).join('') + gs.filter((x) => !x.dueTime).map((x) => calChip(x, true)).join('') + '</div></div>' : '') +
         (early.length ? '<div class="cal-row"><span class="cal-hour-lbl">Early</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="3">' + early.map((t) => calChip(t)).join('') + '</div></div>' : '') +
         rows +
         (late.length ? '<div class="cal-row"><span class="cal-hour-lbl">Late</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="23">' + late.map((t) => calChip(t)).join('') + '</div></div>' : '');
@@ -1874,6 +1938,8 @@
     });
   }
   function onCalHostClick(e) {
+    const gh = e.target.closest('.cal-chip.is-ghost');
+    if (gh) { if (gh.dataset.gtid && byId(gh.dataset.gtid)) openComposer({ mode: 'edit', taskId: gh.dataset.gtid }); return; }
     const bell = e.target.closest('[data-remtid]');
     if (bell) { openComposer({ mode: 'edit', taskId: bell.dataset.remtid, focusReminders: true }); return; }
     const chip = e.target.closest('.cal-chip');
@@ -1974,15 +2040,6 @@
     }
     const base = dueEpochFor(t);
     return base == null ? null : base - (REM_OFFSET_MIN[r.reminderType] || 0) * 60000;
-  }
-  function remNextOccurrence(ds, kind) {
-    const [y, m, d] = ds.split('-').map(Number);
-    if (kind === 'weekly') return ymd(new Date(y, m - 1, d + 7));
-    if (kind === 'monthly') {
-      const last = new Date(y, m + 1, 0).getDate(); // days in the NEXT month (m here is 1-based)
-      return ymd(new Date(y, m, Math.min(d, last))); // Jan 31 → Feb 28, never Mar 2
-    }
-    return ymd(new Date(y, m - 1, d + 1));
   }
   function remTaskOf(id) { return S.tasks.find((t) => t.id === id) || S.trash.find((t) => t.id === id) || null; }
   function remPendings(taskId) { return S.reminders.filter((r) => r.taskId === taskId && r.status === 'pending' && r.enabled); }
@@ -2314,6 +2371,195 @@
     });
   }
 
+  /* ========================= Recurrence (series tools) ======================
+     The math lives in storage.js helpers (single engine for app, tests and
+     validation). This layer only orchestrates: roll-on-complete, the composer
+     custom panel, the per-series action sheet, and the occurrence-vs-series
+     question when a date is edited on a live pattern. */
+
+  /** Roll a recurring task to its next occurrence + re-arm its cycle-linked
+   *  reminders against the new date. Returns { next, rearmed } or null when
+   *  the rule has no future occurrence within the horizon. */
+  function recurAdvance(t, ops, now) {
+    const rule = t.recurrence ? helpers.recurOf(t.recurrence, t.recurRule) : null;
+    if (!rule) return null;
+    const base = t.dueDate || ymd(new Date());
+    const next = helpers.recurNextAfter(base, t.recurAnchor || base, rule);
+    if (!next) return null;
+    const prevDue = t.dueDate;
+    t.dueDate = next;
+    let rearmed = 0;
+    for (const r of S.reminders) {
+      if (r.taskId !== t.id || r.reminderType === 'custom' || r.reminderType === 'overdue') continue; // custom is absolute; overdue is re-armed by reconcile's forDue policy
+      r.status = 'pending'; r.delivered = false; r.dismissed = false;
+      r.triggerAt = remComputeTrigger(r, t); r.pinned = false;
+      if (r.triggerAt == null) {
+        ops.push({ store: STORES.reminders, op: 'delete', key: r.id });
+        S.reminders = S.reminders.filter((x) => x.id !== r.id);
+        continue;
+      }
+      r.updatedAt = now;
+      ops.push({ store: STORES.reminders, op: 'put', value: r });
+      rearmed++;
+    }
+    void prevDue;
+    return { next, rearmed };
+  }
+
+  const RECUR_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  function recurLabel(t) {
+    const r = t.recurrence ? helpers.recurOf(t.recurrence, t.recurRule) : null;
+    if (!r) return 'Does not repeat';
+    const anchor = ymdParse(t.recurAnchor || t.dueDate || ymd(new Date()));
+    if (r.unit === 'week' && r.every === 1 && r.weekdays && r.weekdays.join() === '1,2,3,4,5') return 'Every weekday (Mon–Fri)';
+    const plural = (n, w) => (n === 1 ? 'every ' + w : 'every ' + n + ' ' + w + 's');
+    if (r.unit === 'day') return r.every === 1 ? 'Every day' : plural(r.every, 'day').replace(/^e/, 'E');
+    if (r.unit === 'week') {
+      const on = r.weekdays ? r.weekdays.map((d) => RECUR_DOW[d]).join(', ') : RECUR_DOW[anchor.getDay()];
+      return (r.every === 1 ? 'Weekly' : plural(r.every, 'week').replace(/^e/, 'E')) + ' on ' + on;
+    }
+    if (r.unit === 'month') return (r.every === 1 ? 'Monthly' : plural(r.every, 'month').replace(/^e/, 'E')) + ' on day ' + anchor.getDate() + (anchor.getDate() >= 29 ? ' (clamped in shorter months)' : '');
+    const md = (anchor.getMonth() + 1) + '/' + anchor.getDate();
+    return (r.every === 1 ? 'Yearly' : plural(r.every, 'year').replace(/^e/, 'E')) + ' on ' + md;
+  }
+
+  /* composer panel state: read/write + live preview of what the rule means */
+  function curRecurRule() {
+    const st = S.ui.recurPanel || { every: 1, unit: 'week', weekdays: [] };
+    return { unit: st.unit, every: st.every, weekdays: st.unit === 'week' && st.weekdays.length ? [...st.weekdays].sort((a, b) => a - b) : null };
+  }
+  function renderRecurPanel() {
+    if (!els.recurPanel) return;
+    const on = els.fRecurrence.value === 'custom';
+    els.recurPanel.hidden = !on;
+    if (!on) return;
+    const st = S.ui.recurPanel || { every: 1, unit: 'week', weekdays: [] };
+    els.rcEvery.value = st.every;
+    els.rcUnit.value = st.unit;
+    els.rcDays.hidden = st.unit !== 'week';
+    for (const b of els.rcDays.querySelectorAll('[data-rday]')) b.classList.toggle('on', st.weekdays.indexOf(Number(b.dataset.rday)) >= 0);
+    updateRecurHint();
+  }
+  function updateRecurHint() {
+    if (!els.rcHint || els.fRecurrence.value !== 'custom') return;
+    const rule = helpers.recurOf('custom', curRecurRule());
+    const anchor = els.fDue.value || ymd(new Date());
+    let ds = anchor; const parts = [];
+    for (let i = 0; i < 3; i++) {
+      const nx = helpers.recurNextAfter(ds, anchor, rule);
+      if (!nx) break;
+      parts.push(((formatDue(nx) || {}).txt || nx).replace(/^Due /, ''));
+      ds = nx;
+    }
+    els.rcHint.textContent = parts.length
+      ? 'Next occurrences: ' + parts.join(' · ') + ' (pattern starts from the due date)'
+      : 'No occurrence within 10 years — this pattern would end immediately.';
+  }
+
+  /** Unchanged pattern + moved date → who moves? Default (cancel) keeps the
+   *  series rhythm and changes only this occurrence. */
+  async function askRecurrenceScope(t, prevRecur) {
+    if (!t.recurrence || !prevRecur.recurrence || prevRecur.recurrence !== t.recurrence) return;
+    if (!prevRecur.dueDate || !t.dueDate || prevRecur.dueDate === t.dueDate) return;
+    const delta = Math.round((ymdParse(t.dueDate) - ymdParse(prevRecur.dueDate)) / DAY_MS);
+    if (!delta) return;
+    const shift = await confirmDialog({
+      title: 'Move the whole series?',
+      body: 'This recurring task\u2019s date moved ' + Math.abs(delta) + ' day' + (Math.abs(delta) === 1 ? '' : 's') +
+        '. Shifting the whole series also moves future occurrences to the new rhythm; keeping it changes only this occurrence.',
+      confirmLabel: 'Shift entire series',
+      cancelLabel: 'This occurrence only',
+    });
+    if (shift) {
+      const na = ymdParse(prevRecur.anchor || prevRecur.dueDate);
+      na.setDate(na.getDate() + delta);
+      t.recurAnchor = ymd(na);
+    }
+  }
+
+  /* per-series action sheet: the brief's occurrence vs series verbs */
+  function seriesDialog(t) {
+    return new Promise((resolve) => {
+      const ov = document.createElement('div');
+      ov.className = 'modal-overlay';
+      const card = document.createElement('div');
+      card.className = 'modal modal-series';
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-modal', 'true');
+      const h = document.createElement('h3');
+      h.textContent = '↻ ' + t.title;
+      const p = document.createElement('p');
+      p.className = 'modal-body muted small';
+      p.textContent = recurLabel(t) + (t.dueDate ? ' · this occurrence: ' + t.dueDate : '') + (t.recurAnchor ? ' · anchor: ' + t.recurAnchor : '');
+      const wrap = document.createElement('div');
+      wrap.className = 'modal-actions series-actions';
+      const mkB = (act, label, cls) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn ' + (cls || 'btn-ghost');
+        b.dataset.s = act;
+        b.textContent = label;
+        wrap.appendChild(b);
+      };
+      mkB('complete', '✓ Complete this occurrence', 'btn-primary');
+      mkB('skip', '↷ Skip this occurrence');
+      mkB('edit-occ', '✎ Edit this occurrence');
+      mkB('edit-series', '⛓ Edit entire series');
+      mkB('stop', '⏹ Stop repeating', 'btn-danger-ghost');
+      mkB('', 'Close');
+      card.append(h, p, wrap);
+      ov.appendChild(card);
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        document.removeEventListener('keydown', onKey, true);
+        ov.remove();
+        resolve(val);
+      };
+      const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+      ov.addEventListener('click', (e) => {
+        if (e.target === ov) { finish(null); return; }
+        const b = e.target.closest('[data-s]');
+        if (b) finish(b.dataset.s || null);
+      });
+      document.addEventListener('keydown', onKey, true);
+      els.modalHost.appendChild(ov);
+    });
+  }
+
+  async function skipOccurrence(t) {
+    const ops = [];
+    const adv = recurAdvance(t, ops, Date.now());
+    if (!adv) { toast('No future occurrence to skip to.'); return; }
+    t.updatedAt = Date.now();
+    ops.push({ store: STORES.tasks, op: 'put', value: t });
+    await store.commit(ops);
+    renderAll();
+    remReconcile();
+    toast('Skipped this occurrence — next is ' + ((formatDue(adv.next) || {}).txt || adv.next) + '.');
+  }
+
+  async function stopRepeating(t) {
+    t.recurrence = null;
+    t.recurRule = null;
+    t.recurAnchor = null;
+    t.updatedAt = Date.now();
+    await store.commit([{ store: STORES.tasks, op: 'put', value: t }]);
+    renderAll();
+    remReconcile();
+    toast('Repetition stopped — the task stays as a one-off.');
+  }
+
+  async function onSeriesAction(act, t) {
+    if (!act) return;
+    if (act === 'complete') await toggleTask(t.id);
+    else if (act === 'skip') await skipOccurrence(t);
+    else if (act === 'edit-occ') openComposer({ mode: 'edit', taskId: t.id });
+    else if (act === 'edit-series') openComposer({ mode: 'edit', taskId: t.id, focusRecurrence: true });
+    else if (act === 'stop') await stopRepeating(t);
+  }
+
   /* --------------------------- Filters & search --------------------------- */
 
   async function setFilterMode(m) {
@@ -2498,6 +2744,32 @@
     els.projectDetail.addEventListener('click', onProjectDetailClick);
 
     // Task list: click actions
+    // recurrence controls in the composer
+    els.fRecurrence.addEventListener('change', () => {
+      if (els.fRecurrence.value === 'custom' && !S.ui.recurPanel) S.ui.recurPanel = { every: 1, unit: 'week', weekdays: [] };
+      renderRecurPanel();
+      scheduleDraft();
+    });
+    if (els.rcEvery) els.rcEvery.addEventListener('input', () => {
+      const n = Math.max(1, Math.min(99, Math.floor(Number(els.rcEvery.value) || 1)));
+      if (S.ui.recurPanel) S.ui.recurPanel.every = n;
+      updateRecurHint(); scheduleDraft();
+    });
+    if (els.rcUnit) els.rcUnit.addEventListener('change', () => {
+      if (S.ui.recurPanel) S.ui.recurPanel.unit = els.rcUnit.value;
+      renderRecurPanel(); scheduleDraft();
+    });
+    if (els.rcDays) els.rcDays.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-rday]');
+      if (!b || !S.ui.recurPanel) return;
+      const d = Number(b.dataset.rday);
+      const arr = S.ui.recurPanel.weekdays;
+      const i = arr.indexOf(d);
+      if (i >= 0) arr.splice(i, 1); else arr.push(d);
+      renderRecurPanel(); scheduleDraft();
+    });
+    if (els.fDue) els.fDue.addEventListener('input', updateRecurHint);
+
     els.taskList.addEventListener('click', (e) => {
       const prow = e.target.closest('.project-row');
       if (prow) {
@@ -2530,6 +2802,8 @@
       if (btn && btn.dataset.act === 'down') { moveVisible(id, 1); return; }
       if (btn && btn.dataset.act === 'edit') { openComposer({ mode: 'edit', taskId: id }); return; }
       if (btn && btn.dataset.act === 'delete') { deleteTask(id); return; }
+      if (btn && btn.dataset.act === 'series') { const tt = byId(id); if (tt) seriesDialog(tt).then((a) => onSeriesAction(a, tt)); return; }
+      if (btn && btn.dataset.act === 'series') { const tt = byId(id); if (tt) seriesDialog(tt).then((a) => onSeriesAction(a, tt)); return; }
       // Clicking the task body opens the editor
       if (e.target.closest('.task-main')) openComposer({ mode: 'edit', taskId: id });
     });

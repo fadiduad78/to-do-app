@@ -1064,7 +1064,7 @@ await sleep(300);
       await wait('composer-open-2', () => !document.getElementById('composer').hidden);
       checks.push(['composer', await scan(vw)]);
       // iOS zoom guard: every typable control renders ≥ 16px
-      const smallFonts = await page.evaluate(() => ['searchInput', 'f-title', 'f-due', 'f-time', 'f-tags', 'f-priority']
+      const smallFonts = await page.evaluate(() => ['searchInput', 'f-title', 'f-due', 'f-time', 'f-tags', 'f-priority', 'rcEvery', 'rcUnit']
         .filter((id) => { const e = document.getElementById(id); return e && parseFloat(getComputedStyle(e).fontSize) < 16; }));
       checks.push(['fonts', smallFonts]);
       await pclick('#cancelTaskBtn');
@@ -1280,7 +1280,220 @@ await sleep(300);
   okBtn.click(); await sleep(280);
   ok(!remMirror().tasks.some((x) => x.title === 'Assignment note') && !remMirror().trash.some((x) => x.title === 'Assignment note'), 'delete-forever leaves zero task rows anywhere');
   ok(!remMirror().reminders.some((r) => r.taskId === noteId2), '…and zero reminder records — nothing left that could ever fire');
-  if (fBtns.length) { const all = $$('.filter-btn').find((b) => /^all$/i.test(b.textContent.trim())); if (all) { all.click(); await sleep(140); } }
+  const allBtn = $$('.filter-btn').find((b) => /^all\b/i.test(b.textContent.trim()));
+  if (allBtn) { allBtn.click(); await sleep(140); }
+}
+
+/* ================== 18. Recurrence patterns + series lifecycle ================== */
+{
+  // The brief's guarantee set: 7 patterns incl. selected weekdays and custom
+  // every-N; completion produces exactly ONE next occurrence (rolling, never
+  // materialized futures); reminders re-arm per occurrence; the user commands
+  // 'this occurrence' vs 'the series'; and recurring tasks keep working with
+  // calendar ghosts, trash/restore, export, sync.
+  if ($('#calBtn').classList.contains('on')) { $('#calBtn').click(); await sleep(160); }
+  const allB = $$('.filter-btn').find((b) => /^all\b/i.test(b.textContent.trim())); // never inherit another section's filter
+  if (allB && !allB.classList.contains('on')) { allB.click(); await sleep(140); }
+  const P = (ds) => { const [y, m, d] = ds.split('-').map(Number); return new Date(y, m - 1, d); };
+  const F = (dt) => dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+  const addD = (ds, n) => { const d = P(ds); d.setDate(d.getDate() + n); return F(d); };
+  const dowOf = (ds) => P(ds).getDay();
+  const at = (ds, h, mi) => { const d = P(ds); d.setHours(h, mi, 0, 0); return d.getTime(); };
+  const nextDow = (fromYmd, want) => { let ds = addD(fromYmd, 1); while (dowOf(ds) !== want) ds = addD(ds, 1); return ds; };
+  const TOD = ymdS(new Date());
+  const taskCount = () => tsk().length;
+  const openEdit = (title) => { const li = $$('#taskList .task').find((x) => x.textContent.includes(title)); li.querySelector('[data-act="edit"]').click(); return li; };
+  const dlgBtn = (re) => [...doc.querySelectorAll('#modalHost .modal-actions .btn')].find((b) => re.test(b.textContent));
+  const countBefore = taskCount();
+
+  /* ---- the UI vocabulary matches the brief ---- */
+  const opts = [...$('#f-recurrence').options].map((o) => o.value);
+  ok(JSON.stringify(opts) === JSON.stringify(['', 'daily', 'weekdays', 'weekly', 'monthly', 'yearly', 'custom']),
+    'Repeat select: Does not repeat / Daily / Weekdays / Weekly / Monthly / Yearly / Custom');
+  const optTxt = [...$('#f-recurrence').options].map((o) => o.textContent).join('|');
+  ok(/Every day/.test(optTxt) && /Every weekday/.test(optTxt) && /Custom/.test(optTxt), 'option labels are human, not enums');
+
+  /* ---- 1. custom rule: every 2 weeks on Mon+Fri persists verbatim ---- */
+  $('#newTaskBtn').click(); await sleep(90);
+  $('#f-title').value = 'Gym loop';
+  $('#f-due').value = TOD; $('#f-due').dispatchEvent(new window.Event('input', { bubbles: true }));
+  $('#f-recurrence').value = 'custom'; $('#f-recurrence').dispatchEvent(new window.Event('change', { bubbles: true }));
+  await sleep(80);
+  ok(!$('#recurPanel').hidden, 'choosing Custom reveals the recurrence configuration');
+  $('#rcEvery').value = '2'; $('#rcEvery').dispatchEvent(new window.Event('input', { bubbles: true }));
+  $('#rcUnit').value = 'week'; $('#rcUnit').dispatchEvent(new window.Event('change', { bubbles: true }));
+  await sleep(60);
+  ok(!$('#rcDays').hidden, 'weekly units expose the weekday picker');
+  doc.querySelector('#rcDays [data-rday="1"]').click(); doc.querySelector('#rcDays [data-rday="5"]').click(); await sleep(60);
+  ok(/Next occurrences:/.test($('#rcHint').textContent), 'the panel previews what the rule means: ' + $('#rcHint').textContent.slice(0, 54));
+  await sleep(1300); // draft autosave debounce
+  {
+    const d = JSON.parse(window.localStorage.getItem('todo_draft_v1') || 'null');
+    ok(!!d && d.recurRule && d.recurRule.every === 2 && d.recurRule.weekdays.join() === '1,5', 'draft autosave carries the custom rule (crash before save is safe too)');
+  }
+  $('#saveTaskBtn').click(); await sleep(320);
+  {
+    const tg = tskOf('Gym loop');
+    ok(tg.recurrence === 'custom' && tg.recurRule && tg.recurRule.every === 2 && tg.recurRule.unit === 'week' && tg.recurRule.weekdays.join() === '1,5',
+      'custom rule persists on the task record (no side table, no copies)');
+    ok(tg.recurAnchor === TOD, 'a newly enabled pattern anchors on the current due date');
+  }
+
+  /* ---- 2. completion ROLLS (no materialized futures) ---- */
+  {
+    const before = tskOf('Gym loop').dueDate;
+    const idBefore = tskOf('Gym loop').id;
+    const c0 = tsk().length;
+    const li = $$('#taskList .task').find((x) => x.textContent.includes('Gym loop'));
+    li.querySelector('.check').click(); await sleep(300);
+    const after = tskOf('Gym loop');
+    ok(tsk().length === c0, 'completing a recurring task creates NOTHING — same task count, same record');
+    ok(after.id === idBefore && after.status === 'active' && after.dueDate !== before && P(after.dueDate) > P(before),
+      'the same record rolls to its next occurrence (in place, stays active)');
+    const dd = dowOf(after.dueDate);
+    ok(dd === 1 || dd === 5, 'and lands on a pattern day (Mon or Fri), not +1 blindly');
+    // independent recompute: next Mon/Fri where whole-weeks since anchor is even
+    let exp = addD(before, 1);
+    for (let guard = 0; guard < 40; guard++) {
+      const wk = Math.floor((P(exp) - P(TOD)) / (7 * 864e5));
+      if (wk % 2 === 0 && [1, 5].indexOf(dowOf(exp)) >= 0) break;
+      exp = addD(exp, 1);
+    }
+    ok(after.dueDate === exp, 'matches an independently computed every-2-weeks step (even weeks from anchor, Mon/Fri)');
+  }
+
+  /* ---- 3. skip + stop from the series sheet ---- */
+  {
+    const li = $$('#taskList .task').find((x) => x.textContent.includes('Gym loop'));
+    const sb = li.querySelector('[data-act="series"]');
+    ok(!!sb && /↻/.test(sb.textContent), 'recurring rows carry a series actions button');
+    sb.click(); await sleep(160);
+    const verbs = [...doc.querySelectorAll('#modalHost .modal-series [data-s]')].map((b) => b.dataset.s);
+    ok(verbs.join() === 'complete,skip,edit-occ,edit-series,stop,', 'the sheet offers the brief\u2019s verbs: complete / skip / edit occurrence / edit series / stop repeating');
+    const d0 = tskOf('Gym loop').dueDate;
+    const c1 = tsk().length;
+    doc.querySelector('#modalHost [data-s="skip"]').click(); await sleep(260);
+    ok(tskOf('Gym loop').dueDate !== d0 && tsk().length === c1, 'skip advances the occurrence — still no task proliferation');
+    $$('#taskList .task').find((x) => x.textContent.includes('Gym loop')).querySelector('[data-act="series"]').click(); await sleep(160);
+    doc.querySelector('#modalHost [data-s="stop"]').click(); await sleep(260);
+    const st = tskOf('Gym loop');
+    ok(st.recurrence === null && st.recurRule === null && st.recurAnchor === null, 'stop repeating clears the whole pattern (task survives as a one-off)');
+  }
+
+  /* ---- 4. weekly-on-Monday 20:00 with a 30-min reminder, per occurrence ---- */
+  const mon1 = nextDow(TOD, 1);
+  $('#newTaskBtn').click(); await sleep(90);
+  $('#f-title').value = 'Standup';
+  $('#f-due').value = mon1; $('#f-due').dispatchEvent(new window.Event('input', { bubbles: true }));
+  $('#f-time').value = '20:00'; $('#f-time').dispatchEvent(new window.Event('input', { bubbles: true }));
+  $('#f-recurrence').value = 'weekly'; $('#f-recurrence').dispatchEvent(new window.Event('change', { bubbles: true }));
+  $('#addRemBtn').click(); await sleep(60);
+  await setRowType(0, 'm30');
+  $('#saveTaskBtn').click(); await sleep(320);
+  {
+    const rs = remsFor('Standup');
+    const dueMs = at(mon1, 20, 0);
+    ok(rs.length === 1 && rs[0].status === 'pending' && rs[0].triggerAt === dueMs - 30 * 60e3, 'Every Monday 8 PM + “30 min before”: this occurrence\u2019s reminder armed on its own trigger');
+    // roll → the NEXT occurrence gets ITS own reminder instant
+    $$('#taskList .task').find((x) => x.textContent.includes('Standup')).querySelector('.check').click(); await sleep(300);
+    const due2 = tskOf('Standup').dueDate;
+    ok(due2 === addD(mon1, 7), 'weekly Monday rolls exactly +7d');
+    const r2 = remsFor('Standup')[0];
+    ok(r2.status === 'pending' && r2.triggerAt === at(due2, 20, 0) - 30 * 60e3,
+      '…and the SAME reminder record re-arms for the new occurrence (no duplicate fired into oblivion)');
+  }
+
+  /* ---- 5. edit THIS occurrence vs the SERIES ---- */
+  {
+    const due2 = tskOf('Standup').dueDate;
+    openEdit('Standup'); await sleep(140);
+    $('#f-due').value = addD(due2, 1); $('#f-due').dispatchEvent(new window.Event('input', { bubbles: true }));
+    $('#saveTaskBtn').click(); await sleep(200);
+    const occ = dlgBtn(/This occurrence only/); const ser = dlgBtn(/Shift entire series/);
+    ok(!!occ && !!ser, 'moving a recurring task\u2019s date asks: occurrence or series?');
+    occ.click(); await sleep(300);
+    ok(tskOf('Standup').recurAnchor === mon1, '“this occurrence only” keeps the series anchor on the ORIGINAL Monday');
+    const li = $$('#taskList .task').find((x) => x.textContent.includes('Standup'));
+    li.querySelector('.check').click(); await sleep(300);
+    ok(dowOf(tskOf('Standup').dueDate) === 1, '…so the NEXT occurrence returns to the original rhythm (Monday), not the moved Tuesday');
+    // now the series answer
+    const due3 = tskOf('Standup').dueDate;
+    openEdit('Standup'); await sleep(140);
+    $('#f-due').value = addD(due3, 1); $('#f-due').dispatchEvent(new window.Event('input', { bubbles: true }));
+    $('#saveTaskBtn').click(); await sleep(200);
+    dlgBtn(/Shift entire series/).click(); await sleep(300);
+    ok(tskOf('Standup').recurAnchor === addD(mon1, 1), '“shift entire series” moves the anchor by the same delta (Monday rhythm → Tuesday rhythm)');
+    const li2 = $$('#taskList .task').find((x) => x.textContent.includes('Standup'));
+    li2.querySelector('.check').click(); await sleep(300);
+    ok(dowOf(tskOf('Standup').dueDate) === 2, '…and future occurrences follow the new weekday (Tuesday)');
+  }
+
+  /* ---- 6. calendar: real chip + ghost previews of the pattern ---- */
+  const c4 = tsk().length;
+  {
+    $('#calBtn').click(); await sleep(220);
+    const mBtn = doc.querySelector('#calBar [data-cview="month"]');
+    if (mBtn && !mBtn.classList.contains('on')) { mBtn.click(); await sleep(160); }
+    for (const sel of $$('#calBar select')) if (sel.value !== '') { sel.value = ''; sel.dispatchEvent(new window.Event('change', { bubbles: true })); }
+    await sleep(180);
+    const sid = tskOf('Standup').id;
+    const cur = tskOf('Standup').dueDate;
+    for (let i = 0; i < 8 && !doc.querySelector(`#calHost [data-cdate="${cur}"]`); i++) {
+      const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(140); // walk to the month holding the occurrence
+    }
+    const real = doc.querySelector(`#calHost [data-cdate="${cur}"] .cal-chip[data-tid="${sid}"]`);
+    ok(!!real && !!real.querySelector('.cal-rmark'), 'the current occurrence shows with a ↻ series marker');
+    const g1 = doc.querySelector(`#calHost [data-cdate="${addD(cur, 7)}"] .cal-chip.is-ghost[data-gtid="${sid}"]`);
+    const g2 = doc.querySelector(`#calHost [data-cdate="${addD(cur, 14)}"] .cal-chip.is-ghost[data-gtid="${sid}"]`);
+    ok(!!g1 && !!g2, 'future occurrences are PREVIEWED (ghost chips) without creating records');
+    ok(!g1.hasAttribute('draggable') && !g1.querySelector('.cal-rem'), 'ghosts are display-only: no drag, no reminder bell (the series owns the schedule)');
+    ok(tsk().length === c4, 'calendar previews cost zero task rows (still ' + c4 + ' tasks)');
+    // trashing a recurring task removes its ghosts; restoring brings the pattern back
+    $('#calBtn').click(); await sleep(160); // back to the list for the row action
+    const li2 = $$('#taskList .task').find((x) => x.textContent.includes('Standup'));
+    li2.querySelector('[data-act="delete"]').click(); await sleep(240);
+    $('#calBtn').click(); await sleep(200);
+    for (let i = 0; i < 8 && !doc.querySelector(`#calHost [data-cdate="${cur}"]`); i++) {
+      const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(140);
+    }
+    ok($$('#calHost .cal-chip.is-ghost[data-gtid]').every((g) => g.dataset.gtid !== sid) && !doc.querySelector(`#calHost [data-tid="${sid}"]`), 'trash removes the task AND its ghost previews from the calendar');
+    $('#calBtn').click(); await sleep(160);
+    $('#undoBtn').click(); await sleep(320);
+    $('#calBtn').click(); await sleep(200);
+    for (let i = 0; i < 8 && !doc.querySelector(`#calHost [data-cdate="${cur}"]`); i++) {
+      const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(140);
+    }
+    ok(!!doc.querySelector(`#calHost .cal-chip.is-ghost[data-gtid="${sid}"]`), 'restore brings the whole pattern (real chip + ghosts) back');
+    $('#calBtn').click(); await sleep(160);
+  }
+
+  /* ---- 7. weekdays pattern + yearly Dec 31 + export fidelity ---- */
+  {
+    $('#newTaskBtn').click(); await sleep(90);
+    $('#f-title').value = 'Weekday check-in';
+    $('#f-due').value = TOD; $('#f-due').dispatchEvent(new window.Event('input', { bubbles: true }));
+    $('#f-recurrence').value = 'weekdays'; $('#f-recurrence').dispatchEvent(new window.Event('change', { bubbles: true }));
+    $('#saveTaskBtn').click(); await sleep(300);
+    $$('#taskList .task').find((x) => x.textContent.includes('Weekday check-in')).querySelector('.check').click(); await sleep(300);
+    const rolled = tskOf('Weekday check-in').dueDate;
+    ok(dowOf(rolled) >= 1 && dowOf(rolled) <= 5, 'Weekdays never rolls onto a weekend (rolled to ' + rolled + ')');
+    const dec31 = new Date(new Date().getFullYear(), 11, 31);
+    const d31 = F(dec31) < ymdS(new Date()) ? F(new Date(dec31.getFullYear() + 1, 11, 31)) : F(dec31);
+    $('#newTaskBtn').click(); await sleep(90);
+    $('#f-title').value = 'Renew domain';
+    $('#f-due').value = d31; $('#f-due').dispatchEvent(new window.Event('input', { bubbles: true }));
+    $('#f-recurrence').value = 'yearly'; $('#f-recurrence').dispatchEvent(new window.Event('change', { bubbles: true }));
+    $('#saveTaskBtn').click(); await sleep(300);
+    $$('#taskList .task').find((x) => x.textContent.includes('Renew domain')).querySelector('.check').click(); await sleep(300);
+    ok(tskOf('Renew domain').dueDate === String(+d31.slice(0, 4) + 1) + '-12-31', 'Yearly on Dec 31 rolls to next Dec 31 (spec example)');
+    const bak = remMirror(); // the LS mirror IS the export/backup document (same records)
+    const gy = bak.tasks.find((x) => x.title === 'Gym loop');
+    ok(!gy || gy.recurRule === null, 'export: stopped task carries clean nulls (no stale rule remnants)');
+    const su = bak.tasks.find((x) => x.title === 'Standup');
+    ok(su && su.recurrence === 'weekly' && su.recurAnchor, 'export carries the recurrence fields for backup/sync fidelity');
+  }
+
+  ok(tsk().length === countBefore + 4, 'the entire section added exactly the 4 tasks it created — completion/skip/ghosts never fabricate rows');
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

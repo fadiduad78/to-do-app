@@ -239,7 +239,24 @@ function coerceTask(raw, isTrash) {
   t.description = typeof raw.description === 'string' ? raw.description : '';
   t.dueDate = typeof raw.dueDate === 'string' && raw.dueDate ? raw.dueDate : null;
   t.dueTime = typeof raw.dueTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.dueTime) ? raw.dueTime : null;
-  t.recurrence = raw.recurrence === 'daily' || raw.recurrence === 'weekly' || raw.recurrence === 'monthly' ? raw.recurrence : null;
+  // Recurrence (kept in lockstep with storage.js coerceTask — both sanitize the
+  // same shapes so client and server can never disagree on what's valid).
+  const RECUR_KINDS = ['daily', 'weekdays', 'weekly', 'monthly', 'yearly', 'custom'];
+  t.recurrence = RECUR_KINDS.indexOf(raw.recurrence) >= 0 ? raw.recurrence : null;
+  if (t.recurrence === 'custom' && raw.recurRule && typeof raw.recurRule === 'object' && !Array.isArray(raw.recurRule)) {
+    const u = ['day', 'week', 'month', 'year'].indexOf(raw.recurRule.unit) >= 0 ? raw.recurRule.unit : null;
+    if (u) {
+      const ev = Math.floor(Number(raw.recurRule.every));
+      let wks = null;
+      if (u === 'week' && Array.isArray(raw.recurRule.weekdays)) {
+        wks = [...new Set(raw.recurRule.weekdays.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))];
+        if (wks.length) wks.sort((a, b) => a - b); else wks = null;
+      }
+      t.recurRule = { unit: u, every: ev >= 1 && ev <= 99 ? ev : 1, weekdays: wks };
+    } else t.recurRule = null;
+  } else t.recurRule = null;
+  t.recurAnchor = t.recurrence && typeof raw.recurAnchor === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.recurAnchor) ? raw.recurAnchor
+    : (t.recurrence ? t.dueDate : null);
   t.priority = raw.priority === 'low' || raw.priority === 'high' ? raw.priority : 'med';
   t.status = raw.status === 'completed' ? 'completed' : 'active';
   t.tags = Array.isArray(raw.tags)

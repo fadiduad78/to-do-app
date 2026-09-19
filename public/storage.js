@@ -251,6 +251,88 @@
 
   /* --------------------- Shape validation & coercion -------------------- */
 
+  /* ---------- Recurrence engine (shared by app, tests and validation) ----------
+     A recurring task stores a KIND ('daily' | 'weekdays' | 'weekly' | 'monthly'
+     | 'yearly' | 'custom'), plus — for 'custom' — a normalized rule
+     { unit: 'day'|'week'|'month'|'year', every: 1..99, weekdays: [0..6]|null },
+     and a series ANCHOR date (recurAnchor, 'YYYY-MM-DD'). Occurrences are
+     NEVER materialized: the task record is the current occurrence and
+     recurNextAfter() derives the next one on completion (rolling window of
+     exactly 1 — impossible to create infinite future tasks by design). Month/
+     year patterns clamp to the month length (Jan 31 monthly → Feb 28, never
+     Mar 3; Feb 29 yearly → Feb 28 in non-leap years). */
+  const RECUR_KINDS = ['daily', 'weekdays', 'weekly', 'monthly', 'yearly', 'custom'];
+  const RECUR_UNITS = ['day', 'week', 'month', 'year'];
+
+  function ymdParseU(ds) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ds || ''));
+    if (!m) return null;
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  function ymdU(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function daysInMonthU(y, m1) { return new Date(y, m1, 0).getDate(); }
+
+  function coerceRecurRule(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const unit = RECUR_UNITS.indexOf(raw.unit) >= 0 ? raw.unit : null;
+    if (!unit) return null;
+    const ev = Math.floor(Number(raw.every));
+    const every = ev >= 1 && ev <= 99 ? ev : 1;
+    let weekdays = null;
+    if (unit === 'week' && Array.isArray(raw.weekdays)) {
+      const ws = [...new Set(raw.weekdays.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))];
+      if (ws.length) { ws.sort((a, b) => a - b); weekdays = ws; }
+    }
+    return { unit, every, weekdays };
+  }
+
+  /** kind + optional raw rule → the normalized rule the engine runs on. */
+  function recurOf(kind, rawRule) {
+    if (kind === 'daily') return { unit: 'day', every: 1, weekdays: null };
+    if (kind === 'weekdays') return { unit: 'week', every: 1, weekdays: [1, 2, 3, 4, 5] };
+    if (kind === 'weekly') return { unit: 'week', every: 1, weekdays: null }; // null = the anchor's weekday
+    if (kind === 'monthly') return { unit: 'month', every: 1, weekdays: null };
+    if (kind === 'yearly') return { unit: 'year', every: 1, weekdays: null };
+    if (kind === 'custom') return coerceRecurRule(rawRule) || { unit: 'week', every: 1, weekdays: null };
+    return null;
+  }
+
+  /** Does the DATE (local-midnight Date) fall on the pattern? */
+  function recurMatches(date, r, anchor) {
+    const diff = Math.round((date - anchor) / 864e5);
+    if (diff < 0) return false;
+    if (r.unit === 'day') return diff % r.every === 0;
+    if (r.unit === 'week') {
+      if (Math.floor(diff / 7) % r.every !== 0) return false;
+      return r.weekdays ? r.weekdays.indexOf(date.getDay()) >= 0 : date.getDay() === anchor.getDay();
+    }
+    if (r.unit === 'month') {
+      const md = (date.getFullYear() - anchor.getFullYear()) * 12 + (date.getMonth() - anchor.getMonth());
+      if (md % r.every !== 0) return false;
+      return date.getDate() === Math.min(anchor.getDate(), daysInMonthU(date.getFullYear(), date.getMonth() + 1));
+    }
+    if ((date.getFullYear() - anchor.getFullYear()) % r.every !== 0) return false;
+    if (date.getMonth() !== anchor.getMonth()) return false;
+    return date.getDate() === Math.min(anchor.getDate(), daysInMonthU(date.getFullYear(), date.getMonth() + 1));
+  }
+
+  /** First occurrence STRICTLY after `afterYmd`; null past the 10-year horizon
+      (bounded on purpose: a rule that can't produce a next date ends the series). */
+  function recurNextAfter(afterYmd, anchorYmd, r) {
+    const anchor = ymdParseU(anchorYmd);
+    const after = ymdParseU(afterYmd);
+    if (!anchor || !after || !r) return null;
+    const cur = new Date(after.getFullYear(), after.getMonth(), after.getDate() + 1);
+    for (let i = 0; i < 3660; i++) {
+      if (recurMatches(cur, r, anchor)) return ymdU(cur);
+      cur.setDate(cur.getDate() + 1);
+    }
+    return null;
+  }
+
   /**
    * Coerce one raw task record into the canonical shape. Unknown fields are
    * PRESERVED (spread first, then normalize known ones) so forward
@@ -281,9 +363,10 @@
     // reads/writes exactly these two fields.
     t.dueTime = typeof raw.dueTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(raw.dueTime) ? raw.dueTime : null;
     // Recurring tasks: the calendar/reminder engines derive everything else
-    // from these + status. Advancing a cycle rewrites dueDate/dueTime.
-    t.recurrence = raw.recurrence === 'daily' || raw.recurrence === 'weekly' || raw.recurrence === 'monthly'
-      ? raw.recurrence : null;
+    // from these + status. Advancing a cycle rewrites dueDate only.
+    t.recurrence = RECUR_KINDS.indexOf(raw.recurrence) >= 0 ? raw.recurrence : null;
+    t.recurRule = t.recurrence === 'custom' ? coerceRecurRule(raw.recurRule) : null;
+    t.recurAnchor = t.recurrence ? ((ymdParseU(raw.recurAnchor) ? raw.recurAnchor : null) || t.dueDate || null) : null;
     if (isTrash) t.trashedAt = Number(raw.trashedAt) || now;
     into.push(t);
     return true;
@@ -1121,6 +1204,12 @@
       coerceReminder,
       REMINDER_TYPES,
       REMINDER_STATUSES,
+      RECUR_KINDS,
+      coerceRecurRule,
+      recurOf,
+      recurMatches,
+      recurNextAfter,
+      ymdParseU,
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

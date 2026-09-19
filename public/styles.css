@@ -728,6 +728,29 @@ body {
 .rem-status.st-skipped { color: var(--danger); border-color: var(--danger); }
 .rem-status.st-dismissed { opacity: .65; }
 .badge.rem { border: 1px solid var(--accent); color: var(--accent); background: var(--accent-soft, transparent); }
+.badge.recur { border: 1px dashed var(--muted); color: var(--muted); }
+
+/* custom recurrence panel (composer) */
+.recur-panel { display: flex; flex-direction: column; gap: 8px; min-width: 240px;
+  padding: 10px 12px; border: 1px dashed var(--border); border-radius: 10px; background: var(--panel-2); }
+.recur-panel .rp-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.recur-panel .rp-row input[type="number"] { width: 72px; }
+.recur-panel .rp-days { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.recur-panel .rp-days-lbl { color: var(--muted); font-size: 12px; margin-right: 2px; }
+.rp-day { padding: 4px 9px; border-radius: 999px; border: 1px solid var(--border);
+  background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
+.rp-day.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.rp-hint { margin: 2px 0 0; }
+
+/* recurring occurrences in the calendar */
+.cal-chip .cal-rmark { font-style: normal; opacity: .75; }
+.cal-chip.is-recur { border-style: solid; }
+.cal-chip.is-ghost { border-style: dashed; opacity: .62; cursor: pointer; }
+.cal-chip.is-ghost:hover { opacity: .95; }
+
+/* series action sheet */
+.series-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; margin-top: 10px; }
+.series-actions .btn { justify-content: flex-start; text-align: left; width: 100%; }
 .toast-rem { display: flex; align-items: center; gap: 8px; max-width: 460px; }
 .toast-rem > span { flex: 1; min-width: 0; }
 .cal-chip .rem-i { margin-right: 2px; }
@@ -811,6 +834,9 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
   .toast-rem { flex-direction: column; align-items: stretch; }
   .toast-notify .rem-snoozes { display: flex; flex-wrap: wrap; row-gap: 4px; }
   .toast-notify .rem-snoozes .btn { flex: none; }
+  /* recurrence controls: thumb-sized */
+  .recur-panel { min-width: 0; }
+  .rp-day { padding: 7px 12px; min-height: 32px; }
   .toast-notify .btn-sm { min-height: 36px; }
 
   /* touch targets */

@@ -79,13 +79,39 @@
       <div class="form-row">
         <label class="field">
           <span>Repeat</span>
-          <select id="f-recurrence">
-            <option value="">No repeat</option>
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
+          <select id="f-recurrence" aria-label="Repeat">
+            <option value="">Does not repeat</option>
+            <option value="daily">Every day</option>
+            <option value="weekdays">Every weekday (Mon–Fri)</option>
+            <option value="weekly">Every week</option>
+            <option value="monthly">Every month</option>
+            <option value="yearly">Every year</option>
+            <option value="custom">Custom…</option>
           </select>
         </label>
+        <div class="field recur-panel" id="recurPanel" hidden>
+          <div class="rp-row">
+            <span>Every</span>
+            <input type="number" id="rcEvery" min="1" max="99" step="1" value="1" aria-label="Repeat every N">
+            <select id="rcUnit" aria-label="Repeat unit">
+              <option value="day">day(s)</option>
+              <option value="week">week(s)</option>
+              <option value="month">month(s)</option>
+              <option value="year">year(s)</option>
+            </select>
+          </div>
+          <div class="rp-days" id="rcDays" hidden>
+            <span class="rp-days-lbl">on</span>
+            <button type="button" class="rp-day" data-rday="1">Mon</button>
+            <button type="button" class="rp-day" data-rday="2">Tue</button>
+            <button type="button" class="rp-day" data-rday="3">Wed</button>
+            <button type="button" class="rp-day" data-rday="4">Thu</button>
+            <button type="button" class="rp-day" data-rday="5">Fri</button>
+            <button type="button" class="rp-day" data-rday="6">Sat</button>
+            <button type="button" class="rp-day" data-rday="0">Sun</button>
+          </div>
+          <p class="rp-hint muted small" id="rcHint" aria-live="polite"></p>
+        </div>
         <div class="field rem-block">
           <div class="rem-head">
             <span>🔔 Reminders</span>
