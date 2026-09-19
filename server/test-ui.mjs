@@ -4,6 +4,7 @@
  * persistence mirror — things the Node-only suites can't see (they cover the
  * data layer; this one covers the actual rendered interface).
  * Run: node server/test-ui.mjs   (needs: npm i --no-save jsdom)
+ * ==========================================================================*/
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
