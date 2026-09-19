@@ -192,11 +192,18 @@ safety copy — nothing is silently overwritten.)
   of everything at any time.
 - **Multiple browser tabs** → the original BroadcastChannel cross-tab sync still
   works; the server event stream keeps tabs from different devices in step.
+- **Projects** → tasks optionally belong to a project (`📂 Projects` bar, detail
+  header with progress/due/overdue stats, per-project filter). Projects sync with
+  the *same* state document and merge rules as tasks — there is no second store.
+  Deleting a project moves it to Trash **without touching its tasks**; emptying
+  the trash detaches them back to the Inbox. Old data (schemaVersion 1) migrates
+  automatically on first load — existing tasks simply get `projectId: null`.
 
 ## Test it (dev)
 
 ```bash
-node server/test.mjs          # 38 checks: accounts, sessions, merge, tombstones, replace, persistence, SSE
-node server/test-supabase.mjs # 24 checks: mock PostgREST — free-plan restart survival, per-user rows, adoption
-node server/test-client.mjs   # 13 checks: the real public/cloud.js against a live server
+node server/test.mjs          # 47 checks: accounts, sessions, merge, tombstones, replace, projects, persistence, SSE
+node server/test-storage.mjs  # 45 checks: the real public/storage.js in Node — v1→v2 migration, projects coercion, backups
+node server/test-supabase.mjs # 22 checks: mock PostgREST — free-plan restart survival, per-user rows, adoption
+node server/test-client.mjs   # 23 checks: the real public/cloud.js against a live server (incl. project sync semantics)
 ```

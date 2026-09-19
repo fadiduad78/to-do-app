@@ -45,9 +45,10 @@
   /* ----------------------------- Constants ------------------------------ */
 
   const DB_NAME = 'zerotodo';
-  const DB_VERSION = 1; // IndexedDB database version (structure), NOT the data schema
+  const DB_VERSION = 2; // v2 adds the 'projects' store (idempotent upgrade below)
   const STORE_TASKS = 'tasks';
   const STORE_TRASH = 'trash';
+  const STORE_PROJECTS = 'projects';
   const STORE_META = 'meta';
 
   // Versioned localStorage keys: a future format can ship a *_v2 key without
@@ -58,7 +59,7 @@
 
   // The data-shape version written by this app. When you change the task or
   // settings shape, bump this and add a MIGRATIONS[oldVersion] step below.
-  const SCHEMA_VERSION = 1;
+  const SCHEMA_VERSION = 2;
 
   // Trash retention: items are auto-purged 30 days after being trashed.
   const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -105,8 +106,20 @@
         trash: (payload.trash || []).map(fix),
       };
     },
-    // Future: 1(payload) { return { ...payload, /* transform */ }; }
-    // …and bump SCHEMA_VERSION to 2.
+    // v1 → v2: the Projects system. Entirely additive: every existing payload
+    // keeps its shape; tasks get an explicit projectId (null = Inbox), and the
+    // projects array is defaulted. Unknown fields still spread through.
+    1(payload) {
+      return {
+        ...payload,
+        projects: Array.isArray(payload.projects) ? payload.projects : [],
+        tasks: (payload.tasks || []).map((t) => (
+          typeof t.projectId === 'string' && t.projectId ? t : { ...t, projectId: null }
+        )),
+      };
+    },
+    // Future: 2(payload) { return { ...payload, /* transform */ }; }
+    // …and bump SCHEMA_VERSION to 3.
   };
 
   /**
@@ -166,6 +179,7 @@
         if (!db.objectStoreNames.contains(STORE_TASKS)) db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(STORE_TRASH)) db.createObjectStore(STORE_TRASH, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(STORE_META)) db.createObjectStore(STORE_META, { keyPath: 'key' });
+        if (!db.objectStoreNames.contains(STORE_PROJECTS)) db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB.'));
@@ -225,8 +239,36 @@
     t.createdAt = Number(raw.createdAt) || now;
     t.updatedAt = Number(raw.updatedAt) || now;
     t.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : now;
+    t.projectId = typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : null;
     if (isTrash) t.trashedAt = Number(raw.trashedAt) || now;
     into.push(t);
+    return true;
+  }
+
+  /**
+   * Coerce a project record. Like tasks, unknown fields are preserved and
+   * nothing is ever dropped for soft problems: a missing name becomes a
+   * placeholder (the record's id and data must survive sync/recovery).
+   * Only a missing id is fatal. deletedAt != null means "in trash".
+   */
+  function coerceProject(raw, into) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    if (typeof raw.id !== 'string' || !raw.id) return false;
+    const now = Date.now();
+    const p = { ...raw };
+    p.id = raw.id;
+    p.name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 120) : 'Untitled project';
+    p.description = typeof raw.description === 'string' ? raw.description.slice(0, 2000) : '';
+    p.color = typeof raw.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(raw.color) ? raw.color : 'var(--accent)';
+    p.icon = typeof raw.icon === 'string' && raw.icon ? raw.icon.slice(0, 8) : '📁';
+    p.status = raw.status === 'completed' ? 'completed' : 'active';
+    p.archived = !!raw.archived;
+    p.dueDate = typeof raw.dueDate === 'string' && raw.dueDate ? raw.dueDate : null;
+    p.createdAt = Number(raw.createdAt) || now;
+    p.updatedAt = Number(raw.updatedAt) || p.createdAt;
+    p.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : p.createdAt;
+    p.deletedAt = Number.isFinite(Number(raw.deletedAt)) && Number(raw.deletedAt) > 0 ? Number(raw.deletedAt) : null;
+    into.push(p);
     return true;
   }
 
@@ -246,10 +288,12 @@
       savedAt: Number(data.savedAt) || 0,
       tasks: [],
       trash: [],
+      projects: [],
       settings: null,
     };
     for (const raw of data.tasks) coerceTask(raw, out.tasks);
     if (Array.isArray(data.trash)) for (const raw of data.trash) coerceTask(raw, out.trash, true);
+    if (Array.isArray(data.projects)) for (const raw of data.projects) coerceProject(raw, out.projects);
     if (data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) out.settings = data.settings;
     return out;
   }
@@ -269,6 +313,13 @@
       if (coerceTask(raw, tasks)) seen.add(raw.id);
       else dropped++;
     }
+    const seenProj = new Set();
+    const projects = [];
+    for (const raw of (payload && Array.isArray(payload.projects) ? payload.projects : [])) {
+      if (seenProj.has(raw && raw.id)) { dropped++; continue; }
+      if (coerceProject(raw, projects)) seenProj.add(raw.id);
+      else dropped++;
+    }
     const seenTrash = new Set();
     for (const raw of (payload && Array.isArray(payload.trash) ? payload.trash : [])) {
       if (seen.has(raw && raw.id) || seenTrash.has(raw && raw.id)) { dropped++; continue; }
@@ -278,6 +329,7 @@
     return {
       tasks,
       trash,
+      projects,
       settings: (payload && payload.settings && typeof payload.settings === 'object') ? payload.settings : {},
       dropped,
     };
@@ -298,6 +350,11 @@
     for (const t of backup.tasks || []) {
       const other = idbById.get(t.id);
       if (!other || (t.updatedAt || 0) > (other.updatedAt || 0)) return true;
+    }
+    const idbProj = new Map((idb.projects || []).map((p) => [p.id, p]));
+    for (const p of backup.projects || []) {
+      const other = idbProj.get(p.id);
+      if (!other || (p.updatedAt || 0) > (other.updatedAt || 0)) return true;
     }
     return false;
   }
@@ -324,7 +381,7 @@
     let idbAvailable = null;   // null = unknown, true/false after first attempt
     // The authoritative in-memory state. The UI mutates it directly (via
     // store.state); commit() persists it. A failed write never touches it.
-    const memory = { tasks: [], trash: [], settings: { ...DEFAULT_SETTINGS } };
+    const memory = { tasks: [], trash: [], projects: [], settings: { ...DEFAULT_SETTINGS } };
     let lastSavedAt = 0;
     let dirty = false;         // true while memory is ahead of disk (write failed)
     let resyncing = false;
@@ -352,12 +409,13 @@
 
     async function loadFromIDB() {
       const d = await ensureDB();
-      const data = await readTx(d, [STORE_TASKS, STORE_TRASH, STORE_META], (tx) => {
+      const data = await readTx(d, [STORE_TASKS, STORE_TRASH, STORE_PROJECTS, STORE_META], (tx) => {
         const t = reqToPromise(tx.objectStore(STORE_TASKS).getAll());
         const tr = reqToPromise(tx.objectStore(STORE_TRASH).getAll());
+        const pj = reqToPromise(tx.objectStore(STORE_PROJECTS).getAll());
         const m = reqToPromise(tx.objectStore(STORE_META).get('meta'));
-        return Promise.all([t, tr, m]).then(([tasks, trash, meta]) => ({
-          tasks, trash, meta: meta ? meta.value : null,
+        return Promise.all([t, tr, pj, m]).then(([tasks, trash, projects, meta]) => ({
+          tasks, trash, projects, meta: meta ? meta.value : null,
         }));
       });
       return data;
@@ -385,6 +443,7 @@
         settings: memory.settings,
         tasks: memory.tasks,
         trash: memory.trash,
+        projects: memory.projects,
       });
     }
 
@@ -406,6 +465,7 @@
           savedAt: shape.savedAt,
           tasks: shape.tasks,
           trash: shape.trash,
+          projects: shape.projects,
           settings: shape.settings || {},
         },
         error: null,
@@ -448,7 +508,7 @@
      */
     function validateOp(op) {
       if (!op || typeof op !== 'object') throw new Error('invalid operation');
-      if (op.store !== STORE_TASKS && op.store !== STORE_TRASH && op.store !== STORE_META) {
+      if (op.store !== STORE_TASKS && op.store !== STORE_TRASH && op.store !== STORE_PROJECTS && op.store !== STORE_META) {
         throw new Error('unknown store: ' + op.store);
       }
       if (op.op === 'put') {
@@ -456,6 +516,9 @@
         if (!v || typeof v !== 'object') throw new Error('put needs an object value');
         if (op.store === STORE_META) {
           if (v.key !== 'meta' || !v.value) throw new Error('invalid meta record');
+        } else if (op.store === STORE_PROJECTS) {
+          const sink = [];
+          if (!coerceProject(v, sink)) throw new Error('project failed validation (needs a string id)');
         } else {
           // Reuse the same coercion rules as recovery: no id/title → refuse.
           const sink = [];
@@ -550,13 +613,16 @@
         const ops = [];
         for (const t of memory.tasks) ops.push({ store: STORE_TASKS, op: 'put', value: t });
         for (const t of memory.trash) ops.push({ store: STORE_TRASH, op: 'put', value: t });
+        for (const p of memory.projects) ops.push({ store: STORE_PROJECTS, op: 'put', value: p });
         if (idbAvailable !== false) {
           try {
             const disk = await loadFromIDB();
             const taskIds = new Set(memory.tasks.map((t) => t.id));
             const trashIds = new Set(memory.trash.map((t) => t.id));
+            const projIds = new Set(memory.projects.map((p) => p.id));
             for (const t of disk.tasks) if (!taskIds.has(t.id)) ops.push({ store: STORE_TASKS, op: 'delete', key: t.id });
             for (const t of disk.trash) if (!trashIds.has(t.id)) ops.push({ store: STORE_TRASH, op: 'delete', key: t.id });
+            for (const p of disk.projects || []) if (!projIds.has(p.id)) ops.push({ store: STORE_PROJECTS, op: 'delete', key: p.id });
           } catch (_) { /* disk unreadable — re-putting everything is still best effort */ }
         }
         return await commit(ops, { isResync: true });
@@ -627,6 +693,7 @@
             schemaVersion: (idbData.meta && Number.isFinite(idbData.meta.schemaVersion)) ? idbData.meta.schemaVersion : SCHEMA_VERSION,
             tasks: idbData.tasks,
             trash: idbData.trash,
+            projects: idbData.projects,
             settings: (idbData.meta && idbData.meta.settings) || {},
             savedAt: (idbData.meta && idbData.meta.savedAt) || 0,
           };
@@ -643,6 +710,7 @@
             schemaVersion: backup.state.schemaVersion,
             tasks: backup.state.tasks,
             trash: backup.state.trash,
+            projects: backup.state.projects || [],
             settings: backup.state.settings || {},
             savedAt: backup.state.savedAt,
           };
@@ -654,8 +722,8 @@
       }
 
       // -- 3. choose the source of truth ------------------------------------
-      const idbHas = idbState && (idbState.tasks.length || idbState.trash.length);
-      const bakHas = backupState && (backupState.tasks.length || backupState.trash.length);
+      const idbHas = idbState && (idbState.tasks.length || idbState.trash.length || idbState.projects.length);
+      const bakHas = backupState && (backupState.tasks.length || backupState.trash.length || (backupState.projects || []).length);
 
       let payload = null;
       let source = 'fresh';
@@ -676,9 +744,10 @@
       }
 
       // -- 4. adopt into memory + prune expired trash -----------------------
-      const clean = payload || { tasks: [], trash: [], settings: {} };
+      const clean = payload || { tasks: [], trash: [], projects: [], settings: {} };
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
+      memory.projects = clean.projects;
       memory.settings = { ...DEFAULT_SETTINGS, ...(clean.settings || {}) };
       lastSavedAt = clean.savedAt || Date.now();
 
@@ -687,6 +756,13 @@
       if (expired.length) {
         memory.trash = memory.trash.filter((t) => (t.trashedAt || 0) > now - TRASH_RETENTION_MS);
         notices.push({ kind: 'info', message: 'Removed ' + expired.length + ' item(s) that had been in the trash for more than 30 days.' });
+      }
+      // Deleted projects share the trash retention window.
+      const expiredProj = memory.projects.filter((p) => p.deletedAt && now - p.deletedAt > TRASH_RETENTION_MS);
+      if (expiredProj.length) {
+        const gone = new Set(expiredProj.map((p) => p.id));
+        memory.projects = memory.projects.filter((p) => !gone.has(p.id));
+        notices.push({ kind: 'info', message: 'Removed ' + expiredProj.length + ' project(s) that had been in the trash for more than 30 days.' });
       }
 
       // -- 5. make disk agree with the recovered state ----------------------
@@ -721,10 +797,12 @@
       const clean = cleanPayload({
         tasks: fresh.tasks,
         trash: fresh.trash,
+        projects: fresh.projects,
         settings: (fresh.meta && fresh.meta.settings) || {},
       });
       memory.tasks = clean.tasks;
       memory.trash = clean.trash;
+      memory.projects = clean.projects;
       memory.settings = { ...DEFAULT_SETTINGS, ...clean.settings };
       lastSavedAt = (fresh.meta && fresh.meta.savedAt) || Date.now();
       dirty = false; // disk is authoritative again
@@ -811,9 +889,10 @@
       startSync,
       refreshFromOtherTab,
       /** Adopt an imported dataset (caller then calls resync()). */
-      replaceMemory(tasks, trash) {
+      replaceMemory(tasks, trash, projects) {
         memory.tasks = tasks;
         memory.trash = trash;
+        memory.projects = Array.isArray(projects) ? projects : [];
       },
       /** Serialize the current state as a downloadable backup file. */
       exportData: () => serializeBackup(Date.now()),
@@ -832,7 +911,7 @@
       TRASH_RETENTION_MS,
       DEFAULT_SETTINGS,
       SCHEMA_VERSION,
-      STORES: { tasks: STORE_TASKS, trash: STORE_TRASH, meta: STORE_META },
+      STORES: { tasks: STORE_TASKS, trash: STORE_TRASH, projects: STORE_PROJECTS, meta: STORE_META },
     },
     helpers: {
       uuid,
@@ -841,6 +920,7 @@
       validatePayload,
       cleanPayload,
       backupNewer,
+      coerceProject,
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

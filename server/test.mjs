@@ -133,6 +133,14 @@ try {
   s = await sync('A', 999999, { settings: { theme: 'light' }, tasks: [task('new1', 'Fresh start', ts(5))], trash: [] }, {}, 'replace');
   ok(s.json.tasks.length === 1 && s.json.tasks[0].id === 'new1', 'replace mode installed imported dataset exactly');
   ok(s.json.settings.theme === 'light', 'replace settings applied');
+  ok(Array.isArray(s.json.projects) && s.json.projects.length === 0, 'v1-style import (no projects key) stays valid — list defaults to []');
+  s = await sync('A', 999999, { settings: { theme: 'light' }, tasks: [task('new1', 'Fresh start', ts(5), { projectId: 'pI' })], trash: [], projects: [{ id: 'pI', name: 'Imported', createdAt: ts(1), updatedAt: ts(5) }] }, {}, 'replace');
+  ok(s.json.projects.length === 1 && s.json.projects[0].name === 'Imported', 'replace mode carries projects in the SAME state doc');
+  ok(s.json.tasks[0].projectId === 'pI', 'task → project links survive a replace import');
+  s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [{ id: 'pI', name: 'B wins', createdAt: ts(1), updatedAt: ts(99) }] }, {}, 'merge');
+  ok(s.json.projects[0].name === 'B wins', 'project edits LWW-merge like tasks');
+  s = await sync('B', s.json.rev, { tasks: [], trash: [], projects: [] }, { 'projects:pI': ts(120) }, 'merge');
+  ok(s.json.projects.length === 0, 'a projects-scoped tombstone purges the project on every device');
 
   console.log('6. invalid payload rejected safely');
   r = await fetch(BASE + '/api/sync', H('POST', { state: { tasks: 'not-an-array' } }));

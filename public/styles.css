@@ -523,3 +523,77 @@ body {
   .task-actions { grid-column: 1 / -1; justify-content: flex-start; padding-top: 4px; }
   .banners { top: 99px; }
 }
+
+/* ================================ Projects ================================
+   Quick-switch bar under the filters + detail header when a project is open.
+   --pc (project colour) is set inline per card; tokens keep dark mode free. */
+.project-bar { margin: 2px 0 12px; }
+.project-bar[hidden] { display: none; }
+.project-bar-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.project-bar-title { font-weight: 650; font-size: 13.5px; }
+.project-bar .spacer { flex: 1; }
+.project-cards { display: flex; gap: 8px; flex-wrap: wrap; }
+.project-card {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--border); border-left: 3px solid var(--pc, var(--accent));
+  border-radius: var(--radius); background: var(--panel-2);
+}
+.project-card.on { border-color: var(--pc, var(--accent)); box-shadow: 0 0 0 1px var(--pc, var(--accent)) inset; }
+.project-card.archived { opacity: .62; }
+.project-card .pc-open {
+  display: flex; align-items: center; gap: 7px;
+  background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer;
+}
+.pc-icon { font-size: 15px; }
+.pc-name { font-weight: 600; font-size: 13px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-count { font-size: 11.5px; color: var(--muted); }
+.pc-bar { width: 56px; height: 5px; border-radius: 99px; background: var(--border); overflow: hidden; }
+.pc-bar i { display: block; height: 100%; border-radius: 99px; background: var(--pc, var(--accent)); }
+.pc-menu { padding: 2px 6px; }
+
+.project-detail[hidden] { display: none; }
+.pd-card {
+  position: relative; margin-bottom: 14px; padding: 12px 16px 16px;
+  border: 1px solid var(--border); border-top: 3px solid var(--pc, var(--accent));
+  border-radius: var(--radius); background: var(--panel-2);
+}
+.pd-back { margin-bottom: 6px; }
+.pd-head { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.pd-icon { font-size: 26px; line-height: 1.1; }
+.pd-titles { flex: 1; min-width: 180px; }
+.pd-titles h2 { margin: 0 0 2px; font-size: 18px; }
+.pd-desc { margin: 0; color: var(--muted); font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
+.pd-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.pd-stats { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 8px; font-size: 12.5px; color: var(--muted); }
+.pd-pct b { color: var(--text); font-size: 14px; }
+.overdue-text { color: var(--danger); }
+.pd-progress { display: block; height: 7px; border-radius: 99px; background: var(--border); overflow: hidden; }
+.pd-progress i { display: block; height: 100%; background: var(--pc, var(--accent)); }
+
+/* task row project chip + deleted-project hint */
+.chip.proj-ref { border-style: solid; border-color: var(--accent); color: var(--accent); }
+.badge.proj-gone { border: 1px dashed var(--border); color: var(--muted); }
+.badge.done-badge { background: var(--accent-soft); color: var(--accent); }
+.project-row .badge { margin-left: 4px; }
+
+/* project create/edit modal + project ⋯ menu */
+.modal-actions.col { flex-direction: column; align-items: stretch; justify-content: flex-start; }
+.modal-form { max-width: 520px; }
+.modal-form .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 12.5px; color: var(--muted); }
+.modal-form input, .modal-form textarea, .modal-form select {
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px;
+}
+.modal-form input.invalid { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+.pf-icons { display: flex; gap: 4px; flex-wrap: wrap; }
+.pf-icon { border: 1px solid var(--border); background: var(--panel-2); border-radius: 8px; font-size: 16px; padding: 4px 7px; cursor: pointer; }
+.pf-icon.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pf-colors { display: flex; gap: 6px; flex-wrap: wrap; }
+.pf-color { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; }
+.pf-color.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+
+@media (max-width: 640px) {
+  .pc-name { max-width: 110px; }
+  .pd-actions { width: 100%; }
+}

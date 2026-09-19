@@ -171,7 +171,7 @@ function bucketFor(username) {
   if (!b) {
     b = {
       username,
-      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], tombstones: {} },
+      state: { rev: 0, savedAt: 0, settings: {}, tasks: [], trash: [], projects: [], tombstones: {} },
       saveTimer: null, loaded: false, ready: null,
       sse: new Set(),
       sbDirty: false, sbRunning: false, sbDelay: 4000, sbLastOk: 0, sbLastError: '',
@@ -267,14 +267,43 @@ function normalizeState(raw) {
     }
   }
   const settings = (raw.settings && typeof raw.settings === 'object' && !Array.isArray(raw.settings)) ? raw.settings : {};
+  const projects = [];
+  {
+    const seenP = new Set();
+    for (const r of (Array.isArray(raw.projects) ? raw.projects : [])) {
+      const p = coerceProject(r);
+      if (p && !seenP.has(p.id)) { seenP.add(p.id); projects.push(p); }
+    }
+  }
   return {
     rev: Number.isFinite(Number(raw.rev)) ? Number(raw.rev) : 0,
     savedAt: Number(raw.savedAt) || 0,
     settings,
     tasks: pick(raw.tasks, false),
     trash: pick(raw.trash, true),
+    projects,
     tombstones,
   };
+}
+
+/** Lenient project coercion — mirrors storage.js coerceProject (unknown fields preserved). */
+function coerceProject(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (typeof raw.id !== 'string' || !raw.id) return null;
+  const now = Date.now();
+  const p = { ...raw };
+  p.name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 120) : 'Untitled project';
+  p.description = typeof raw.description === 'string' ? raw.description.slice(0, 2000) : '';
+  p.color = typeof raw.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(raw.color) ? raw.color : 'var(--accent)';
+  p.icon = typeof raw.icon === 'string' && raw.icon ? raw.icon.slice(0, 8) : '📁';
+  p.status = raw.status === 'completed' ? 'completed' : 'active';
+  p.archived = !!raw.archived;
+  p.dueDate = typeof raw.dueDate === 'string' && raw.dueDate ? raw.dueDate : null;
+  p.createdAt = Number(raw.createdAt) || now;
+  p.updatedAt = Number(raw.updatedAt) || p.createdAt;
+  p.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : p.createdAt;
+  p.deletedAt = Number.isFinite(Number(raw.deletedAt)) && Number(raw.deletedAt) > 0 ? Number(raw.deletedAt) : null;
+  return p;
 }
 
 /** Trash retention + tombstone TTL — mirrors the client's rules server-side. */
@@ -289,6 +318,15 @@ function pruneExpired(b) {
     } else keepTrash.push(t);
   }
   if (changed) b.state.trash = keepTrash;
+  const keepProj = [];
+  let projChanged = false;
+  for (const p of b.state.projects) {
+    if (p.deletedAt && now - p.deletedAt > TRASH_RETENTION_MS) {
+      b.state.tombstones['projects:' + p.id] = Math.max(b.state.tombstones['projects:' + p.id] || 0, now);
+      projChanged = true;
+    } else keepProj.push(p);
+  }
+  if (projChanged) { b.state.projects = keepProj; changed = true; }
   for (const [id, at] of Object.entries(b.state.tombstones)) {
     if (now - at > TOMBSTONE_TTL_MS) { delete b.state.tombstones[id]; changed = true; }
   }
@@ -312,10 +350,12 @@ function mergeRecords(localArr, remoteArr) {
  * restore) only removes copies in the store it left. A tombstone kills records
  * not newer than it — a later edit/restore legitimately revives a record.
  */
-function applyTombstones(tasks, trash, tombstones) {
+function applyTombstones(tasks, trash, projects, tombstones) {
+  const kill = (arr, scope) => arr.filter((r) => !(tombstones[scope + ':' + r.id] >= (r.updatedAt || 0)));
   return {
-    tasks: tasks.filter((t) => !(tombstones['tasks:' + t.id] >= (t.updatedAt || 0))),
-    trash: trash.filter((t) => !(tombstones['trash:' + t.id] >= (t.updatedAt || 0))),
+    tasks: kill(tasks, 'tasks'),
+    trash: kill(trash, 'trash'),
+    projects: kill(projects || [], 'projects'),
   };
 }
 
@@ -333,6 +373,7 @@ function ingest(b, body) {
     settings: (body.state && body.state.settings) || {},
     tasks: (body.state && body.state.tasks) || [],
     trash: (body.state && body.state.trash) || [],
+    projects: (body.state && body.state.projects) || [],
     tombstones: body.tombstones || {},
   });
 
@@ -345,20 +386,24 @@ function ingest(b, body) {
   if (body.mode === 'replace') {
     for (const t of incoming.tasks) delete newTombstones['tasks:' + t.id];
     for (const t of incoming.trash) delete newTombstones['trash:' + t.id];
+    for (const p of incoming.projects) delete newTombstones['projects:' + p.id];
     merged = {
       settings: incoming.settings,
       tasks: incoming.tasks,
       trash: enforceLiveWins(incoming.tasks, incoming.trash),
+      projects: incoming.projects,
       savedAt: Math.max(b.state.savedAt, incoming.savedAt || Date.now()),
     };
   } else {
     const tasks = mergeRecords(b.state.tasks, incoming.tasks);
     const trash = mergeRecords(b.state.trash, incoming.trash);
-    const alive = applyTombstones(tasks, trash, newTombstones);
+    const projects = mergeRecords(b.state.projects, incoming.projects);
+    const alive = applyTombstones(tasks, trash, projects, newTombstones);
     merged = {
       settings: (incoming.savedAt || 0) >= b.state.savedAt ? incoming.settings : b.state.settings,
       tasks: alive.tasks,
       trash: enforceLiveWins(alive.tasks, alive.trash),
+      projects: alive.projects,
       savedAt: Math.max(b.state.savedAt, incoming.savedAt || 0) || Date.now(),
     };
     for (const t of merged.tasks) {
@@ -369,10 +414,14 @@ function ingest(b, body) {
       const k = 'trash:' + t.id;
       if (newTombstones[k] && (t.updatedAt || 0) > newTombstones[k]) delete newTombstones[k];
     }
+    for (const p of merged.projects) {
+      const k = 'projects:' + p.id;
+      if (newTombstones[k] && (p.updatedAt || 0) > newTombstones[k]) delete newTombstones[k];
+    }
   }
 
-  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.settings]);
-  const after = JSON.stringify([merged.tasks, merged.trash, merged.settings]);
+  const before = JSON.stringify([b.state.tasks, b.state.trash, b.state.projects, b.state.settings]);
+  const after = JSON.stringify([merged.tasks, merged.trash, merged.projects, merged.settings]);
   const changed = before !== after;
 
   b.state = { ...b.state, ...merged, tombstones: newTombstones, rev: b.state.rev + 1 };
@@ -646,7 +695,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/config') {
       return sendJSON(res, 200, {
-        app: 'zerotodo-server', version: 3, authRequired: authRequired(),
+        app: 'zerotodo-server', version: 4, authRequired: authRequired(),
         storage: sbEnabled() ? 'supabase (Postgres) + local cache' : 'local file only',
       });
     }

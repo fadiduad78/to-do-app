@@ -56,6 +56,10 @@
             <option value="high">High</option>
           </select>
         </label>
+        <label class="field">
+          <span>Project</span>
+          <select id="f-project"><!-- filled by app.js: Inbox + projects --></select>
+        </label>
         <label class="field grow">
           <span>Tags</span>
           <input id="f-tags" type="text" placeholder="e.g. work, home" autocomplete="off">
@@ -83,6 +87,11 @@
 
   <nav class="filters" id="filterTabs" aria-label="Task filters"></nav>
   <div id="tagChips" class="tag-chips" hidden></div>
+
+  <!-- Projects: quick-switch bar + (when a project is open) a detail header.
+       Everything inside is rendered by app.js — markup lives there. -->
+  <div id="projectBar" class="project-bar" hidden></div>
+  <div id="projectDetail" class="project-detail" hidden></div>
 
   <div id="trashBar" class="trash-bar" hidden>
     <span><b id="trashCount"></b> in trash — kept for 30 days, then removed automatically.</span>

@@ -1,0 +1,97 @@
+# ZeroTodo engineering conventions
+
+Non-negotiable rules for changing this app. They exist because the app's core
+promise is *never silently lose data* — most of them follow from that.
+
+## 1. One state, one store — ever
+
+There is exactly **one** dataset: `{ tasks, trash, projects, settings }`.
+It flows through four layers, all of which already know about every field:
+
+| Layer | File | Shape |
+|---|---|---|
+| UI memory | `public/app.js` (`S`) | lives inside the storage engine's `memory` object |
+| Browser disk | `public/storage.js` | IndexedDB stores `tasks` / `trash` / `projects` + `meta`, redundant `todo_backup_v1` localStorage mirror |
+| Wire | `public/cloud.js` | `snapshotJson()` / `POST /api/sync { state: { savedAt, settings, tasks, trash, projects }, tombstones }` |
+| Server disk | `server/server.js` | one JSON state doc per user (file or Supabase row) |
+
+**Never add a second store, a second doc, or a second table for a new
+record type.** Add a field/array to the existing state (that's how Projects
+shipped: `projects: []` + `tasks[].projectId`).
+
+## 2. Adding a record type or field — the exact checklist
+
+1. **`storage.js`** — `SCHEMA_VERSION` +1 and add `MIGRATIONS[old]` that
+   defaults the new field for every older payload (IDB data, LS mirror and
+   imported backups all run this chain). Lenient coercion function
+   (`coerceTask` / `coerceProject` pattern): **preserve unknown fields via
+   spread**, only drop records whose *id* is unusable, clamp everything else
+   to defaults. Wire it into `cleanPayload` (dedupe), `validatePayload`,
+   `serializeBackup`/`readBackup`, `backupNewer` (compare the new array's
+   `updatedAt` too), `fullResync`, `recover` (retention pruning),
+   `replaceMemory`, `validateOp` (store whitelist + put-value validation),
+   `STORES`.
+2. **`server.js`** — mirror the coercion in `normalizeState`, include the
+   array in the `before/after` change-detection and merge (per-id max
+   `updatedAt`), `applyTombstones` (scope prefix `"<store>:<id>"`, kills iff
+   `tombstoneAt >= updatedAt`), `pruneExpired` (soft-deleted records past the
+   30-day window → tombstone), and bump `version` in `/api/config`.
+3. **`cloud.js`** — include it in `snapshotJson`, the push body, and
+   `adoptRemote` (same LWW + tombstone filter + prune). Delete-op capture is
+   already generic (`op.store + ':' + op.key`) — no change needed.
+4. **`app.js`** — every mutation = mutate `S`, then ONE `store.commit([...])`
+   with ops for *every* store it touches (a purge that orphans tasks commits
+   the detach in the same transaction).
+5. **Tests** — extend all four suites (`server/test.mjs`,
+   `test-storage.mjs`, `test-supabase.mjs`, `test-client.mjs`).
+   `test-storage.mjs` runs the real `storage.js` in Node (LS-only engine),
+   `test-client.mjs` runs the real `cloud.js` against the real server — keep
+   using them instead of re-implementing logic in tests.
+
+## 3. Deletion semantics (three tiers — never skip one)
+
+* **Soft delete** → move/flag inside the state (`trash` store with
+  `trashedAt`, `projects[].deletedAt > 0`). Bump `updatedAt`. **No
+  tombstone.** Undo = newer `updatedAt` revives it; 30-day retention prunes
+  it with a notice on boot.
+* **Purge / delete-forever** → `{ op: 'delete' }` commit — cloud.js turns it
+  into a tombstone; server keeps tombstones 30 days so *stale* re-pushes
+  from offline devices can't resurrect it, while a genuine newer edit wins
+  ("edit beats delete"). Purging a project detaches its tasks
+  (`projectId: null`) **in the same commit**.
+* **Import (replace)** → clears tombstones for the ids the replacement
+  contains; it is the *only* whole-state overwrite and always sits behind a
+  confirm + auto-downloaded safety copy.
+
+Tombstones are **store-scoped**: `tasks:x` never kills the `trash:x` copy
+(that's how a soft delete survives sync on the other side).
+
+## 4. UI/UX invariants
+
+* Anything destructive is either undoable via an 8 s toast *or* lands in the
+  shared Trash view (restorable for 30 days).
+* Filters that survive reload live in `settings` (persisted with
+  `store.commit([])`); transient view state lives in `S.ui`.
+* Drafts autosave to `LS_DRAFT_KEY` — composer-like forms must include their
+  fields in `readForm`/`currentDraft`.
+* Dark mode is free if you use the CSS tokens (`--panel`, `--border`,
+  `--accent`, `--danger`, `--radius`…); `--pc` carries a per-project colour.
+* All UI strings are injected through `esc()` (there is no framework).
+
+## 5. Compat floor (tested, not aspirational)
+
+A backup or IDB copy from **schemaVersion 0 or 1** must load, migrate, and
+sync without touching user data. Existing task IDs, titles, tags, due dates
+and trashed items are asserted to survive in `test-storage.mjs`. Old servers
+(v2/v3) receiving v4 payloads ignore the unknown `projects` key instead of
+crashing (server.js normalizes leniently) — a mixed fleet can't corrupt data,
+it just doesn't sync projects until both sides upgrade.
+
+## 6. Process
+
+* `node --check` every touched file, then run **all four suites**
+  (`for f in test test-storage test-supabase test-client; do node server/$f.mjs; done`).
+* No unrelated refactors. Additive patches with exact-match anchors beat
+  rewrites here — several times, a rewrite silently dropped a compat path.
+* Secrets: never in the repo, never pasted in chat; `server/.dev.env`
+  (gitignored) holds local dev config.

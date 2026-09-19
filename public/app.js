@@ -33,11 +33,12 @@
     composer: $('composer'), composerTitle: $('composerTitle'),
     taskForm: $('taskForm'),
     fTitle: $('f-title'), fDesc: $('f-desc'), fDue: $('f-due'),
-    fPriority: $('f-priority'), fTags: $('f-tags'),
+    fPriority: $('f-priority'), fProject: $('f-project'), fTags: $('f-tags'),
     saveTaskBtn: $('saveTaskBtn'), cancelTaskBtn: $('cancelTaskBtn'), draftHint: $('draftHint'),
     searchInput: $('searchInput'), newTaskBtn: $('newTaskBtn'),
     draftResume: $('draftResume'), draftResumeBtn: $('draftResumeBtn'), draftDiscardBtn: $('draftDiscardBtn'),
     filterTabs: $('filterTabs'), tagChips: $('tagChips'),
+    projectBar: $('projectBar'), projectDetail: $('projectDetail'),
     taskList: $('taskList'), emptyState: $('emptyState'),
     trashBar: $('trashBar'), trashCount: $('trashCount'), emptyTrashBtn: $('emptyTrashBtn'),
     settingsPanel: $('settingsPanel'), themeSelect: $('themeSelect'), reminderSelect: $('reminderSelect'),
@@ -95,10 +96,15 @@
     // migration + validation (see storage.js recover()).
     const rec = await store.recover();
     S = rec.state;
-    S.ui = { search: '', editingId: null, composerOpen: false };
+    S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
+    // Project filter persists like the tag filter, so "which project was open"
+    // survives reload. Drop it if that project no longer exists (purged offline).
+    S.settings.filterProject = typeof S.settings.filterProject === 'string' && S.settings.filterProject ? S.settings.filterProject : null;
+    if (S.settings.filterProject && !S.projects.some((p) => p.id === S.settings.filterProject && !p.deletedAt)) S.settings.filterProject = null;
+    S.ui.projectView = S.settings.filterProject;
 
     store.startSync();
 
@@ -152,6 +158,7 @@
     if (mode === 'active') list = list.filter((t) => t.status !== 'completed');
     if (mode === 'completed') list = list.filter((t) => t.status === 'completed');
     if (S.settings.filterTag) list = list.filter((t) => (t.tags || []).includes(S.settings.filterTag));
+    if (S.settings.filterProject) list = list.filter((t) => t.projectId === S.settings.filterProject);
     const q = S.ui.search.trim().toLowerCase();
     if (q) list = list.filter((t) =>
       t.title.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q));
@@ -341,6 +348,10 @@
 
   function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
 
+  // f-project is part of the composer row the draft autosave watches; keep
+  // the lookup lazy so the wiring above never races element creation.
+  function fProjectSelect() { return els.fProject; }
+
   /* --------------------------- Confirmation modal ------------------------- */
 
   function confirmDialog({ title, body, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false }) {
@@ -400,6 +411,8 @@
     }
     renderFilters();
     renderTagChips();
+    renderProjects();
+    renderProjectDetail();
     renderTrashBar();
     renderList();
     renderSettings();
@@ -438,9 +451,10 @@
 
   function renderTrashBar() {
     const inTrash = S.settings.filterMode === 'trash';
+    const n = S.trash.length + trashedProjects().length;
     els.trashBar.hidden = !inTrash;
-    if (inTrash) els.trashCount.textContent = S.trash.length + ' item(s)';
-    els.emptyTrashBtn.hidden = inTrash && S.trash.length === 0;
+    if (inTrash) els.trashCount.textContent = n + ' item(s)';
+    els.emptyTrashBtn.hidden = inTrash && n === 0;
   }
 
   function taskItemHTML(t, inTrash) {
@@ -459,6 +473,14 @@
           '<div class="task-meta">' +
             '<span class="badge prio-' + t.priority + '">' + prioLabel + '</span>' +
             (due && !inTrash ? '<span class="badge due ' + due.cls + '">' + due.text + '</span>' : '') +
+            (function () {
+              if (!t.projectId) return '';
+              const pj = S.projects.find((p) => p.id === t.projectId);
+              if (pj && !pj.deletedAt) {
+                return '<button class="chip proj-ref" data-pid="' + esc(pj.id) + '" type="button" title="Open project ' + esc(pj.name) + '">' + esc(pj.icon) + ' ' + esc(pj.name) + '</button>';
+              }
+              return '<span class="badge proj-gone">in deleted project</span>';
+            })() +
             (t.tags || []).map((tag) => '<button class="chip" data-tag="' + esc(tag) + '" type="button">' + esc(tag) + '</button>').join('') +
             (inTrash ? '<span class="muted small">trashed ' + fmtWhen(t.trashedAt) + '</span>' : '') +
           '</div>' +
@@ -479,17 +501,24 @@
   function renderList() {
     const inTrash = S.settings.filterMode === 'trash';
     const list = visibleTasks();
-    if (!list.length) {
+    const trashedProj = inTrash ? trashedProjects() : [];
+    if (!list.length && !trashedProj.length) {
       els.taskList.innerHTML = '';
       els.emptyState.hidden = false;
       let icon = '🗒️', text = 'No tasks yet — click <b>＋ New task</b> to add one. Everything you write is saved automatically, on every change.';
-      if (inTrash) { icon = '🗑️'; text = 'Trash is empty. Deleted tasks land here for 30 days before they are removed automatically.'; }
+      if (inTrash) { icon = '🗑️'; text = 'Trash is empty. Deleted tasks (and projects) land here for 30 days before they are removed automatically.'; }
+      else if (S.settings.filterProject) {
+        const p = projectById(S.settings.filterProject);
+        icon = (p && p.icon) || '📁';
+        text = 'Nothing in this project yet — use <b>＋ Add task</b> to put the first one here.';
+      }
       else if (S.tasks.length || S.trash.length) { icon = '🔍'; text = 'No tasks match the current filter or search.'; }
       els.emptyState.innerHTML = '<span class="big">' + icon + '</span>' + text;
       return;
     }
     els.emptyState.hidden = true;
-    els.taskList.innerHTML = list.map((t) => taskItemHTML(t, inTrash)).join('');
+    els.taskList.innerHTML = trashedProj.map((p) => projectRowTrash(p)).join('')
+      + list.map((t) => taskItemHTML(t, inTrash)).join('');
   }
 
   function renderSettings() {
@@ -499,7 +528,9 @@
 
   function renderFooter() {
     const done = S.tasks.filter((t) => t.status === 'completed').length;
-    els.footerCounts.textContent = S.tasks.length + ' task(s) · ' + done + ' completed · ' + S.trash.length + ' in trash';
+    const liveProj = S.projects.filter((p) => !p.deletedAt).length;
+    els.footerCounts.textContent = S.tasks.length + ' task(s) · ' + done + ' completed · ' + S.trash.length + ' in trash'
+      + (liveProj ? ' · ' + liveProj + ' project(s)' : '');
   }
 
   function updateStorageInfo() {
@@ -535,6 +566,10 @@
     els.fTags.value = prefill && prefill.tags != null
       ? prefill.tags.join(', ')
       : (editing ? (editing.tags || []).join(', ') : '');
+    fillProjectSelect();
+    els.fProject.value = prefill && prefill.projectId != null
+      ? prefill.projectId
+      : (editing ? (editing.projectId || '') : (S.settings.filterProject || ''));
     els.fTitle.classList.remove('invalid');
     els.composer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     setTimeout(() => els.fTitle.focus(), 60);
@@ -556,6 +591,7 @@
       dueDate: els.fDue.value || null,
       priority: els.fPriority.value,
       tags: els.fTags.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+      projectId: els.fProject.value || null,
     };
   }
 
@@ -573,7 +609,7 @@
       const t = byId(S.ui.editingId);
       Object.assign(t, {
         title, description: v.description, dueDate: v.dueDate,
-        priority: v.priority, tags: v.tags, updatedAt: now,
+        priority: v.priority, tags: v.tags, projectId: v.projectId, updatedAt: now,
       });
       ops = [{ store: STORES.tasks, op: 'put', value: t }];
     } else {
@@ -584,6 +620,7 @@
         id: helpers.uuid(),
         title, description: v.description, dueDate: v.dueDate,
         priority: v.priority, tags: v.tags,
+        projectId: v.projectId,
         status: 'active',
         sortOrder: S.tasks.length ? base - 1 : 0,
         createdAt: now, updatedAt: now,
@@ -614,6 +651,7 @@
       taskId: S.ui.editingId,
       title: v.title, description: v.description, dueDate: v.dueDate,
       priority: v.priority, tags: v.tags,
+      projectId: v.projectId,
       savedAt: Date.now(),
     };
   }
@@ -747,22 +785,42 @@
   }
 
   async function emptyTrash() {
-    if (!S.trash.length) return;
+    const deadProjects = trashedProjects();
+    if (!S.trash.length && !deadProjects.length) return;
     const ok = await confirmDialog({
       title: 'Empty trash?',
-      body: 'This will permanently delete ' + S.trash.length + ' item(s). A small safety copy of the trash will be downloaded first, in case you change your mind.',
+      body: 'This will permanently delete ' + (S.trash.length + deadProjects.length) + ' item(s)'
+        + (deadProjects.length ? ' including ' + deadProjects.length + ' project(s) — their tasks stay in your list, moved to the Inbox.' : '')
+        + ' A small safety copy of the trash will be downloaded first, in case you change your mind.',
       confirmLabel: 'Download safety copy, then empty',
       danger: true,
     });
     if (!ok) return;
     try {
       downloadRaw(
-        JSON.stringify({ app: 'zerotodo', type: 'trash-safety-copy', exportedAt: new Date().toISOString(), trash: S.trash }),
+        JSON.stringify({ app: 'zerotodo', type: 'trash-safety-copy', exportedAt: new Date().toISOString(), trash: S.trash, projects: S.projects }),
         'zerotodo-trash-' + stamp() + '.json'
       );
     } catch (_) { /* safety copy is best-effort */ }
     const ops = S.trash.map((t) => ({ store: STORES.trash, op: 'delete', key: t.id }));
     S.trash = [];
+    for (const p of deadProjects) {
+      ops.push({ store: STORES.projects, op: 'delete', key: p.id });
+      for (const arr of [S.tasks, S.trash]) {
+        for (const t of arr) {
+          if (t.projectId === p.id) {
+            t.projectId = null;
+            t.updatedAt = Date.now();
+            ops.push({ store: arr === S.tasks ? STORES.tasks : STORES.trash, op: 'put', value: t });
+          }
+        }
+      }
+    }
+    S.projects = S.projects.filter((p) => !p.deletedAt);
+    if (deadProjects.some((p) => p.id === S.settings.filterProject)) {
+      S.settings.filterProject = null;
+      S.ui.projectView = null;
+    }
     await store.commit(ops);
     renderAll();
     toast('Trash emptied.');
@@ -805,6 +863,383 @@
       if (offset < 0 && offset > closest.offset) closest = { offset, el };
     }
     return closest.el;
+  }
+
+  /* ------------------------------- Projects ------------------------------- */
+  /* Projects share the tasks/trash machinery completely: same commit path,
+     same backup, same tombstones. `deletedAt` marks a trashed project; a task
+     whose project is gone keeps working — the reference just detaches on
+     purge (emptyTrash / delete-forever move those tasks to the Inbox). */
+
+  function projectByIdRaw(id) { return S.projects.find((p) => p.id === id) || null; }
+  function projectById(id) { const p = projectByIdRaw(id); return p && !p.deletedAt ? p : null; }
+  function liveProjects() { return S.projects.filter((p) => !p.deletedAt); }
+  function trashedProjects() { return S.projects.filter((p) => p.deletedAt); }
+  function isOverdueDate(ds) { const f = formatDue(ds, false); return !!(f && f.cls === 'overdue'); }
+
+  function projStats(pid) {
+    const tasks = S.tasks.filter((t) => t.projectId === pid);
+    const done = tasks.filter((t) => t.status === 'completed').length;
+    return {
+      total: tasks.length,
+      done,
+      left: tasks.length - done,
+      overdue: tasks.filter((t) => t.status !== 'completed' && isOverdueDate(t.dueDate)).length,
+      pct: tasks.length ? Math.round((done / tasks.length) * 100) : 0,
+    };
+  }
+
+  function projDueBadge(p) {
+    if (!p.dueDate) return '';
+    const f = formatDue(p.dueDate, p.status === 'completed');
+    if (!f) return '';
+    return '<span class="badge due ' + f.cls + '">' + f.text + '</span>';
+  }
+
+  function renderProjects() {
+    const bar = els.projectBar;
+    const projects = liveProjects();
+    if (!projects.length) { bar.hidden = true; bar.innerHTML = ''; fillProjectSelect(); return; }
+    fillProjectSelect();
+    bar.hidden = false;
+    const archivedOn = !!S.ui.showArchived;
+    const vis = projects.filter((p) => p.archived === archivedOn);
+    const archivedN = projects.filter((p) => p.archived).length;
+    const cards = vis.map((p) => {
+      const st = projStats(p.id);
+      const on = S.ui.projectView === p.id;
+      return '<div class="project-card' + (on ? ' on' : '') + (p.archived ? ' archived' : '') + '" data-pid="' + esc(p.id) + '" style="--pc:' + esc(p.color) + '">' +
+        '<button class="pc-open" type="button" title="Open project">' +
+          '<span class="pc-icon">' + esc(p.icon) + '</span>' +
+          '<span class="pc-name">' + esc(p.name) + '</span>' +
+          '<span class="pc-count">' + st.done + '/' + st.total + '</span>' +
+        '</button>' +
+        '<span class="pc-bar" title="' + st.pct + '% complete"><i style="width:' + st.pct + '%"></i></span>' +
+        (st.overdue ? '<span class="badge due overdue" title="' + st.overdue + ' overdue task(s)">⚠ ' + st.overdue + '</span>' : projDueBadge(p)) +
+        (p.status === 'completed' ? '<span class="badge done-badge">done</span>' : '') +
+        '<button class="pc-menu btn btn-ghost btn-sm btn-icon" data-act="menu" type="button" title="Project actions" aria-label="Project actions for ' + esc(p.name) + '">⋯</button>' +
+      '</div>';
+    }).join('');
+    bar.innerHTML =
+      '<div class="project-bar-head">' +
+        '<span class="project-bar-title">📂 Projects <span class="count">' + (projects.length - archivedN) + '</span></span>' +
+        '<span class="spacer"></span>' +
+        (archivedN ? '<button class="btn btn-sm btn-ghost" data-act="toggleArchived" type="button">' + (archivedOn ? 'Active (' + (projects.length - archivedN) + ')' : 'Archived (' + archivedN + ')') + '</button>' : '') +
+        '<button class="btn btn-sm btn-primary" data-act="new" type="button">＋ New project</button>' +
+      '</div>' +
+      '<div class="project-cards">' + (cards || '<span class="muted small">No projects here yet.</span>') + '</div>';
+  }
+
+  function renderProjectDetail() {
+    const host = els.projectDetail;
+    const pid = S.ui.projectView;
+    const p = pid && projectById(pid);
+    if (!p) {
+      if (pid && !projectByIdRaw(pid)) { S.ui.projectView = null; S.settings.filterProject = null; }
+      host.hidden = true;
+      host.innerHTML = '';
+      return;
+    }
+    const st = projStats(p.id);
+    const due = p.dueDate ? formatDue(p.dueDate, p.status === 'completed') : null;
+    host.hidden = false;
+    host.innerHTML =
+      '<div class="pd-card" style="--pc:' + esc(p.color) + '">' +
+        '<button class="pd-back btn btn-ghost btn-sm" data-act="back" type="button">← All projects</button>' +
+        '<div class="pd-head">' +
+          '<span class="pd-icon">' + esc(p.icon) + '</span>' +
+          '<div class="pd-titles"><h2>' + esc(p.name) + '</h2>' +
+            (p.description ? '<p class="pd-desc">' + esc(p.description) + '</p>' : '') +
+          '</div>' +
+          '<div class="pd-actions">' +
+            '<button class="btn btn-sm btn-primary" data-act="add" type="button">＋ Add task</button>' +
+            '<button class="btn btn-sm btn-ghost" data-act="edit" type="button">Edit</button>' +
+            '<button class="btn btn-sm btn-ghost" data-act="archive" type="button">' + (p.archived ? 'Unarchive' : 'Archive') + '</button>' +
+            '<button class="btn btn-sm btn-danger-ghost" data-act="delete" type="button">Delete</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="pd-stats">' +
+          '<span class="pd-pct"><b>' + st.pct + '%</b> complete</span>' +
+          '<span>·</span><span>' + st.done + ' done</span>' +
+          '<span>·</span><span>' + st.left + ' remaining</span>' +
+          (st.overdue ? '<span>·</span><span class="overdue-text">⚠ ' + st.overdue + ' overdue</span>' : '') +
+          (due ? '<span>·</span><span>' + due.text + (due.cls === 'overdue' ? ' ⚠' : '') + '</span>' : '') +
+          (p.status === 'completed' ? '<span>·</span><span>marked completed</span>' : '') +
+          (p.archived ? '<span>·</span><span>archived</span>' : '') +
+        '</div>' +
+        '<span class="pd-progress" role="progressbar" aria-valuenow="' + st.pct + '" aria-valuemin="0" aria-valuemax="100"><i style="width:' + st.pct + '%"></i></span>' +
+      '</div>';
+  }
+
+  function projectRowTrash(p) {
+    return '<li class="task project-row" data-pid="' + esc(p.id) + '">' +
+      '<span class="check" aria-hidden="true">🗑</span>' +
+      '<div class="task-main">' +
+        '<div class="task-title">' + esc(p.icon) + ' ' + esc(p.name) + ' <span class="badge">project</span></div>' +
+        '<div class="task-meta"><span class="muted small">deleted ' + fmtWhen(p.deletedAt) + ' — tasks were never touched</span></div>' +
+      '</div>' +
+      '<div class="task-actions">' +
+        '<button class="btn btn-ghost btn-sm" data-act="restore" type="button">Restore</button>' +
+        '<button class="btn btn-danger-ghost btn-sm" data-act="destroy" type="button">Delete forever</button>' +
+      '</div>' +
+    '</li>';
+  }
+
+  function fillProjectSelect() {
+    const sel = els.fProject;
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = ['<option value="">📥 Inbox</option>'].concat(
+      liveProjects()
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((p) => '<option value="' + esc(p.id) + '">' + esc(p.icon) + ' ' + esc(p.name) + (p.archived ? ' (archived)' : '') + '</option>')
+    ).join('');
+    if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  }
+
+  async function openProject(pid) {
+    const p = projectById(pid);
+    if (!p) return;
+    if (S.ui.projectView === pid) { await closeProject(); return; }
+    S.ui.projectView = pid;
+    S.settings.filterProject = pid;
+    if (S.settings.filterMode === 'trash') S.settings.filterMode = 'all';
+    await store.commit([]); // persist the view choice (survives reload, like filterTag)
+    renderAll();
+  }
+
+  async function closeProject() {
+    S.ui.projectView = null;
+    S.settings.filterProject = null;
+    await store.commit([]);
+    renderAll();
+  }
+
+  async function toggleArchiveProject(p) {
+    p.archived = !p.archived;
+    p.updatedAt = Date.now();
+    await store.commit([{ store: STORES.projects, op: 'put', value: p }]);
+    if (p.archived && S.ui.projectView === p.id) await closeProject();
+    else renderAll();
+    toast(p.archived ? 'Project archived — its tasks stay right where they are.' : 'Project unarchived.');
+  }
+
+  async function toggleProjectStatus(p) {
+    p.status = p.status === 'completed' ? 'active' : 'completed';
+    p.updatedAt = Date.now();
+    await store.commit([{ store: STORES.projects, op: 'put', value: p }]);
+    renderAll();
+    toast(p.status === 'completed' ? 'Project marked completed.' : 'Project reopened.');
+  }
+
+  let undoProjId = null;
+  let undoProjTimer = null;
+
+  async function deleteProject(pid) {
+    const p = projectByIdRaw(pid);
+    if (!p || p.deletedAt) return;
+    const ok = await confirmDialog({
+      title: 'Delete project “' + truncate(p.name, 40) + '”?',
+      body: 'The project moves to Trash (restorable for 30 days — or via the Undo toast). Its tasks are NOT deleted: they stay in place and stay usable; while the project is in Trash they just have no card.',
+      confirmLabel: 'Move to Trash',
+      danger: true,
+    });
+    if (!ok) return;
+    const now = Date.now();
+    p.deletedAt = now;
+    p.updatedAt = now; // newer than any synced copy; purge writes the tombstone
+    if (S.ui.projectView === pid) { S.ui.projectView = null; S.settings.filterProject = null; }
+    await store.commit([{ store: STORES.projects, op: 'put', value: p }]);
+    renderAll();
+    showProjectUndoToast(p);
+  }
+
+  function showProjectUndoToast(p) {
+    clearTimeout(undoProjTimer);
+    undoProjId = p.id;
+    els.toastHost.innerHTML =
+      '<div class="toast show toast-undo">' +
+      '<span>Deleted “' + esc(truncate(p.name, 30)) + '” — project moved to Trash</span>' +
+      '<button class="btn btn-sm btn-undo" id="undoProjBtn">Undo</button>' +
+      '<div class="undo-bar"><div class="undo-bar-fill"></div></div>' +
+      '</div>';
+    $('undoProjBtn').onclick = () => restoreProject(p.id);
+    undoProjTimer = setTimeout(() => { undoProjId = null; els.toastHost.innerHTML = ''; }, 8000);
+  }
+
+  async function restoreProject(pid) {
+    const p = projectByIdRaw(pid);
+    if (!p) return;
+    clearTimeout(undoProjTimer);
+    els.toastHost.innerHTML = '';
+    p.deletedAt = null;
+    p.updatedAt = Date.now(); // beats the (absent) tombstone — restore semantics
+    await store.commit([{ store: STORES.projects, op: 'put', value: p }]);
+    renderAll();
+    toast('Project restored.');
+  }
+
+  async function destroyProjectForever(pid) {
+    const p = projectByIdRaw(pid);
+    if (!p) return;
+    const attached = S.tasks.filter((t) => t.projectId === pid).length + S.trash.filter((t) => t.projectId === pid).length;
+    const ok = await confirmDialog({
+      title: 'Delete forever?',
+      body: '“' + p.name + '” will be permanently erased.'
+        + (attached ? ' ' + attached + ' task(s) will stay in your list, detached from the project and moved back to the Inbox.' : '')
+        + ' This cannot be undone.',
+      confirmLabel: 'Delete forever',
+      danger: true,
+    });
+    if (!ok) return;
+    const now = Date.now();
+    S.projects = S.projects.filter((x) => x.id !== p.id);
+    const ops = [{ store: STORES.projects, op: 'delete', key: p.id }];
+    for (const arr of [S.tasks, S.trash]) {
+      for (const t of arr) {
+        if (t.projectId === p.id) {
+          t.projectId = null;
+          t.updatedAt = now;
+          ops.push({ store: arr === S.tasks ? STORES.tasks : STORES.trash, op: 'put', value: t });
+        }
+      }
+    }
+    if (S.settings.filterProject === p.id) { S.settings.filterProject = null; S.ui.projectView = null; }
+    await store.commit(ops);
+    renderAll();
+    toast('Project deleted forever' + (attached ? ' — its tasks moved to the Inbox.' : '.'));
+  }
+
+  function onProjectBarClick(e) {
+    const top = e.target.closest('[data-act]');
+    const act = top && top.dataset.act;
+    if (act === 'new') { projectFormModal(null); return; }
+    if (act === 'toggleArchived') { S.ui.showArchived = !S.ui.showArchived; renderProjects(); return; }
+    const card = e.target.closest('.project-card');
+    if (!card) return;
+    const p = projectByIdRaw(card.dataset.pid);
+    if (!p) return;
+    if (act === 'menu') { projectMenu(p); return; }
+    openProject(card.dataset.pid);
+  }
+
+  function onProjectDetailClick(e) {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const p = S.ui.projectView && projectById(S.ui.projectView);
+    if (!p) return;
+    switch (b.dataset.act) {
+      case 'back': closeProject(); break;
+      case 'edit': projectFormModal(p); break;
+      case 'add': openComposer({ mode: 'new' }, { projectId: p.id }); break;
+      case 'archive': toggleArchiveProject(p); break;
+      case 'delete': deleteProject(p.id); break;
+    }
+  }
+
+  function projectMenu(p) {
+    const ov = document.createElement('div');
+    ov.className = 'modal-overlay';
+    const card = document.createElement('div');
+    card.className = 'modal';
+    card.setAttribute('role', 'dialog');
+    card.innerHTML =
+      '<h3>' + esc(p.icon) + ' ' + esc(p.name) + '</h3>' +
+      '<div class="modal-actions col">' +
+        '<button class="btn btn-ghost" data-m="edit" type="button">✏️ Rename / edit</button>' +
+        '<button class="btn btn-ghost" data-m="status" type="button">' + (p.status === 'completed' ? '↩ Reopen project' : '✅ Mark completed') + '</button>' +
+        '<button class="btn btn-ghost" data-m="archive" type="button">' + (p.archived ? '📂 Unarchive' : '🗄️ Archive') + '</button>' +
+        '<button class="btn btn-danger-ghost" data-m="delete" type="button">🗑️ Move to Trash</button>' +
+        '<button class="btn btn-ghost" data-m="close" type="button">Close</button>' +
+      '</div>';
+    const finish = () => ov.remove();
+    ov.addEventListener('click', (e) => {
+      if (e.target === ov) return finish();
+      const b = e.target.closest('[data-m]');
+      if (!b) return;
+      finish();
+      if (b.dataset.m === 'edit') projectFormModal(p);
+      else if (b.dataset.m === 'status') toggleProjectStatus(p);
+      else if (b.dataset.m === 'archive') toggleArchiveProject(p);
+      else if (b.dataset.m === 'delete') deleteProject(p.id);
+    });
+    els.modalHost.appendChild(ov);
+  }
+
+  const PROJECT_ICONS = ['📁', '💼', '🏠', '🎯', '🎨', '📚', '🏋️', '🌱', '✈️', '🛒', '🔧', '🎧', '💻', '📅', '⭐', '❤️', '🧪', '🎮'];
+  const PROJECT_COLORS = ['var(--accent)', '#f2748c', '#f0a35e', '#e8cf6a', '#63c98b', '#57c2d3', '#7aa2ff', '#b48cf2', '#e26fd1'];
+
+  function projectFormModal(existing) {
+    const p = existing || null;
+    const ov = document.createElement('div');
+    ov.className = 'modal-overlay';
+    const card = document.createElement('div');
+    card.className = 'modal modal-form';
+    card.setAttribute('role', 'dialog');
+    card.innerHTML =
+      '<h3>' + (p ? 'Edit project' : 'New project') + '</h3>' +
+      '<label class="field"><span>Name</span><input id="pf-name" type="text" maxlength="120" placeholder="e.g. Renovation — autumn" value="' + (p ? esc(p.name) : '') + '"></label>' +
+      '<label class="field"><span>Description</span><textarea id="pf-desc" rows="2" maxlength="2000" placeholder="Optional notes">' + (p ? esc(p.description) : '') + '</textarea></label>' +
+      '<div class="form-row">' +
+        '<label class="field"><span>Due date</span><input id="pf-due" type="date" value="' + (p && p.dueDate ? p.dueDate : '') + '"></label>' +
+        '<label class="field"><span>Status</span><select id="pf-status"><option value="active">Active</option><option value="completed">Completed</option></select></label>' +
+      '</div>' +
+      '<div class="field"><span>Icon</span><div class="pf-icons">' + PROJECT_ICONS.map((i) => '<button type="button" class="pf-icon" data-icon="' + i + '">' + i + '</button>').join('') + '</div></div>' +
+      '<div class="field"><span>Colour theme</span><div class="pf-colors">' + PROJECT_COLORS.map((c) => '<button type="button" class="pf-color" data-color="' + c + '" style="background:' + c + '"></button>').join('') + '</div></div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" data-m="cancel" type="button">Cancel</button>' +
+        '<button class="btn btn-primary" data-m="save" type="button">' + (p ? 'Save changes' : 'Create project') + '</button>' +
+      '</div>';
+    let icon = p ? p.icon : '📁';
+    let color = p ? p.color : PROJECT_COLORS[0];
+    const mark = () => {
+      card.querySelectorAll('.pf-icon').forEach((b) => b.classList.toggle('on', b.dataset.icon === icon));
+      card.querySelectorAll('.pf-color').forEach((b) => b.classList.toggle('on', b.dataset.color === color));
+    };
+    if (p) card.querySelector('#pf-status').value = p.status;
+    mark();
+    const nameEl = card.querySelector('#pf-name');
+    nameEl.addEventListener('input', () => nameEl.classList.remove('invalid'));
+    card.addEventListener('click', (e) => {
+      const ic = e.target.closest('.pf-icon');
+      if (ic) { icon = ic.dataset.icon; mark(); return; }
+      const cc = e.target.closest('.pf-color');
+      if (cc) { color = cc.dataset.color; mark(); return; }
+      const b = e.target.closest('[data-m]');
+      if (!b) return;
+      if (b.dataset.m === 'cancel') { ov.remove(); return; }
+      if (b.dataset.m !== 'save') return;
+      const name = nameEl.value.trim();
+      if (!name) { nameEl.classList.add('invalid'); nameEl.focus(); return; }
+      ov.remove();
+      saveProject(p, {
+        name,
+        description: card.querySelector('#pf-desc').value.trim(),
+        dueDate: card.querySelector('#pf-due').value || null,
+        status: card.querySelector('#pf-status').value,
+        icon,
+        color,
+      });
+    });
+    ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+    els.modalHost.appendChild(ov);
+    nameEl.focus();
+  }
+
+  async function saveProject(existing, v) {
+    const now = Date.now();
+    let p;
+    if (existing) {
+      p = { ...existing, ...v, updatedAt: now };
+      S.projects = S.projects.map((x) => (x.id === p.id ? p : x));
+    } else {
+      p = { id: helpers.uuid(), createdAt: now, updatedAt: now, sortOrder: now, archived: false, deletedAt: null, ...v };
+      S.projects.push(p);
+    }
+    await store.commit([{ store: STORES.projects, op: 'put', value: p }]);
+    renderAll();
+    toast(existing ? 'Project updated.' : 'Project “' + truncate(p.name, 30) + '” created.');
   }
 
   /* --------------------------- Filters & search --------------------------- */
@@ -894,11 +1329,15 @@
 
     // Adopt the imported dataset, then make disk converge to it (full
     // read-modify-write resync: put all, delete orphans, mirror, broadcast).
-    store.replaceMemory(clean.tasks, clean.trash);
+    store.replaceMemory(clean.tasks, clean.trash, clean.projects);
     // Local settings (theme, reminder cadence) are device preferences — keep
     // them; the imported tasks/trash replace ours entirely.
     const okc = await store.resync();
     if (S.settings.filterTag && !allTags().some(([t]) => t === S.settings.filterTag)) S.settings.filterTag = null;
+    if (S.settings.filterProject && !S.projects.some((p) => p.id === S.settings.filterProject && !p.deletedAt)) {
+      S.settings.filterProject = null;
+      S.ui.projectView = null;
+    }
     renderAll();
     if (okc) toast('Imported ' + clean.tasks.length + ' task(s) from “' + file.name + '”.');
   }
@@ -942,7 +1381,7 @@
     els.cancelTaskBtn.onclick = () => closeComposer(); // draft stays on disk
 
     // Composer input → debounced draft autosave
-    for (const el of [els.fTitle, els.fDesc, els.fDue, els.fPriority, els.fTags]) {
+    for (const el of [els.fTitle, els.fDesc, els.fDue, els.fPriority, fProjectSelect(), els.fTags]) {
       el.addEventListener('input', () => {
         el.classList.remove('invalid');
         scheduleDraft();
@@ -982,8 +1421,22 @@
       if (c) setFilterTag(S.settings.filterTag === c.dataset.tag ? null : c.dataset.tag);
     });
 
+    // Projects: quick-switch bar + detail header (markup rendered in renderProjects)
+    els.projectBar.addEventListener('click', onProjectBarClick);
+    els.projectDetail.addEventListener('click', onProjectDetailClick);
+
     // Task list: click actions
     els.taskList.addEventListener('click', (e) => {
+      const prow = e.target.closest('.project-row');
+      if (prow) {
+        const pid = prow.dataset.pid;
+        const b = e.target.closest('button');
+        if (b && b.dataset.act === 'restore') restoreProject(pid);
+        else if (b && b.dataset.act === 'destroy') destroyProjectForever(pid);
+        return;
+      }
+      const prj = e.target.closest('.proj-ref');
+      if (prj) { openProject(prj.dataset.pid); return; }
       const chip = e.target.closest('.chip');
       if (chip) { setFilterTag(S.settings.filterTag === chip.dataset.tag ? null : chip.dataset.tag); return; }
       const li = e.target.closest('.task');

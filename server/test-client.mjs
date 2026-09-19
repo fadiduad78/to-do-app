@@ -54,12 +54,12 @@ globalThis.addEventListener = () => {};
 /* ------------------------ fake local storage engine ---------------------- */
 /* Mimics ZTStorage semantics: commit(ops) mutates nothing here — the test
  * mutates `memory` directly like app.js does — and returns true. */
-const memory = { tasks: [], trash: [], settings: {}, lastSavedAt: Date.now() };
+const memory = { tasks: [], trash: [], projects: [], settings: {}, lastSavedAt: Date.now() };
 const store = {
   state: memory,
   async commit() { return true; },
   async resync() { return true; },
-  replaceMemory(t, r) { memory.tasks = t; memory.trash = r; },
+  replaceMemory(t, r, p) { memory.tasks = t; memory.trash = r; memory.projects = p || []; },
 };
 
 /* --------------------------- load real cloud.js -------------------------- */
@@ -145,6 +145,68 @@ await store.commit([{ store: 'tasks', op: 'put', value: t2 }]);
 await wait(1400);
 st = await serverState();
 ok(st.tasks.length === 1 && st.tasks[0].title === 'groceries', 'new task syncs after tombstone drama');
+
+console.log('7. projects: sync semantics end to end (create / LWW / soft delete / purge)');
+const proj = (name, upd, extra) => ({
+  id: 'pA', name, description: '', icon: '🚀', color: '#ff0044', status: 'active',
+  archived: false, dueDate: '2030-12-31', createdAt: T0, updatedAt: upd, sortOrder: T0,
+  deletedAt: null, ...extra,
+});
+memory.projects.push(proj('Launch', Date.now()));
+const t3 = rec('t3', 'site banner', Date.now() + 500, { projectId: 'pA' });
+memory.tasks.push(t3);
+await store.commit([
+  { store: 'projects', op: 'put', value: memory.projects[0] },
+  { store: 'tasks', op: 'put', value: t3 },
+]);
+await wait(1400);
+st = await serverState();
+ok(st.projects.length === 1 && st.projects[0].name === 'Launch', 'project synced to server (in the SAME state doc — no second store)');
+ok(st.tasks.find((x) => x.id === 't3').projectId === 'pA', 'task keeps its projectId through cloud.js');
+
+// other device pushes an OLDER rename → LWW keeps ours
+const otherPush = (state, tombstones) => fetch(BASE + '/api/sync', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+  body: JSON.stringify({ clientId: 'other', baseRev: st.rev, mode: 'merge', state, tombstones }),
+}).then((r) => r.json());
+await otherPush({ tasks: [], trash: [], projects: [proj('Stale name', T0 + 100)] }, {});
+st = await serverState();
+ok(st.projects[0].name === 'Launch', 'older remote rename loses to newer local project edit (LWW)');
+
+// soft delete of a project = put with deletedAt — NO tombstone (undo stays possible)
+memory.projects[0] = proj('Launch', Date.now(), { deletedAt: Date.now() });
+await store.commit([{ store: 'projects', op: 'put', value: memory.projects[0] }]);
+await wait(1400);
+st = await serverState();
+ok(st.projects.length === 1 && st.projects[0].deletedAt > 0, 'trashed project stays in the projects list with deletedAt (like trash records)');
+ok(!st.tombstones['projects:pA'], 'soft delete does NOT tombstone the project');
+ok(st.tasks.find((x) => x.id === 't3'), 'deleting a project never touches its tasks');
+
+// purge (empty-trash / delete-forever path): delete op + task detach in ONE commit
+memory.projects = [];
+t3.projectId = null;
+t3.updatedAt = Date.now() + 700;
+await store.commit([
+  { store: 'projects', op: 'delete', key: 'pA' },
+  { store: 'tasks', op: 'put', value: t3 },
+]);
+await wait(1400);
+st = await serverState();
+ok(st.projects.length === 0, 'purged project gone from server');
+ok(st.tombstones['projects:pA'] > 0, 'purge writes a projects-scoped tombstone');
+ok(st.tasks.find((x) => x.id === 't3').projectId === null, 'detach of the orphaned task synced with the same commit');
+
+// stale device re-push of the purged project (old updatedAt) must be rejected
+await otherPush({ tasks: [], trash: [], projects: [proj('Zombie', T0 + 100)] }, {});
+st = await serverState();
+ok(st.projects.length === 0, 'tombstone beats a stale project re-push');
+// ...while a FRESH one (newer than tombstone — a real recreate with same id) survives
+await otherPush({ tasks: [], trash: [], projects: [proj('Recreated', Date.now() + 900000)] }, {});
+st = await serverState();
+ok(st.projects.length === 1 && st.projects[0].name === 'Recreated', 'edit-beats-delete works for projects too');
+// keep task count consistent for any later runs
+await otherPush({ tasks: st.tasks, trash: [], projects: [] }, st.tombstones);
 
 child.kill('SIGKILL');
 console.log(failed ? `\nFAILED: ${failed} check(s)` : '\nAll client integration tests passed.');
