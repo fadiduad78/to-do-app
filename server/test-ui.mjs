@@ -56,6 +56,8 @@ const $ = (s) => doc.querySelector(s);
 const $$ = (s) => [...doc.querySelectorAll(s)];
 
 ok($('#projectBar') && $('#projectBar').hidden === false, 'projects bar visible (empty state)');
+ok(/rel="manifest" href="manifest.webmanifest"/.test(html) && /theme-color/.test(html) && /apple-touch-icon/.test(html),
+  'index.html wires the PWA layer (manifest + theme-color + apple-touch-icon) — mobile installs for real');
 ok($('#taskList'), 'task list mounted');
 
 /* 1. create the spec's example task through the real composer */
@@ -687,7 +689,7 @@ await sleep(300);
   ok(!!shipCall && cntShip() === 1 && nCalls.length === 0, 'task reminder delivered once via registration.showNotification (no constructor fallback, no dupes)');
   ok(shipCall && /^rem:.+@\d+$/.test(shipCall.opts.tag), 'delivery id = unique per-reminder key (tag rem:<id>@<triggerAt>)');
   ok(shipCall && shipCall.opts.requireInteraction === true, 'persistent on mobile: requireInteraction stays until handled');
-  ok(shipCall && Array.isArray(shipCall.opts.actions) && shipCall.opts.actions.map((a) => a.action).join() === 'complete,snooze', 'action buttons where supported: Complete + Snooze');
+  ok(shipCall && Array.isArray(shipCall.opts.actions) && shipCall.opts.actions.map((a) => a.action).join() === 'complete,snooze,open', 'action buttons where supported: Complete + Snooze + Open');
   const shipTask = taskOf('Ship report');
   ok(shipCall && shipCall.opts.data.taskId === shipTask.id, 'notification carries the taskId → clicking opens THAT task');
   {
@@ -869,6 +871,7 @@ await sleep(300);
   ok(sReqs.length === 0, 'standalone boot: ZERO permission requests here too');
   ok(!!byId('notifBox') && !!byId('nMaster') && !!byId('nOverdue'), 'standalone carries the Settings → Notifications section');
   ok(/wireCalendar/.test(committed) && /projectBar/.test(committed), 'standalone carries every other current feature (calendar, projects) — full rebuild, not a patch');
+  ok(!/rel="manifest"|apple-touch-icon/.test(committed), 'standalone strips manifest links (nothing external to 404 on — the single file stays honest)');
 
   /* one real end-to-end cycle inside the single file: create → past custom
      reminder → save → alert card (the file:// degradation path) → persistence */
@@ -899,6 +902,21 @@ await sleep(300);
       'standalone: task + fired reminder persist in the localStorage mirror (record, not a timer)');
   }
   domS.window.close();
+
+  /* manifest shortcut: launching with #new opens a fresh composer immediately */
+  const domN = new JSDOM(committed, {
+    runScripts: 'dangerously', url: 'http://localhost/#new', pretendToBeVisual: true,
+    beforeParse(win) {
+      win.HTMLElement.prototype.scrollIntoView = function () {};
+      win.fetch = () => Promise.reject(new TypeError('offline'));
+    },
+  });
+  await sleep(600);
+  const dn = domN.window.document;
+  ok(!!dn.getElementById('taskForm') && !dn.getElementById('taskForm').closest('[hidden]') && dn.getElementById('f-title').value === '',
+    'installed via manifest shortcut (#new) → app boots straight into a new task');
+  ok(dn.location.hash === '', '#new is consumed and cleaned from the URL');
+  domN.window.close();
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

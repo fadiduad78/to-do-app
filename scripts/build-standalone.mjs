@@ -34,6 +34,12 @@ html = html.replace(/<script src="([^"]+)"><\/script>/g, (m, src) => {
 });
 if (!/ZTNotify/.test(html)) missing.push('notify.js was not inlined');
 
+// Web-app-manifest wiring only makes sense when served over https (install +
+// OS notifications). Strip the references so the single file stays honest —
+// theme-color is harmless and stays.
+html = html.replace(/\n *<link rel="manifest"[^>]*>/, '');
+html = html.replace(/\n *<link rel="apple-touch-icon"[^>]*>/, '');
+
 if (missing.length) {
   console.error('build-standalone: cannot build — ' + missing.join('; '));
   process.exit(1);

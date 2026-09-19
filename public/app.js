@@ -163,7 +163,12 @@
     // Deep link from a notification tap when no window was open (#t=<task>)
     try {
       const mm = /^#(t|p)=([\w-]+)$/.exec(window.location.hash || '');
-      if (mm) {
+      if (window.location.hash === '#new') {
+        // manifest shortcut target: launch straight into a fresh task
+        const nb = document.getElementById('newTaskBtn');
+        if (nb) nb.click();
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      } else if (mm) {
         if (mm[1] === 't' && byId(mm[2])) openComposer({ mode: 'edit', taskId: mm[2] });
         else if (mm[1] === 'p' && S.projects.some((p) => p.id === mm[2] && !p.deletedAt)) {
           S.settings.filterProject = mm[2]; S.ui.projectView = mm[2]; renderAll();

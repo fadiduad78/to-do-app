@@ -153,6 +153,7 @@
     const a = d.action; const ref = d.data;
     if (a === 'complete' && ref.taskId && H && H.completeTask) { H.completeTask(ref.taskId); return; }
     if (a === 'snooze' && ref.reminderId && H && H.snoozeReminder) { H.snoozeReminder(ref.reminderId, cfg().snoozeMin); return; }
+    if (a === 'open') { if (ref.taskId && H && H.openTask) H.openTask(ref.taskId); else if (ref.projectId && H && H.openProject) H.openProject(ref.projectId); return; }
     if (ref.taskId && H && H.openTask) { H.openTask(ref.taskId); return; }
     if (ref.projectId && H && H.openProject) { H.openProject(ref.projectId); }
   }
@@ -182,6 +183,7 @@
       if (opts.actions !== false) body.actions = [
         { action: 'complete', title: '✓ Complete' },
         { action: 'snooze', title: 'Snooze' },
+        { action: 'open', title: '↗ Open' }, // browsers that cap at 2 drop this; click = Open there
       ];
       const p = swReg.showNotification(opts.title, body);
       if (p && p.catch) p.catch(() => {});

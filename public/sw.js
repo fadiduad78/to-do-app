@@ -23,7 +23,7 @@ self.addEventListener('message', (ev) => {
         body: d.body || '',
         tag: d.tag || undefined,
         data: d.data || {},
-        actions: Array.isArray(d.actions) ? d.actions.slice(0, 2) : [],
+        actions: Array.isArray(d.actions) ? d.actions.slice(0, 3) : [],
         requireInteraction: d.persist !== false,
         renotify: false,
       }).catch(() => {})

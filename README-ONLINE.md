@@ -210,12 +210,12 @@ safety copy — nothing is silently overwritten.)
 ## Test it (dev)
 
 ```bash
-node server/test.mjs          # 58 checks: accounts, sessions, merge, tombstones, replace, projects+subtasks+reminders, persistence, SSE
+node server/test.mjs          # 62 checks: accounts, sessions, merge, tombstones, replace, projects+subtasks+reminders, persistence, SSE, PWA manifest/icons/sw serving
 node server/test-storage.mjs  # 81 checks: the real public/storage.js in Node — v1→v5 migration, coercion (dueTime, reminders incl. the auto “overdue” type, recurrence), backups, retention
 node server/test-supabase.mjs # 26 checks: mock PostgREST — free-plan restart survival, per-user rows, adoption, reminder-type round-trip
 node server/test-client.mjs   # 33 checks: the real public/cloud.js against a live server (project/subtask/dueTime/reminder sync semantics)
 npm i --no-save jsdom && node server/test-ui.mjs
-                              # 173 checks: the real index.html + storage.js + notify.js + app.js in a headless DOM —
+                              # 177 checks: the real index.html + storage.js + notify.js + app.js in a headless DOM —
                               # subtask + project + calendar behavior, the reminder editor, overdue catch-up on boot,
                               # duplicate-proofing, dismiss, recurrence re-arming, and the full notification layer
                               # against a stubbed Notification API + service worker: never-on-load permission,

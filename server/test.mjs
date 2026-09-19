@@ -85,6 +85,29 @@ try {
   ok(r.ok && (await r.text()).includes('ZeroTodo'), 'static index.html served');
   r = await fetch(BASE + '/cloud.js');
   ok(r.ok && (await r.text()).includes('ZTCloud'), 'static cloud.js served');
+  r = await fetch(BASE + '/manifest.webmanifest');
+  {
+    const ct = (r.headers.get('content-type') || '');
+    const mf = r.ok ? await r.json().catch(() => null) : null;
+    ok(r.ok && ct.includes('manifest+json') && mf && mf.name.startsWith('ZeroTodo')
+      && mf.icons.length === 3 && mf.start_url === './' && mf.display === 'standalone',
+      'PWA manifest served with correct MIME — installable, icons + standalone display (mobile/PWA notification path)');
+  }
+  r = await fetch(BASE + '/icon-192.png');
+  {
+    const buf = r.ok ? Buffer.from(await r.arrayBuffer()) : null;
+    ok(r.ok && (r.headers.get('content-type') || '') === 'image/png' && buf.length > 700 && buf.slice(1, 4).toString() === 'PNG',
+      'launcher icon is a real PNG served with the right type');
+  }
+  r = await fetch(BASE + '/sw.js');
+  {
+    const swTxt = r.ok ? await r.text() : '';
+    const swCt = r.headers.get('content-type') || '';
+    ok(r.ok && swTxt.includes('showNotification') && swCt.includes('javascript'),
+      'service worker served at scope root with a JS mime (persistent notifications for installed PWAs)');
+  }
+  r = await fetch(BASE + '/index.html');
+  ok((await r.text()).includes('rel="manifest"'), 'served index links the manifest');
   r = await fetch(BASE + '/../server/server.js');
   ok(!r.ok, 'path traversal blocked');
 

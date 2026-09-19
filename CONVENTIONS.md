@@ -146,6 +146,17 @@ each way: `ZTNotify.attach({...})` (app→notify) and `ZTNotify.reminderAlert`
 - `pinned` (set by snooze) protects a user-adjusted `triggerAt` from recompute
   until it fires; every code path that RE-derives `triggerAt` (task edit,
   recurrence re-arm) clears it.
+- **Installability is part of the mobile delivery story**: `manifest.webmanifest`,
+  `icon-192.png` / `icon-512.png` / `icon-maskable-512.png` and the
+  theme-color/apple-touch links in `index.html`. Regenerate icons with
+  `python3 scripts/make-pwa-icons.py` after any brand change. The standalone
+  builder STRIPS manifest links from the single-file build (file:// can't
+  install and there would be nothing to fetch) — keep it that way, and note
+  `build-standalone.mjs` asserts the result contains ZTNotify. Notification
+  `actions` advertise Complete + Snooze + Open; OSes that allow two buttons
+  simply drop the third, and the notification click IS “Open” everywhere
+  (SW posts `{action:'open'}` to an open window, else deep-links `#t=<id>`).
+  `#new` (manifest shortcut) opens the composer from a cold boot.
 
 ## 6. Compat floor (tested, not aspirational)
 

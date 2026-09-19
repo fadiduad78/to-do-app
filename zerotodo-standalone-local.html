@@ -7,6 +7,7 @@
   <title>ZeroTodo — a to-do list that never loses your data</title>
   <meta name="description" content="A zero-data-loss to-do list. Your tasks live in your browser (IndexedDB + redundant localStorage backup) and sync online to your own server, so they survive cleared browser data and follow you across devices.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Crect%20width='100'%20height='100'%20rx='22'%20fill='%234f46e5'/%3E%3Cpath%20d='M28%2052l16%2016%2028-32'%20stroke='white'%20stroke-width='10'%20fill='none'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
+  <meta name="theme-color" content="#4f46e5">
   <style>
 /* ============================================================================
    ZeroTodo — styles
@@ -2856,6 +2857,7 @@ body {
     const a = d.action; const ref = d.data;
     if (a === 'complete' && ref.taskId && H && H.completeTask) { H.completeTask(ref.taskId); return; }
     if (a === 'snooze' && ref.reminderId && H && H.snoozeReminder) { H.snoozeReminder(ref.reminderId, cfg().snoozeMin); return; }
+    if (a === 'open') { if (ref.taskId && H && H.openTask) H.openTask(ref.taskId); else if (ref.projectId && H && H.openProject) H.openProject(ref.projectId); return; }
     if (ref.taskId && H && H.openTask) { H.openTask(ref.taskId); return; }
     if (ref.projectId && H && H.openProject) { H.openProject(ref.projectId); }
   }
@@ -2885,6 +2887,7 @@ body {
       if (opts.actions !== false) body.actions = [
         { action: 'complete', title: '✓ Complete' },
         { action: 'snooze', title: 'Snooze' },
+        { action: 'open', title: '↗ Open' }, // browsers that cap at 2 drop this; click = Open there
       ];
       const p = swReg.showNotification(opts.title, body);
       if (p && p.catch) p.catch(() => {});
@@ -3418,7 +3421,12 @@ body {
     // Deep link from a notification tap when no window was open (#t=<task>)
     try {
       const mm = /^#(t|p)=([\w-]+)$/.exec(window.location.hash || '');
-      if (mm) {
+      if (window.location.hash === '#new') {
+        // manifest shortcut target: launch straight into a fresh task
+        const nb = document.getElementById('newTaskBtn');
+        if (nb) nb.click();
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      } else if (mm) {
         if (mm[1] === 't' && byId(mm[2])) openComposer({ mode: 'edit', taskId: mm[2] });
         else if (mm[1] === 'p' && S.projects.some((p) => p.id === mm[2] && !p.deletedAt)) {
           S.settings.filterProject = mm[2]; S.ui.projectView = mm[2]; renderAll();

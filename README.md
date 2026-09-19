@@ -43,12 +43,18 @@ if the server is unreachable, every original guarantee still holds.
   check-ins, project-deadline warnings and Pomodoro timers. Permission is only
   ever requested from an explicit “Enable Notifications” button — never on
   load. Alerts use `registration.showNotification` (persistent, with
-  Complete/Snooze actions where supported) and are deduped per delivery
-  instance, so refreshes, multi-tab and a second phone can never double-ring.
+  Complete/Snooze/Open action buttons where the OS allows them — browsers
+  that cap at two buttons open the task on the notification click instead)
+  and are deduped per delivery instance, so refreshes, multi-tab and a second phone can never double-ring.
   Denied → “Notifications are blocked. Enable them in browser settings.”;
   unsupported browsers (and `file://`) degrade to the same alerts as in-app
   cards with Open / Complete / Snooze 5·10·30·60·Tomorrow. Every channel has
   its own on/off switch + timing in ⚙ Settings → Notifications.
+- **Installable as a PWA** (`manifest.webmanifest` + generated launcher icons
+  + theme-color): on Android (and iOS when added to Home Screen) the installed
+  app keeps the service worker alive for notification delivery, and the
+  manifest's “New task” shortcut (deep link `#new`) launches straight into the
+  composer. Icons regenerate via `python3 scripts/make-pwa-icons.py`.
 - Filters: All / Active / Completed / Trash, plus **by tag**, plus full-text
   search over title + description.
 - Reordering: drag-and-drop (desktop) **and** ↑/↓ buttons (touch-friendly).
