@@ -829,6 +829,7 @@
     els.subtaskAuto.checked = !!S.settings.subtaskAutoComplete;
     if (els.fzWork) { const c = focusCfg(); els.fzWork.value = c.work; els.fzShort.value = c.short; els.fzLong.value = c.long; els.fzEvery.value = c.longEvery; els.fzNotify.checked = c.notify; els.fzAuto.checked = c.autoComplete; }
     if (els.habInStats) els.habInStats.checked = S.settings.habitsInStats === true;
+    { const sv2 = document.getElementById('setStartView'); if (sv2) sv2.value = S.settings.view || 'all'; }
     if (els.aiMode) els.aiMode.value = S.settings.aiMode === 'local' ? 'local' : 'auto';
     if (window.ZTNotify) ZTNotify.renderControls(); // the Notifications section owns itself
   }
@@ -1127,6 +1128,7 @@
       if (adv) {
         t.status = 'active';
         t.updatedAt = now;
+        if (t.plan) t.plan = null; // the occurrence is done — like finishComplete, a roll frees its accepted slot
         pushCompletion(t, now); // the occurrence WAS completed — the dashboard counts rolls
         ops.push({ store: STORES.tasks, op: 'put', value: t });
         toast('Completed this occurrence — next is ' + ((formatDue(adv.next) || {}).txt || adv.next) + (adv.rearmed ? ' · ' + adv.rearmed + ' reminder(s) re-armed' : ''));
@@ -1929,22 +1931,33 @@
   function calMonthCell(ds, dim) {
     const st = calStats(ds);
     const today = ymd(new Date());
-    const shown = st.tasks.slice(0, 3);
-    const more = st.tasks.length - shown.length;
-    return '<div class="cal-cell' + (ds === today ? ' is-today' : '') + (dim ? ' dim' : '') + '" data-cdate="' + ds + '">' +
+    // Density, not paragraphs: the month view answers “how full is this day?” —
+    // titles belong one click deeper (the Day Overview). Derived once per cell.
+    let loadMin = 0, hasEst = false, highN = 0;
+    for (const x of st.tasks) {
+      if (x.status === 'completed') continue;
+      if (x.priority === 'high') highN++;
+      const e = Number(x.estMin);
+      if (e > 0) { loadMin += e; hasEst = true; }
+      if (x.plan && x.plan.date === ds && x.plan.start && x.plan.end && window.ZTPLAN) loadMin += ZTPLAN.toMin(x.plan.end) - ZTPLAN.toMin(x.plan.start);
+    }
+    const dots = st.tasks.slice(0, 6).map((x) => '<i class="cal-dotm p-' + (x.status === 'completed' ? 'done' : x.priority) + '" aria-hidden="true"></i>').join('');
+    const nDots = st.tasks.length - Math.min(6, st.tasks.length);
+    const gsN = (recurGhosts.get(ds) || []).length;
+    const aria = ds + ': ' + st.tasks.length + ' task' + (st.tasks.length === 1 ? '' : 's') +
+      (st.done ? ', ' + st.done + ' done' : '') + (highN ? ', ' + highN + ' high priority' : '') +
+      (st.overdue ? ', ' + st.overdue + ' overdue' : '') + (hasEst ? ', about ' + fmtDur(loadMin) + ' of work' : '');
+    return '<div class="cal-cell cal-cell-dense' + (ds === today ? ' is-today' : '') + (dim ? ' dim' : '') + (st.overdue ? ' has-over' : '') +
+      '" data-cdate="' + ds + '" role="button" tabindex="' + (dim ? -1 : 0) + '" aria-label="' + esc(aria) + '" title="' + esc(aria) + '">' +
       '<span class="cal-day">' + Number(ds.slice(8)) +
-        (st.overdue ? '<em class="cal-over" title="' + st.overdue + ' overdue task(s)">!' + st.overdue + '</em>' : '') +
-        (st.tasks.length ? '<em class="cal-n" title="' + st.done + ' of ' + st.tasks.length + ' done">' + st.done + '/' + st.tasks.length + '</em>' : '') +
+        (st.overdue ? '<em class="cal-over" title="' + st.overdue + ' overdue task(s)">⚠ ' + st.overdue + '</em>' : '') +
       '</span>' +
-      '<div class="cal-chips">' + shown.map((t) => calChip(t, false, ds)).join('') +
-        (more > 0 ? '<button class="cal-more" data-cmore="' + ds + '" type="button">+' + more + ' more</button>' : '') +
-        (function () {
-          const gs = recurGhosts.get(ds) || [];
-          if (!gs.length) return '';
-          const vis = more > 0 ? [] : gs.slice(0, Math.max(0, 3 - shown.length));
-          return vis.map((x) => calChip(x, true)).join('') + (gs.length > vis.length ? '<span class="cal-more" title="more recurring occurrences">↻+' + (gs.length - vis.length) + '</span>' : '');
-        })() +
-      '</div></div>';
+      (st.tasks.length
+        ? '<span class="cal-dots" aria-hidden="true">' + dots + (nDots > 0 ? '<i class="cal-dotm more">+' + nDots + '</i>' : '') + '</span>' +
+          '<span class="cal-load">' + st.tasks.length + ' task' + (st.tasks.length === 1 ? '' : 's') + (hasEst && loadMin ? ' · ~' + fmtDur(loadMin) : '') + '</span>'
+        : '<span class="cal-load cal-load-empty" aria-hidden="true"></span>') +
+      (gsN ? '<span class="cal-recurhint" title="' + gsN + ' recurring occurrence(s) previewed">↻ ' + gsN + '</span>' : '') +
+      '</div>';
   }
 
   // Ghosts: FUTURE occurrences of recurring tasks are shown in the calendar
@@ -1994,9 +2007,11 @@
         d6.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
       const heads = '<span></span>' + days.map((ds) => {
         const st = calStats(ds);
+        let m = 0; let est = false;
+        for (const x of st.tasks) { if (x.status === 'completed') continue; const e = Number(x.estMin); if (e > 0) { m += e; est = true; } if (x.plan && x.plan.date === ds && x.plan.start && x.plan.end && window.ZTPLAN) { m += Math.max(0, ZTPLAN.toMin(x.plan.end) - ZTPLAN.toMin(x.plan.start)); est = true; } }
         return '<span class="cal-wh' + (ds === ymd(new Date()) ? ' is-today' : '') + '">' +
           DAY_NAMES[(ymdParse(ds).getDay() + 6) % 7] + ' ' + Number(ds.slice(8)) +
-          (st.tasks.length ? '<em>' + st.tasks.length + '</em>' : '') + '</span>';
+          (st.tasks.length ? '<em>' + st.tasks.length + '</em>' : '') + (est && m ? '<i class="cal-wh-load">~' + fmtDur(m) + '</i>' : '') + '</span>';
       }).join('');
       const allDay = '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span>' +
         days.map((ds) => {
@@ -2022,6 +2037,20 @@
       const st = calStats(ds);
       const pct = st.tasks.length ? Math.round((st.done / st.tasks.length) * 100) : 0;
       const allday = st.tasks.filter((t) => !t.dueTime);
+      // §15 “Time Balance” — planned vs free for THIS day, in human words
+      const ppD = planPrefsNow();
+      const availD = Math.max(0, window.ZTPLAN ? ZTPLAN.toMin(ppD.dayEnd) - ZTPLAN.toMin(ppD.dayStart) : 780);
+      let plannedD = 0, estD = false;
+      for (const x of st.tasks) {
+        if (x.status === 'completed') continue;
+        if (x.plan && x.plan.date === ds && x.plan.start && x.plan.end && window.ZTPLAN) { plannedD += Math.max(0, ZTPLAN.toMin(x.plan.end) - ZTPLAN.toMin(x.plan.start)); estD = true; continue; }
+        const e = Number(x.estMin); if (e > 0) { plannedD += e; estD = true; }
+      }
+      const freeD = Math.max(0, availD - plannedD);
+      const loadPct = availD ? Math.min(140, Math.round((plannedD / availD) * 100)) : 0;
+      const wl = st.tasks.length === st.done && st.done ? 'All clear ✓'
+        : !plannedD ? (st.tasks.length ? 'unscheduled' : 'clear')
+        : loadPct <= 30 ? 'Light' : loadPct <= 65 ? 'Moderate' : loadPct <= 100 ? 'Full' : 'Overbooked';
       const early = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) < 6);
       const late = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) > 22);
       const gs = recurGhosts.get(ds) || []; // display-only previews of the series
@@ -2029,13 +2058,21 @@
       for (let h = 6; h <= 22; h++) {
         const ts = st.tasks.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h);
         const tg = gs.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h);
-        rows += '<div class="cal-row day"><span class="cal-hour-lbl">' + String(h).padStart(2, '0') + ':00</span>' +
-          '<div class="cal-cell slot' + ((ts.length || tg.length) ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '">' +
-          ts.map((t) => calChip(t, false, ds)).join('') + tg.map((x) => calChip(x, true)).join('') + '</div></div>';
+        const hh = String(h).padStart(2, '0') + ':00';
+        rows += '<div class="cal-row day"><span class="cal-hour-lbl">' + hh + '</span>' +
+          '<div class="cal-cell slot' + ((ts.length || tg.length) ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '"' +
+          (ts.length || tg.length ? '' : ' title="Click to create a task at ' + hh + '"') + '>' +
+          ts.map((t) => calChip(t, false, ds)).join('') + tg.map((x) => calChip(x, true)).join('') +
+          (ts.length || tg.length ? '' : '<span class="cal-slot-add" aria-hidden="true">＋ ' + hh + '</span>') + '</div></div>';
       }
-      body = '<div class="cal-day-summary"><span>' + st.tasks.length + ' task(s)</span><span>·</span>' +
-        '<span>' + st.done + ' done</span>' + (st.overdue ? '<span>·</span><span class="cal-over">⚠ ' + st.overdue + ' overdue</span>' : '') +
-        '<span class="spacer"></span><span class="cal-mini"><i style="width:' + pct + '%"></i></span><span>' + pct + '%</span>' +
+      body = '<div class="cal-day-summary">' +
+        '<span class="cdd-count"><b>' + st.tasks.length + '</b> ' + (st.tasks.length === 1 ? 'task' : 'tasks') +
+        (st.tasks.length ? ' · ' + st.done + ' done' : '') + (st.overdue ? ' · <span class="cal-over">⚠ ' + st.overdue + ' overdue</span>' : '') + '</span>' +
+        (estD ? '<span class="cdd-load">' + fmtDur(plannedD) + ' planned' + (freeD ? ' · ' + fmtDur(freeD) + ' free' : '') + '</span>' : '') +
+        '<span class="cdd-wl' + (wl === 'Overbooked' ? ' over' : '') + '">Workload: ' + wl + '</span>' +
+        (estD ? '<span class="cal-mini" title="' + loadPct + '% of a ' + fmtDur(availD) + ' day"><i style="width:' + Math.min(100, loadPct) + '%"></i></span>' : '') +
+        (st.tasks.length ? '<span class="cal-mini" title="' + pct + '% completed"><i style="width:' + pct + '%"></i></span><span>' + pct + '%</span>' : '') +
+        '<span class="spacer"></span>' +
         '<button class="btn btn-sm btn-primary" data-cnew="' + ds + '" type="button">＋ New task</button></div>' +
         (allday.length || gs.some((x) => !x.dueTime) ? '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span><div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' + allday.map((t) => calChip(t, false, ds)).join('') + gs.filter((x) => !x.dueTime).map((x) => calChip(x, true)).join('') + '</div></div>' : '') +
         (early.length ? '<div class="cal-row"><span class="cal-hour-lbl">Early</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="3">' + early.map((t) => calChip(t, false, ds)).join('') + '</div></div>' : '') +
@@ -3189,6 +3226,7 @@
   async function habitBump(h, delta) {
     const now = Date.now();
     const ds = ymd(new Date(now));
+    const wasMet = habitMetOn(h, ds);
     const i = h.history.findIndex((e) => e.d === ds);
     const c = (i >= 0 ? h.history[i].c : 0) + delta;
     if (i >= 0) { if (c > 0) h.history[i] = { d: ds, c }; else h.history.splice(i, 1); }
@@ -3196,6 +3234,16 @@
     h.updatedAt = now;
     await store.commit([{ store: STORES.habits, op: 'put', value: h }]);
     await remReconcile(); // the nudge row may retire/re-arm as the target is met
+    if (delta > 0) {
+      // subtle, immediate positive feedback — derived streak, no stored counters
+      const st = habitStats(h, now);
+      const metNow = habitMetOn(h, ds);
+      const part = habitCountOn(h, ds);
+      S.ui.hab.flash = { id: h.id, msg: (metNow ? 'Day met ✓' : '+1 ✓ (' + part + '/' + h.target + ')') +
+        (st.cur > 0 ? ' · 🔥 ' + st.cur + (st.cur === 1 ? '-day streak' : '-day streak') + (metNow || wasMet ? '. Nice. Keep the streak alive.' : '') : '') };
+      if (!wasMet && metNow && st.cur >= 3 && habIsMilestone(st.cur)) toast('🔥 ' + st.cur + ' days — ' + (habMilestoneFor(st.cur) || '') + '. That’s how routines are built.');
+      setTimeout(() => { if (S.ui.hab.flash) { S.ui.hab.flash = null; if (S.ui.hab.open) renderHabits(); } }, 2800);
+    }
     renderAll();
   }
 
@@ -3276,7 +3324,9 @@
     const per = isWeek ? 'this week' : 'today';
     return '<div class="hab-card' + (archived ? ' archived' : '') + (done ? ' done' : '') + '">' +
       '<div class="hab-top"><span class="hab-name">' + esc(h.name) + '</span>' +
-      '<span class="hab-streak' + (st.cur > 0 ? ' hot' : '') + '">🔥 ' + st.cur + (st.cur === 1 ? ' day' : ' days') + '</span></div>' +
+      '<span class="hab-streak' + (st.cur > 0 ? ' hot' : '') + '" title="Current streak">🔥 ' + st.cur + (st.cur === 1 ? ' day' : ' days') + '</span>' +
+      (st.cur >= 3 && habMilestoneFor(st.cur) ? '<span class="hab-ms" title="Milestone reached">🏁 ' + esc(habMilestoneFor(st.cur)) + '</span>' : '') + '</div>' +
+      (st.cur === 0 && st.best > 0 ? '<div class="hab-comeback">You missed yesterday — start again today. Your best run was ' + st.best + ' days, so you know how.</div>' : '') +
       (h.description ? '<div class="hab-desc">' + esc(truncate(h.description, 140)) + '</div>' : '') +
       '<div class="hab-stats"><span>' + esc(habitFreqLabel(h)) + '</span>' +
       '<span>Best ' + st.best + (st.best === 1 ? ' day' : ' days') + '</span>' +
@@ -3292,6 +3342,67 @@
       '</div>';
   }
 
+  /* Motivation layer on top of the SAME habit engine: milestones are labels
+     over derived streaks (never stored state), the week table reuses the
+     existing count helpers, and recommendations open the existing editor. */
+  const HAB_MILESTONES = [[3, 'Getting started'], [7, 'One week strong'], [14, 'Two weeks consistent'], [30, 'One month streak'], [60, 'Serious consistency'], [100, 'Habit builder']];
+  function habMilestoneFor(n) {
+    let hit = null;
+    for (const [m, label] of HAB_MILESTONES) if (n >= m) hit = label;
+    return hit;
+  }
+  function habIsMilestone(n) { return HAB_MILESTONES.some((x) => x[0] === n); }
+
+  function habitWeekTable(rows, today) {
+    const start = habitWeekMon(today);
+    const heads = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    let h = '<table class="hab-wk" aria-label="This week at a glance"><thead><tr><th></th>' +
+      heads.map((d) => '<th><abbr title="' + d + '">' + d[0] + '</abbr></th>').join('') + '</tr></thead><tbody>';
+    for (const r of rows) {
+      h += '<tr><th class="hab-wk-name">' + esc(truncate(r.h.name, 16)) + '</th>';
+      for (let i = 0; i < 7; i++) {
+        const ds = ymdShift(start, i);
+        const c = habitCountOn(r.h, ds);
+        const due = habitDueOn(r.h, ymdParse(ds));
+        const met = r.h.frequency === 'weekly' ? (i === 6 ? c >= r.h.target : c > 0 ? 'part' : '') : habitMetOn(r.h, ds);
+        const future = ds > today;
+        let sym = future ? '·' : !due ? '–' : met === true ? '✓' : met === 'part' ? '◐' : c > 0 ? '◐' : '○';
+        h += '<td class="hw-c ' + (met === true ? 'met' : met === 'part' ? 'part' : future ? 'fut' : !due ? 'off' : c > 0 ? 'part' : 'due') + '"' +
+          ' title="' + heads[i] + ' ' + Number(ds.slice(8)) + ': ' + (due ? c + '/' + r.h.target + (met === true ? ' — met' : '') : 'not scheduled') + '"' +
+          ' aria-label="' + heads[i] + ' ' + (met === true ? 'met' : c > 0 ? 'partial' : due && !future ? 'missed' : '—') + '">' + sym + '</td>';
+      }
+      h += '</tr>';
+    }
+    return h + '</tbody></table>';
+  }
+
+  function habitRecommendations() {
+    const CATS = [
+      ['💪 Body', [['Walk 20 minutes', 1, 'daily', 20], ['Stretch for 5 minutes', 1, 'daily', 5], ['Drink water', 8, 'daily', 0]]],
+      ['🧠 Mind', [['Read for 10 minutes', 1, 'daily', 10], ['Journal', 1, 'daily', 5], ['Meditate or breathe', 1, 'daily', 5]]],
+      ['📚 Learning', [['Study for 25 minutes', 1, 'daily', 25], ['Practice coding', 1, 'days', 30], ['Learn 5 new words', 1, 'daily', 10]]],
+      ['😴 Lifestyle', [['Sleep at a consistent time', 1, 'daily', 0], ['Prepare tomorrow’s tasks', 1, 'days', 10], ['Tidy your workspace', 1, 'daily', 5]]],
+    ];
+    // gentle personalization from what the user actually DOES — never health inferences
+    const studyN = S.tasks.filter((x) => /stud|learn|course|practice|python|ielts|read|revise/i.test((x.title || '') + ' ' + ((x.tags || []).join(' ')))).length;
+    const focusUsed = S.tasks.some((x) => (Number(x.focusTotal) || 0) > 0);
+    const noHab = !(S.habits || []).filter((x) => !x.archived).length;
+    let nudge = '';
+    if (noHab) nudge = '<p class="hab-recstart">🌱 Start small — one tiny habit beats an ambitious list. Try a 5-minute daily walk.</p>';
+    else if (studyN >= 3) nudge = '<p class="hab-recstart">📚 You keep a lot of study tasks — a 25-minute daily study habit could turn them into a streak.</p>';
+    else if (focusUsed) nudge = '<p class="hab-recstart">🎯 You use Focus Mode — how about one focused session, every day?</p>';
+    const chip = (name, target, freq, est) => {
+      const pre = { name, target, frequency: freq, description: '' };
+      if (est) pre.description = 'Suggested block: ' + est + ' min';
+      return '<div class="hab-rec"><span>' + esc(name) + (target > 1 ? ' ×' + target : '') + '</span>' +
+        '<button type="button" class="btn btn-sm btn-ghost" data-hact="suggest" data-pre="' + esc(JSON.stringify(pre)) + '" title="Opens the habit editor pre-filled — edit anything before saving">＋ Add</button></div>';
+    };
+    return '<details class="hab-recs"><summary>Recommended habits — try one</summary>' + nudge +
+      '<div class="hab-reccols">' + CATS.map(([cat, items]) =>
+        '<div class="hab-recat"><h4>' + cat + '</h4>' + items.map(([n, tg, fq, e]) => chip(n, tg, fq, e)).join('') + '</div>').join('') + '</div>' +
+      '<p class="muted small">General ideas, not advice — pick what fits and make it yours.</p></details>';
+  }
+
   function renderHabits() {
     if (!els.habitsHost) return;
     const now = Date.now();
@@ -3300,32 +3411,60 @@
     const arch = (S.habits || []).filter((h) => h.archived);
     let html = '<div class="hab-head"><h2>🔥 Habits</h2>' +
       '<button type="button" class="btn btn-primary" data-hact="new">＋ New habit</button></div>';
-    html += '<p class="muted small">Repeating check-ins kept separate from one-time tasks. Hit ✓ every time you do it — the day is met when the target is reached. Stats only join the dashboard if you allow it in Settings.</p>';
-    if (!act.length) html += '<div class="hab-empty">No habits yet. Try <i>Exercise</i>, <i>Read</i>, <i>Study Python</i>, <i>Practice IELTS</i>, or <i>Drink water ×8/day</i>.</div>';
+    if (act.length) {
+      // —— Today’s Habits: progress first, strongest streak up top ——
+      let met = 0; let top = null;
+      const wkRows = [];
+      for (const h of act) {
+        const cnt = h.frequency === 'weekly' ? habitWeekCount(h, habitWeekMon(today)) : habitCountOn(h, today);
+        if (cnt >= h.target) met++;
+        const st = habitStats(h, now);
+        if (!top || st.cur > top.st.cur) top = { name: h.name, st };
+        wkRows.push({ h, cnt });
+      }
+      const pct = Math.round((met / act.length) * 100);
+      html += '<section class="hab-today" aria-label="Today’s habits">' +
+        '<div class="ht-top"><h3>Today’s habits</h3><div class="ht-fig"><b>' + met + '</b> / ' + act.length + ' completed</div></div>' +
+        '<div class="ht-bar" role="img" aria-label="' + pct + '% of today’s habits met"><i style="width:' + pct + '%"></i></div>' +
+        (met === act.length ? '<p class="ht-all">🎉 All habits completed today.</p>'
+          : '<p class="ht-left">' + (act.length - met) + (act.length - met === 1 ? ' habit left' : ' habits left') + ' — one more to go.</p>') +
+        (top && top.st.cur >= 2 ? '<p class="ht-streak">🔥 <b>' + top.st.cur + '-day streak</b> on “' + esc(truncate(top.name, 24)) + '”' +
+          (habMilestoneFor(top.st.cur) ? ' — ' + esc(habMilestoneFor(top.st.cur)) : '') + '. Keep it going today.</p>' : '') +
+        habitWeekTable(wkRows, today) + '</section>';
+    } else {
+      html += '<div class="hab-empty"><b>No habits yet.</b>Build one small habit and start your first streak — two minutes of stretching counts.' +
+        '<button type="button" class="btn btn-primary btn-sm" data-hact="new">Create habit</button></div>';
+    }
+    if (S.ui.hab.flash) html += '<div class="hab-flash" role="status">✓ ' + esc(S.ui.hab.flash.msg) + '</div>';
     for (const h of act) html += habitCardHtml(h, today, now, false);
     if (arch.length) {
       html += '<button type="button" class="hab-arch-toggle" data-hact="togglearch">' +
         (S.ui.hab.showArch ? '▾' : '▸') + ' Archived (' + arch.length + ')</button>';
       if (S.ui.hab.showArch) for (const h of arch) html += habitCardHtml(h, today, now, true);
     }
+    html += habitRecommendations();
+    html += '<p class="hab-setlink"><button type="button" class="linklike" data-gosettings="habits">Habit stats in dashboard? Open Settings → Habits</button></p>';
     els.habitsHost.innerHTML = html;
   }
 
   /** Create/edit dialog — same modal-overlay contract as the rest of the app
    * (card appended to the overlay; click outside closes). */
-  function habitModal(existing) {
+  function habitModal(existing, prefill) {
     return new Promise((resolve) => {
       const editing = !!existing;
       const d = editing
         ? { name: existing.name, description: existing.description, frequency: existing.frequency, weekdays: existing.weekdays.slice(), target: existing.target, remind: !!existing.remindTime, remindTime: existing.remindTime || '09:00' }
-        : { name: '', description: '', frequency: 'daily', weekdays: [1, 2, 3, 4, 5], target: 1, remind: false, remindTime: '09:00' };
+        : Object.assign({ name: '', description: '', frequency: 'daily', weekdays: [1, 2, 3, 4, 5], target: 1, remind: false, remindTime: '09:00' }, prefill || {});
       const ov = document.createElement('div');
       ov.className = 'modal-overlay';
       const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      ov.innerHTML = '<div class="modal-card hab-modal" role="dialog" aria-modal="true" aria-label="' + (editing ? 'Edit habit' : 'New habit') + '">' +
+      ov.innerHTML = '<div class="modal-card hab-modal hab-wizard" role="dialog" aria-modal="true" aria-label="' + (editing ? 'Edit habit' : 'New habit') + '">' +
         '<h3>' + (editing ? 'Edit habit' : 'New habit') + '</h3>' +
+        '<div class="hw-steps" aria-hidden="true">' + [1, 2, 3, 4, 5].map((n) => '<i class="hw-dot" data-n="' + n + '"></i>').join('') + '</div>' +
+        '<section class="hw-step" data-step="1"><h4 class="hw-q">What do you want to build?</h4>' +
         '<label>Name<input type="text" id="hh-name" maxlength="120" placeholder="e.g. Study Python" value="' + esc(d.name) + '"></label>' +
-        '<label>Description<input type="text" id="hh-desc" maxlength="300" placeholder="optional" value="' + esc(d.description) + '"></label>' +
+        '<label>Description<input type="text" id="hh-desc" maxlength="300" placeholder="optional" value="' + esc(d.description) + '"></label></section>' +
+        '<section class="hw-step" data-step="2" hidden><h4 class="hw-q">How often?</h4>' +
         '<label>Frequency<select id="hh-freq">' +
           '<option value="daily"' + (d.frequency === 'daily' ? ' selected' : '') + '>Daily</option>' +
           '<option value="weekly"' + (d.frequency === 'weekly' ? ' selected' : '') + '>Weekly (count completions toward one weekly target)</option>' +
@@ -3333,11 +3472,20 @@
         '</select></label>' +
         '<div id="hh-days" class="hab-days"' + (d.frequency === 'days' ? '' : ' hidden') + '>' +
           [0, 1, 2, 3, 4, 5, 6].map((i) => '<button type="button" class="rp-day' + (d.weekdays.indexOf(i) >= 0 ? ' on' : '') + '" data-d="' + i + '">' + names[i][0] + '</button>').join('') +
-        '</div>' +
+        '</div></section>' +
+        '<section class="hw-step" data-step="3" hidden><h4 class="hw-q">How many times?</h4>' +
         '<label>Target per ' + '<span id="hh-per">' + (d.frequency === 'weekly' ? 'week' : 'day') + '</span><input type="number" id="hh-target" min="1" max="99" step="1" value="' + d.target + '"></label>' +
+        '<p class="hw-tip small muted">Start small — “1” beats an ambitious number you’ll abandon.</p></section>' +
+        '<section class="hw-step" data-step="4" hidden><h4 class="hw-q">Need a nudge?</h4>' +
         '<label class="setting-row setting-check"><span>Nudge me (existing reminders engine)</span><input type="checkbox" id="hh-remind"' + (d.remind ? ' checked' : '') + '></label>' +
-        '<label id="hh-remtime" class="setting-row"' + (d.remind ? '' : ' hidden') + '><span>At</span><input type="time" id="hh-remtime-i" value="' + d.remindTime + '"></label>' +
-        '<div class="modal-actions"><button type="button" class="btn btn-ghost" data-hm="cancel">Cancel</button>' +
+        '<label id="hh-remtime" class="setting-row"' + (d.remind ? '' : ' hidden') + '><span>At</span><input type="time" id="hh-remtime-i" value="' + d.remindTime + '"></label></section>' +
+        '<section class="hw-step" data-step="5" hidden><h4 class="hw-q">Start your streak</h4>' +
+        '<div class="hw-prev" id="hw-preview"></div>' +
+        '<p class="hw-tip small muted">🔥 Your streak starts the moment you save and check off day one.</p></section>' +
+        '<div class="modal-actions hw-foot"><button type="button" class="btn btn-ghost" data-hm="cancel">Cancel</button>' +
+        '<span class="hw-ind small muted" role="status"></span>' +
+        '<button type="button" class="btn btn-ghost" data-hw="back">Back</button>' +
+        '<button type="button" class="btn btn-primary" data-hw="next">Next</button>' +
         '<button type="button" class="btn btn-primary" data-hm="save">' + (editing ? 'Save' : 'Create habit') + '</button></div></div>';
       const close = (saved) => { ov.remove(); document.removeEventListener('keydown', onKey); resolve(saved); };
       function onKey(e) { if (e.key === 'Escape') close(false); }
@@ -3356,6 +3504,33 @@
         b.classList.toggle('on');
       };
       $('hh-remind').onchange = () => { $('hh-remtime').hidden = !$('hh-remind').checked; };
+      // —— 5-step presentation over the SAME fields and the SAME save path ——
+      let hwStep = editing ? 5 : 1;
+      const HWQ = ['What do you want to build?', 'How often?', 'How many times?', 'Need a nudge?', 'Start your streak'];
+      const hwShow = () => {
+        ov.querySelectorAll('.hw-step').forEach((s) => { s.hidden = Number(s.dataset.step) !== hwStep; });
+        ov.querySelectorAll('.hw-dot').forEach((s) => { s.classList.toggle('on', Number(s.dataset.n) <= hwStep); });
+        ov.querySelector('.hw-ind').textContent = 'Step ' + hwStep + ' of 5 · ' + HWQ[hwStep - 1];
+        ov.querySelector('[data-hw="back"]').disabled = hwStep === 1;
+        ov.querySelector('[data-hw="next"]').style.display = hwStep < 5 ? '' : 'none';
+        ov.querySelector('[data-hm="save"]').style.display = hwStep === 5 ? '' : 'none';
+        if (hwStep === 5) {
+          ov.querySelector('#hw-preview').innerHTML = '<b>' + esc($('hh-name').value.trim() || '(unnamed)') + '</b><br>' +
+            ({ daily: 'Every day', weekly: 'Weekly total', days: 'On chosen days' })[$('hh-freq').value] +
+            ' · ' + (Number($('hh-target').value) || 1) + '× per ' + ($('hh-freq').value === 'weekly' ? 'week' : 'day') +
+            ($('hh-remind').checked ? ' · nudge at ' + ($('hh-remtime-i').value || '09:00') : ' · no nudge');
+        }
+      };
+      ov.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-hw]');
+        if (!b) return;
+        if (b.dataset.hw === 'next') {
+          if (hwStep === 1 && !$('hh-name').value.trim()) { $('hh-name').focus(); toast('Give the habit a name first.'); return; }
+          hwStep = Math.min(5, hwStep + 1);
+        } else hwStep = Math.max(1, hwStep - 1);
+        hwShow();
+      });
+      hwShow();
       ov.addEventListener('click', (e) => {
         const b = e.target.closest('[data-hm]');
         if (!b) { if (e.target === ov) close(false); return; }
@@ -3397,6 +3572,12 @@
       if (await habitModal(null)) { await remReconcile(); renderAll(); toast('Habit created — check it off any day you do it.'); }
       return;
     }
+    if (act2 === 'suggest') {
+      let pre = {};
+      try { pre = JSON.parse(b.dataset.pre || '{}'); } catch (_) {}
+      if (await habitModal(null, pre)) { await remReconcile(); renderAll(); toast('Habit created — check it off any day you do it.'); }
+      return;
+    }
     if (act2 === 'togglearch') { S.ui.hab.showArch = !S.ui.hab.showArch; renderAll(); return; }
     const h = habitOf(b.dataset.hid);
     if (!h) return;
@@ -3413,6 +3594,13 @@
         ? 'Habit “' + truncate(h.name, 30) + '” archived — history kept, nudge silenced.'
         : 'Habit “' + truncate(h.name, 30) + '” is active again.');
     }
+  }
+
+  /** Minutes → “2h 10m” — human durations everywhere, never decimals. */
+  function fmtDur(min) {
+    min = Math.max(0, Math.round(min));
+    const H = Math.floor(min / 60), M = min % 60;
+    return H ? H + 'h' + (M ? ' ' + M + 'm' : '') : M + 'm';
   }
 
   /* ============================ Home & Projects ============================
@@ -3441,13 +3629,22 @@
     out += '<p class="home-sub">' + (scope.length ? "Here’s what needs your attention today." : 'Nothing needs you today — the list below is where everything lives.') + '</p>';
     out += '<div class="home-cta"><button class="btn btn-primary btn-lg" data-cta="add" type="button">＋ Add task</button>' +
       '<button class="btn btn-ghost" data-cta="plan" type="button">✨ Plan my day</button></div>';
+    // derive once (perf rule): estimated time is ONLY over tasks that carry an
+    // estimate — otherwise we honestly show nothing rather than a fake number
+    const estTotal = scope.reduce((s, x) => s + (Number(x.estMin) > 0 ? Math.round(Number(x.estMin)) : 0), 0);
+    const estHas = scope.some((x) => Number(x.estMin) > 0);
+    const totalToday = scope.length + doneToday;
+    const nextDue = up.map((x) => x.dueDate).sort()[0];
     out += '<div class="home-stats">' +
-      '<div class="hs"><b>' + (scope.length + (doneToday ? ' · ' + doneToday + ' ✓' : '')) + '</b><span>' + scope.length + ' remaining today' + (overN ? ' · ' + overN + ' overdue' : '') + '</span></div>' +
-      '<div class="hs"><b>' + up.length + '</b><span>upcoming (next 14 days)</span></div></div>';
+      '<div class="hs"><b>' + scope.length + '</b><span>' + (scope.length === 1 ? 'task remaining today' : 'tasks remaining today') + '</span>' +
+        '<span class="hs-sub">' + (totalToday ? doneToday + ' of ' + totalToday + ' completed' : 'nothing due today') +
+        (overN ? ' · ' + overN + ' overdue' : '') + (estHas && estTotal ? ' · ~' + fmtDur(estTotal) + ' of work left' : '') + '</span></div>' +
+      '<div class="hs"><b>' + up.length + '</b><span>upcoming from tomorrow</span>' +
+        (nextDue ? '<span class="hs-sub">next: ' + esc((window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(nextDue) : nextDue) + '</span>' : '<span class="hs-sub">nothing scheduled ahead</span>') + '</div></div>';
     out += '<div class="home-sec"><h3>Today’s tasks <a data-cta="today" role="button" tabindex="0">Open Today →</a></h3>';
     if (!scope.length) out += '<div class="home-empty">☀️ Clear. <a data-cta="upcoming" role="button" tabindex="0">Check upcoming →</a></div>';
     for (const x of scope.slice(0, 5)) {
-      const due = x.dueDate ? ((x.dueDate < T0 ? 'Overdue · ' : x.dueDate === T0 ? 'Today' : (ZTNL && ZTNL.fmtDay ? ZTNL.fmtDay(x.dueDate) : x.dueDate))) : 'Anytime';
+      const due = x.dueDate ? ((x.dueDate < T0 ? 'Overdue · ' : x.dueDate === T0 ? 'Today' : (window.ZTNL && ZTNL.fmtDay ? ZTNL.fmtDay(x.dueDate) : x.dueDate))) : 'Anytime';
       out += '<div class="home-task"><button class="check hcheck" data-cta="tick" data-id="' + esc(x.id) + '" type="button" aria-label="Complete ' + esc(x.title) + '"></button>' +
         '<span class="ht-title" data-cta="open" data-id="' + esc(x.id) + '" role="button" tabindex="0">' + esc(truncate(x.title, 46)) + '</span>' +
         '<span class="ht-meta"><i class="ht-prio ' + esc(x.priority || 'med') + '" aria-hidden="true"></i>' + esc(due) + (x.dueTime ? ' · ' + esc(x.dueTime) : '') + '</span></div>';
@@ -3490,10 +3687,17 @@
       const mine = S.tasks.filter((x) => x.projectId === p.id);
       const done = mine.filter((x) => x.status === 'completed').length;
       const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
+      const rem = mine.length - done;
+      const nextDue = [p.dueDate, ...mine.filter((x) => x.status !== 'completed' && x.dueDate).map((x) => x.dueDate)]
+        .filter(Boolean).sort()[0];
+      const nextLbl = nextDue ? ' · Next ' + (nextDue === ymd(new Date()) ? 'today'
+        : ((window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(nextDue) : nextDue)) : '';
       h += '<article class="pj-card" data-cta="proj" data-id="' + esc(p.id) + '" tabindex="0">' +
         '<h3>' + esc(p.icon || '📁') + ' ' + esc(p.name) + '</h3>' +
+        (p.description ? '<p class="pj-desc">' + esc(truncate(p.description, 90)) + '</p>' : '') +
         '<div class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></div>' +
-        '<div class="muted">' + (mine.length ? done + ' of ' + mine.length + ' tasks · ' + pct + '%' : 'no tasks yet — open it to add the first') + '</div></article>';
+        '<div class="pj-foot"><span>' + (mine.length ? done + ' of ' + mine.length + ' · ' + pct + '%' : 'no tasks yet — open it to add the first') + '</span>' +
+        '<span class="pj-rem">' + (rem ? rem + ' remaining' + nextLbl : (mine.length ? 'all done ✓' : '')) + '</span></div></article>';
     }
     host.innerHTML = h;
   }
@@ -3538,11 +3742,27 @@
     return window.ZTPLAN ? ZTPLAN.sanitizePrefs(S.settings.planPrefs)
       : { dayStart: '09:00', dayEnd: '22:00', gapMin: 15, maxBlocks: 6, goalProjectId: null };
   }
+  function planSig() {
+    // cheap fingerprint of everything the planner reads — used to tell the user
+    // “your tasks changed since this plan was computed”, not for correctness
+    let s = '';
+    for (const x of S.tasks) {
+      s += x.id + '|' + (x.status || '') + '|' + (x.dueDate || '') + '|' + (x.dueTime || '') + '|' + (x.priority || '') +
+        '|' + (x.estMin || '') + '|' + (x.projectId || '') + '|' + ((x.recurrence && x.recurrence.unit) || '') +
+        '|' + (x.plan ? x.plan.date + (x.plan.start || '') : '') + ';';
+    }
+    s += JSON.stringify(planPrefsNow()) + '#' + (S.projects || []).filter((p) => !p.deletedAt).map((p) => p.id + (p.name || '')).join(',');
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+    return h;
+  }
   function planCompute() {
     if (!window.ZTPLAN) return null;
     const pr = planPrefsNow();
     if (pr.goalProjectId && !S.projects.some((p) => p.id === pr.goalProjectId && !p.deletedAt)) pr.goalProjectId = null;
-    return ZTPLAN.planDay({ tasks: S.tasks, reminders: S.reminders, subtasks: S.subtasks || [], prefs: pr, now: new Date() });
+    const out = ZTPLAN.planDay({ tasks: S.tasks, reminders: S.reminders, subtasks: S.subtasks || [], prefs: pr, now: new Date() });
+    if (out) { out.sig = planSig(); out.at = Date.now(); }
+    return out;
   }
   function planAcceptedOn(ds) {
     return S.tasks.filter((t) => t.status !== 'completed' && t.plan && t.plan.date === ds)
@@ -3558,11 +3778,35 @@
     if (P.edit) sug.blocks.sort((a, b) => ZTPLAN.toMin(a.start) - ZTPLAN.toMin(b.start));
     const accepted = planAcceptedOn(sug.date);
     let h = '<div class="plan-head"><h2>✨ Suggested plan</h2>' +
-      '<button class="btn btn-ghost plan-x" data-plan="rescan" title="Re-analyze the current state">↻</button>' +
+      (P.busy ? '<button class="btn btn-ghost plan-x" type="button" disabled aria-busy="true">Analyzing…</button>'
+              : '<button class="btn btn-ghost plan-x" data-plan="rescan" type="button" title="Re-analyze the current state">↻ Re-analyze</button>') +
       '<button class="btn btn-ghost plan-x" data-plan="close" aria-label="Close plan" title="Close — nothing has been written">✕</button></div>';
-    h += '<div class="plan-day">TODAY’S PLAN — ' + esc((ZTNL && ZTNL.fmtDayFull) ? ZTNL.fmtDayFull(sug.date) : sug.date) +
-      ' · window ' + esc(sug.dayStart) + '–' + esc(sug.dayEnd) + '</div>';
-    h += '<p class="muted plan-analyzed">' + esc(sug.notes[0] || '') + '</p>';
+    h += '<div class="plan-day">' + esc((window.ZTNL && ZTNL.fmtDayFull) ? ZTNL.fmtDayFull(sug.date) : sug.date) +
+      ' · your day: ' + esc(sug.dayStart) + '–' + esc(sug.dayEnd) + '</div>';
+    const stale = typeof sug.sig === 'number' && sug.sig !== planSig();
+    h += '<p class="muted plan-analyzed">' + esc(sug.notes[0] || '') +
+      '<span class="plan-when">· analyzed ' + (sug.at ? (Date.now() - sug.at < 60000 ? 'just now' : new Date(sug.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })) : 'earlier') +
+      (stale ? ' — <b>your tasks changed since.</b>' : '') + '</span>' +
+      (stale ? '<button class="btn btn-sm btn-ghost" data-plan="rescan" type="button">Re-analyze now</button>' : '') + '</p>';
+    // §6: human “Your Day” math instead of gap/goal/cap jargon in the primary UI
+    const avM = Math.max(0, ZTPLAN.toMin(sug.dayEnd) - ZTPLAN.toMin(sug.dayStart));
+    const plM = sug.blocks.reduce((s, b) => s + (b.min || 0), 0);
+    const freeM = Math.max(0, avM - plM);
+    const pctAv = avM ? Math.min(100, Math.round((plM / avM) * 100)) : 0;
+    if (sug.blocks.length || sug.skipped.length) {
+      h += '<section class="plan-balance" aria-label="Your day at a glance">' +
+        '<div class="pb-figs"><div><span>Available</span><b>' + fmtDur(avM) + '</b></div>' +
+        '<div><span>Planned</span><b>' + fmtDur(plM) + '</b></div>' +
+        '<div><span>Free time</span><b>' + fmtDur(freeM) + '</b></div></div>' +
+        '<div class="pb-bar" role="img" aria-label="' + pctAv + ' percent of your day planned"><i style="width:' + pctAv + '%"></i></div>' +
+        (sug.skipped.length
+          ? '<p class="pb-msg pb-over"><b>Your day is overloaded.</b> ' + sug.skipped.length +
+            ' task' + (sug.skipped.length === 1 ? '' : 's') + ' did not fit into ' + fmtDur(avM) + ' of time.' +
+            '<span class="pb-acts"><button class="btn btn-sm btn-ghost" data-plan="trim" type="button">Trim the last block</button>' +
+            '<button class="btn btn-sm btn-ghost" data-plan="keep" type="button">Keep anyway</button></span></p>'
+          : '<p class="pb-msg">Your day looks manageable — ' + fmtDur(plM) + ' planned, about ' + fmtDur(freeM) + ' of flexible time left.</p>') +
+        '</section>';
+    }
     if (accepted.length) h += '<div class="plan-accepted">✓ Accepted for today: ' + accepted.length + ' block(s) on your calendar' +
       (sug.blocks.length ? ' — accepting again replaces them.' : '.') + '</div>';
     if (!sug.blocks.length) {
@@ -3576,7 +3820,12 @@
             '<b class="plan-title">' + esc(b.title) + '</b>' +
             '<button class="btn btn-ghost plan-rm" data-plan="rm" data-task="' + esc(b.taskId) + '" title="Take this out of the plan">✕</button></li>';
         } else {
-          h += '<li class="plan-blk"><span class="plan-time">' + esc(ZTPLAN.fmtRange(b)) + '</span><b>' + esc(b.title) + '</b>' +
+          const bt = byId(b.taskId);
+          h += '<li class="plan-blk"><span class="plan-time">' + esc(ZTPLAN.fmtRange(b)) + '</span>' +
+            '<b class="plan-btitle">' + esc(b.title) + '</b>' +
+            '<span class="pb-min">' + (b.min || 0) + ' min</span>' +
+            (bt && bt.priority === 'high' ? '<span class="badge prio-high">⚑ high priority</span>' : '') +
+            (bt && bt.dueDate === sug.date ? '<span class="pb-due">Due today</span>' : '') +
             '<span class="plan-why">' + b.why.map((w) => '<i>' + esc(w) + '</i>').join('') + '</span></li>';
         }
       }
@@ -3587,12 +3836,12 @@
         sug.skipped.map((s) => esc(s.title) + ' <small>(' + esc(s.reason) + ')</small>').join(' · ') + '</p>';
     }
     const pp = planPrefsNow();
-    h += '<details class="plan-prefs"><summary>⚙ plan window, gap, goal & cap</summary><div class="plan-prefrow">' +
-      '<label class="muted">day starts <input class="plan-pref" type="time" data-pref-key="dayStart" value="' + esc(pp.dayStart) + '"></label>' +
-      '<label class="muted">day ends <input class="plan-pref" type="time" data-pref-key="dayEnd" value="' + esc(pp.dayEnd) + '"></label>' +
-      '<label class="muted">gap (min) <input class="plan-pref" type="number" data-pref-key="gapMin" min="0" max="120" step="5" value="' + pp.gapMin + '"></label>' +
-      '<label class="muted">max blocks <input class="plan-pref" type="number" data-pref-key="maxBlocks" min="1" max="12" value="' + pp.maxBlocks + '"></label>' +
-      '<label class="muted">goal <select class="plan-pref" data-pref-key="goalProjectId"><option value="">none</option>' +
+    h += '<details class="plan-prefs"><summary>⚙ Preferences — your day’s hours, breaks between blocks, how many blocks, priority project</summary><div class="plan-prefrow">' +
+      '<label class="muted">your day starts <input class="plan-pref" type="time" data-pref-key="dayStart" value="' + esc(pp.dayStart) + '"></label>' +
+      '<label class="muted">your day ends <input class="plan-pref" type="time" data-pref-key="dayEnd" value="' + esc(pp.dayEnd) + '"></label>' +
+      '<label class="muted">break between blocks (min) <input class="plan-pref" type="number" data-pref-key="gapMin" min="0" max="120" step="5" value="' + pp.gapMin + '"></label>' +
+      '<label class="muted">maximum blocks (how many pieces) <input class="plan-pref" type="number" data-pref-key="maxBlocks" min="1" max="12" value="' + pp.maxBlocks + '"></label>' +
+      '<label class="muted">priority project (planned first) <select class="plan-pref" data-pref-key="goalProjectId"><option value="">none</option>' +
       S.projects.filter((p) => !p.deletedAt).map((p) => '<option value="' + esc(p.id) + '"' + (pp.goalProjectId === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('') +
       '</select></label></div>' +
       sug.notes.slice(1).map((n) => '<p class="plan-note muted">💡 ' + esc(n) + '</p>').join('') +
@@ -3664,7 +3913,40 @@
     if (!b) return;
     const a = b.dataset.plan;
     if (a === 'close' || a === 'reject') { S.ui.plan.open = false; S.ui.plan.sug = null; S.ui.plan.edit = false; renderAll(); if (a === 'reject') toast('Plan rejected — nothing was written.'); return; }
-    if (a === 'rescan') { S.ui.plan.sug = planCompute(); renderPlan(); return; }
+    if (a === 'rescan') {
+      if (S.ui.plan.busy) return; // no double-click pileups while “Analyzing…”
+      S.ui.plan.busy = true;
+      renderPlan();
+      setTimeout(() => {
+        const was = S.ui.plan.sug;
+        S.ui.plan.sug = planCompute();       // full recompute from the LIVE state — not a cached re-render
+        S.ui.plan.busy = false;
+        renderPlan();
+        const unchanged = was && S.ui.plan.sug && was.blocks.length === S.ui.plan.sug.blocks.length &&
+          was.blocks.every((b, i) => S.ui.plan.sug.blocks[i] && b.taskId === S.ui.plan.sug.blocks[i].taskId && b.start === S.ui.plan.sug.blocks[i].start);
+        toast(unchanged ? '✓ Re-analyzed just now — no major changes were needed. Your plan still looks balanced.'
+                        : '✓ Plan re-analyzed — the proposal now reflects your latest changes.');
+      }, 450);
+      return;
+    }
+    if (a === 'trim') {
+      const sug = S.ui.plan.sug;
+      if (sug && sug.blocks.length > 1) {
+        const cut = sug.blocks.pop();
+        sug.skipped.push({ taskId: cut.taskId, title: cut.title, reason: 'you trimmed it — trim keeps nothing written' });
+        renderPlan();
+        toast('Trimmed “' + truncate(cut.title, 24) + '” from the SUGGESTION. Nothing is written until you accept.');
+      } else {
+        toast('One (or zero) blocks left — the day is already light.');
+      }
+      return;
+    }
+    if (a === 'keep') {
+      toast('Keeping the full plan — press “Accept plan” when it looks right.');
+      const accB = els.planView.querySelector('[data-plan="accept"]');
+      if (accB) accB.focus();
+      return;
+    }
     if (a === 'edit') { S.ui.plan.edit = !S.ui.plan.edit; if (!S.ui.plan.edit) S.ui.plan.sug = null; renderPlan(); return; }
     if (a === 'accept') { planAccept(); return; }
     if (a === 'clear') { planClearDay(); return; }
@@ -4659,7 +4941,7 @@
 
     els.settingsBtn.onclick = () => {
       els.settingsPanel.hidden = !els.settingsPanel.hidden;
-      if (!els.settingsPanel.hidden) updateStorageInfo();
+      if (!els.settingsPanel.hidden) { updateStorageInfo(); settingsShow(); }
     };
     els.themeSelect.addEventListener('change', (e) => {
       S.settings.theme = e.target.value;
@@ -4716,6 +4998,61 @@
         ? 'Parents will complete automatically when all their subtasks are done.'
         : 'Parents now complete only by you.');
     });
+
+    // —— Settings IA: dedicated pages + left-nav (desktop) / drill-down (mobile).
+    // Pure presentation over the SAME controls and the SAME save handlers. ——
+    const setPanel = els.settingsPanel;
+    function isMobileSet() { return window.matchMedia && window.matchMedia('(max-width: 899px)').matches; }
+    function settingsShow(tab) {
+      if (!setPanel) return;
+      if (tab) S.ui.setTab = tab;
+      if (!S.ui.setTab) S.ui.setTab = 'general';
+      const mobile = isMobileSet();
+      const detail = mobile && S.ui.setTabOpen;
+      setPanel.classList.toggle('set-mobile', mobile);
+      setPanel.classList.toggle('set-open', !!detail);
+      setPanel.querySelectorAll('.set-page').forEach((p) => {
+        p.hidden = !(p.dataset.settab === S.ui.setTab && (!mobile || detail));
+      });
+      setPanel.querySelectorAll('.set-nav [data-settab]').forEach((b) => {
+        const sel = b.dataset.settab === S.ui.setTab;
+        b.classList.toggle('on', sel);
+        b.setAttribute('aria-selected', String(sel && (!mobile || detail)));
+      });
+      const back = setPanel.querySelector('[data-settab-back]'); if (back) back.hidden = !detail;
+    }
+    if (setPanel) {
+      setPanel.addEventListener('click', (e) => {
+        const nav = e.target.closest('[data-settab]');
+        if (nav) { S.ui.setTabOpen = isMobileSet(); settingsShow(nav.dataset.settab); return; }
+        const bk = e.target.closest('[data-settab-back]');
+        if (bk) { S.ui.setTabOpen = false; settingsShow(); return; }
+        const fw = e.target.closest('[data-setforward]');
+        if (fw) { const b = document.getElementById(fw.dataset.setforward); if (b) b.click(); return; }
+      });
+      window.addEventListener('resize', () => { if (!setPanel.hidden) settingsShow(); });
+    }
+    // context shortcut: anything can deep-link into a settings page
+    document.addEventListener('click', (e) => {
+      const g = e.target.closest('[data-gosettings]');
+      if (!g) return;
+      if (els.settingsPanel.hidden) els.settingsBtn.onclick();
+      S.ui.setTabOpen = isMobileSet();
+      settingsShow(g.dataset.gosettings);
+      els.settingsPanel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+    { // Start-view preference (writes the SAME S.settings.view the nav uses)
+      const svw = document.getElementById('setStartView');
+      if (svw) { // initial value is synced by renderSettings (state isn't loaded at wiring time)
+        svw.addEventListener('change', () => {
+          S.settings.view = svw.value;
+          S.ui.view = svw.value;
+          commitSettings();
+          renderAll();
+          toast('ZeroTodo will open on “' + (svw.selectedOptions[0] ? String(svw.selectedOptions[0].textContent).split(' —')[0] : svw.value) + '”.');
+        });
+      }
+    }
 
     els.emptyTrashBtn.onclick = emptyTrash;
 

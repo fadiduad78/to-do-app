@@ -298,106 +298,167 @@
   <div id="emptyState" class="empty-state" hidden></div>
 
   <section id="settingsPanel" class="settings-panel" hidden>
-    <h2>Settings</h2>
-    <label class="setting-row">
-      <span>Theme</span>
-      <select id="themeSelect">
-        <option value="auto">Auto (match system)</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
-    <label class="setting-row">
-      <span>Backup reminder</span>
-      <select id="reminderSelect">
-        <option value="0">Off</option>
-        <option value="3">Every 3 days</option>
-        <option value="7">Every 7 days</option>
-        <option value="14">Every 14 days</option>
-        <option value="30">Every 30 days</option>
-      </select>
-    </label>
-    <label class="setting-row setting-check">
-      <span>Automatically complete parent task when all subtasks are completed</span>
-      <input type="checkbox" id="subtaskAuto">
-    </label>
+    <div class="set-head"><h2>Settings</h2><button type="button" class="btn btn-sm btn-ghost set-back" data-settab-back hidden>← All settings</button></div>
+    <div class="set-layout">
+      <nav class="set-nav" role="tablist" aria-label="Settings sections">
+        <button type="button" role="tab" data-settab="general">General</button>
+        <button type="button" role="tab" data-settab="notifications">Notifications</button>
+        <button type="button" role="tab" data-settab="focus">Focus</button>
+        <button type="button" role="tab" data-settab="habits">Habits</button>
+        <button type="button" role="tab" data-settab="data">Data</button>
+        <button type="button" role="tab" data-settab="privacy">Privacy</button>
+        <button type="button" role="tab" data-settab="about">About</button>
+      </nav>
+      <div class="set-pages">
 
-    <h2 style="margin-top:14px">Focus</h2>
-    <label class="setting-row"><span>Work duration</span><span><input type="number" id="fzWork" min="1" max="180" step="1" size="3"> min</span></label>
-    <label class="setting-row"><span>Short break</span><span><input type="number" id="fzShort" min="1" max="60" step="1" size="3"> min</span></label>
-    <label class="setting-row"><span>Long break</span><span><input type="number" id="fzLong" min="1" max="120" step="1" size="3"> min</span></label>
-    <label class="setting-row"><span>Sessions before long break</span><span><input type="number" id="fzEvery" min="1" max="12" step="1" size="3"></span></label>
-    <label class="setting-row setting-check"><span>Notify when a session finishes</span><input type="checkbox" id="fzNotify"></label>
-    <label class="setting-row setting-check"><span>Mark the task complete when a session ends</span><input type="checkbox" id="fzAuto"></label>
-    <p class="muted small">Start a session from any task's 🍅 button — presets 25/5, 50/10 or Custom. Focus time is tracked per task and project; a task is never completed automatically unless the option above is on.</p>
+      <section class="set-page" data-settab="general" role="tabpanel" hidden>
+        <h3>General</h3>
+        <p class="set-sub">Look, feel and how the app opens.</p>
+        <label class="setting-row">
+          <span class="s-col"><b>Theme</b><i class="s-desc">Light, dark, or follow your system.</i></span>
+          <select id="themeSelect">
+            <option value="auto">Auto (match system)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span class="s-col"><b>Open this view at launch</b><i class="s-desc">The first thing you see when ZeroTodo loads.</i></span>
+          <select id="setStartView">
+            <option value="all">All tasks — everything in one list</option>
+            <option value="home">Home — today’s command center</option>
+            <option value="today">Today — my planned day</option>
+            <option value="upcoming">Upcoming — the week ahead</option>
+            <option value="projects">Projects</option>
+          </select>
+        </label>
+        <label class="setting-row setting-check">
+          <span class="s-col"><b>Automatically complete parent task when all subtasks are completed</b><i class="s-desc">A parent is finished when its children are.</i></span>
+          <input type="checkbox" id="subtaskAuto">
+        </label>
+      </section>
 
-    <h2 style="margin-top:14px">Habits</h2>
-    <label class="setting-row setting-check"><span>Count habit check-ins in dashboard stats (tiles, week chart, streak)</span><input type="checkbox" id="habInStats"></label>
-    <p class="muted small">Off by default — habits are a separate module: task statistics stay pure unless you turn this on. Habit days never count as overdue.</p>
+      <section class="set-page" data-settab="notifications" role="tabpanel" hidden>
+        <h3>Notifications</h3>
+        <p class="set-sub">Reminders, summaries and alerts — one place.</p>
+        <div id="notifBox" class="notif-box">
+          <div class="setting-row notif-perm" id="notifPermRow"></div>
+          <label class="setting-row setting-check"><span>Enable notifications</span><input type="checkbox" id="nMaster"></label>
+          <label class="setting-row setting-check"><span>Task reminders</span><input type="checkbox" id="nReminders"></label>
+          <label class="setting-row setting-check"><span>Overdue task alerts</span><input type="checkbox" id="nOverdue"></label>
+          <div class="notif-timing">
+            <label>Policy <select id="nOdMode"><option value="once">Once per task</option><option value="repeat">Repeat until handled</option></select></label>
+            <label>every <input type="number" id="nOdHours" min="1" max="72" step="1" size="3"> hours</label>
+            <label>first alert <input type="number" id="nOdGrace" min="0" max="720" step="5" size="3"> min after due</label>
+          </div>
+          <label class="setting-row setting-check"><span>Daily summary</span><input type="checkbox" id="nDaily"></label>
+          <div class="notif-timing"><label>At <input type="time" id="nDailyAt"></label></div>
+          <label class="setting-row setting-check"><span>Weekly summary</span><input type="checkbox" id="nWeekly"></label>
+          <div class="notif-timing">
+            <label>On <select id="nWeeklyDay">
+              <option value="mon">Monday</option><option value="tue">Tuesday</option><option value="wed">Wednesday</option>
+              <option value="thu">Thursday</option><option value="fri">Friday</option><option value="sat">Saturday</option><option value="sun">Sunday</option>
+            </select> at <input type="time" id="nWeeklyAt"></label>
+          </div>
+          <label class="setting-row setting-check"><span>Habit reminders (daily-repeat tasks)</span><input type="checkbox" id="nHabits"></label>
+          <div class="notif-timing"><label>At <input type="time" id="nHabitAt"></label></div>
+          <label class="setting-row setting-check"><span>Focus session notifications</span><input type="checkbox" id="nPomo"></label>
+          <div class="notif-timing"><label class="muted small">Notifies when a 🍅 session ends and when a break finishes — timings live in Settings → Focus.</label></div>
+          <label class="setting-row setting-check"><span>Project deadline warnings</span><input type="checkbox" id="nProj"></label>
+          <div class="notif-timing"><label>Warn within <input type="number" id="nProjDays" min="0" max="30" step="1" size="3"> days of a project's due date</label></div>
+          <div class="notif-timing"><label>Default snooze <select id="nSnooze">
+            <option value="5">5 minutes</option><option value="10">10 minutes</option><option value="30">30 minutes</option>
+            <option value="60">1 hour</option><option value="tomorrow">Tomorrow 09:00</option>
+          </select></label></div>
+          <p class="muted small">Permission is only requested when you click “Enable Notifications” — never on load. On phones, alerts are delivered as persistent notifications through a service worker; where unsupported they appear in-app. Snooze offers 5/10/30/60 minutes and Tomorrow.</p>
+        </div>
+      </section>
 
-    <h2 style="margin-top:14px">AI</h2>
-    <label class="setting-row"><span>Task decomposition engine</span><select id="aiMode">
-      <option value="auto">Auto — server AI service when configured, else built-in planner</option>
-      <option value="local">Built-in planner only (offline, deterministic)</option>
-    </select></label>
-    <p class="muted small">✨ “Break this task down with AI” only ever <b>suggests</b>: you review, edit and check
-    every step — nothing is created until you press “Add selected tasks”. No API keys live in the browser; an
-    operator can wire a model on the server via <code>ZT_AI_URL / ZT_AI_KEY / ZT_AI_MODEL</code>.</p>
+      <section class="set-page" data-settab="focus" role="tabpanel" hidden>
+        <h3>Focus</h3>
+        <p class="set-sub">Pomodoro timing shared by every 🍅 session.</p>
+        <label class="setting-row"><span class="s-col"><b>Work duration</b><i class="s-desc">Length of one focus session.</i></span><span><input type="number" id="fzWork" min="1" max="180" step="1" size="3"> min</span></label>
+        <label class="setting-row"><span class="s-col"><b>Short break</b><i class="s-desc">Between sessions.</i></span><span><input type="number" id="fzShort" min="1" max="60" step="1" size="3"> min</span></label>
+        <label class="setting-row"><span class="s-col"><b>Long break</b><i class="s-desc">After a full round of sessions.</i></span><span><input type="number" id="fzLong" min="1" max="120" step="1" size="3"> min</span></label>
+        <label class="setting-row"><span class="s-col"><b>Sessions before long break</b><i class="s-desc">How many pomodoros make a round.</i></span><span><input type="number" id="fzEvery" min="1" max="12" step="1" size="3"></span></label>
+        <label class="setting-row setting-check"><span class="s-col"><b>Notify when a session finishes</b><i class="s-desc">Needs notifications enabled above.</i></span><input type="checkbox" id="fzNotify"></label>
+        <label class="setting-row setting-check"><span class="s-col"><b>Mark the task complete when a session ends</b><i class="s-desc">Off by default — focus never checks things off behind your back.</i></span><input type="checkbox" id="fzAuto"></label>
+        <p class="muted small">Start a session from any task's 🍅 button — presets 25/5, 50/10 or Custom. Focus time is tracked per task and project; a task is never completed automatically unless the option above is on.</p>
+      </section>
 
-    <h2 style="margin-top:14px">Notifications</h2>
-    <div id="notifBox" class="notif-box">
-      <div class="setting-row notif-perm" id="notifPermRow"></div>
-      <label class="setting-row setting-check"><span>Enable notifications</span><input type="checkbox" id="nMaster"></label>
-      <label class="setting-row setting-check"><span>Task reminders</span><input type="checkbox" id="nReminders"></label>
-      <label class="setting-row setting-check"><span>Overdue task alerts</span><input type="checkbox" id="nOverdue"></label>
-      <div class="notif-timing">
-        <label>Policy <select id="nOdMode"><option value="once">Once per task</option><option value="repeat">Repeat until handled</option></select></label>
-        <label>every <input type="number" id="nOdHours" min="1" max="72" step="1" size="3"> hours</label>
-        <label>first alert <input type="number" id="nOdGrace" min="0" max="720" step="5" size="3"> min after due</label>
+      <section class="set-page" data-settab="habits" role="tabpanel" hidden>
+        <h3>Habits</h3>
+        <p class="set-sub">How habits show up elsewhere in the app.</p>
+        <label class="setting-row setting-check"><span class="s-col"><b>Count habit check-ins in dashboard stats</b><i class="s-desc">Tiles, week chart and streak include habit days when this is on.</i></span><input type="checkbox" id="habInStats"></label>
+        <p class="muted small">Off by default — habits are a separate module: task statistics stay pure unless you turn this on. Habit days never count as overdue.</p>
+      </section>
+
+      <section class="set-page" data-settab="data" role="tabpanel" hidden>
+        <h3>Data</h3>
+        <p class="set-sub">Storage, sync, backups — your data's whole life.</p>
+        <p class="muted small" id="storageInfo"></p>
+        <p class="muted small">Your data is saved in this browser first (IndexedDB + backup mirror), and — when online — synced to the server so it survives cleared browser data and works on other devices. Exporting a backup JSON is still a great extra safety net.</p>
+        <label class="setting-row">
+          <span class="s-col"><b>Backup reminder</b><i class="s-desc">A gentle nudge to export a fresh backup.</i></span>
+          <select id="reminderSelect">
+            <option value="0">Off</option>
+            <option value="3">Every 3 days</option>
+            <option value="7">Every 7 days</option>
+            <option value="14">Every 14 days</option>
+            <option value="30">Every 30 days</option>
+          </select>
+        </label>
+        <div class="setting-row">
+          <span class="s-col"><b>Backup files</b><i class="s-desc">Export writes a JSON snapshot; Import restores one. Nothing leaves your device.</i></span>
+          <span class="set-btnrow"><button type="button" class="btn btn-sm btn-ghost" data-setforward="exportBtn">⬇ Export backup</button><button type="button" class="btn btn-sm btn-ghost" data-setforward="importBtn">⬆ Import backup</button></span>
+        </div>
+        <h4 class="set-h4">Cloud sync</h4>
+        <label class="setting-row">
+          <span class="s-col"><b>Sync enabled</b><i class="s-desc">Mirror changes to the server account when signed in.</i></span>
+          <input type="checkbox" id="cloudEnabled" checked>
+        </label>
+        <label class="setting-row">
+          <span class="s-col"><b>Server URL</b><i class="s-desc">Only change it if you host ZeroTodo elsewhere.</i></span>
+          <input type="text" id="cloudEndpoint" placeholder="(blank = same server this page was loaded from)" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="setting-row">
+          <span class="s-col"><b>Account</b><i class="s-desc">Sign in to sync across devices.</i></span>
+          <span class="set-actrow"><span class="muted" id="cloudAcctName">Not signed in</span></span>
+        </div>
+        <div class="setting-row" style="justify-content:flex-end;gap:8px">
+          <button class="btn btn-sm btn-primary" id="cloudSignInBtn" type="button">Sign in / Create account</button>
+          <button class="btn btn-sm btn-ghost" id="cloudSignOutBtn" type="button" hidden>Sign out</button>
+        </div>
+        <p class="muted small" id="cloudInfo"></p>
+      </section>
+
+      <section class="set-page" data-settab="privacy" role="tabpanel" hidden>
+        <h3>Privacy</h3>
+        <p class="set-sub">Local-first, and AI stays a suggestion.</p>
+        <label class="setting-row"><span class="s-col"><b>Task decomposition engine</b><i class="s-desc">Where AI breakdowns come from.</i></span><select id="aiMode">
+          <option value="auto">Auto — server AI service when configured, else built-in planner</option>
+          <option value="local">Built-in planner only (offline, deterministic)</option>
+        </select></label>
+        <p class="muted small">✨ “Break this task down with AI” only ever <b>suggests</b>: you review, edit and check
+        every step — nothing is created until you press “Add selected tasks”. No API keys live in the browser; an
+        operator can wire a model on the server via <code>ZT_AI_URL / ZT_AI_KEY / ZT_AI_MODEL</code>.</p>
+        <p class="muted small">Tasks, projects, habits and focus sessions are stored on YOUR device first. The server only ever
+        sees your data when you sign in to sync — and you can turn sync off above any time. No trackers, no analytics, no ads.</p>
+      </section>
+
+      <section class="set-page" data-settab="about" role="tabpanel" hidden>
+        <h3>About</h3>
+        <p class="set-sub">What ZeroTodo is.</p>
+        <div class="about-card">
+          <p><b>ZeroTodo</b> — an offline-first todo app with calendar time-planning, recurring habits,
+          focus sessions and an AI that only ever suggests.</p>
+          <p class="muted small">Local-first by design: everything works with the network unplugged; sync is a mirror, not the source.</p>
+          <p class="muted small">Source &amp; docs: <code>github.com/fadiduad78/to-do-app</code> · License: MIT.</p>
+        </div>
+      </section>
+
       </div>
-      <label class="setting-row setting-check"><span>Daily summary</span><input type="checkbox" id="nDaily"></label>
-      <div class="notif-timing"><label>At <input type="time" id="nDailyAt"></label></div>
-      <label class="setting-row setting-check"><span>Weekly summary</span><input type="checkbox" id="nWeekly"></label>
-      <div class="notif-timing">
-        <label>On <select id="nWeeklyDay">
-          <option value="mon">Monday</option><option value="tue">Tuesday</option><option value="wed">Wednesday</option>
-          <option value="thu">Thursday</option><option value="fri">Friday</option><option value="sat">Saturday</option><option value="sun">Sunday</option>
-        </select> at <input type="time" id="nWeeklyAt"></label>
-      </div>
-      <label class="setting-row setting-check"><span>Habit reminders (daily-repeat tasks)</span><input type="checkbox" id="nHabits"></label>
-      <div class="notif-timing"><label>At <input type="time" id="nHabitAt"></label></div>
-      <label class="setting-row setting-check"><span>Focus session notifications</span><input type="checkbox" id="nPomo"></label>
-      <div class="notif-timing"><label class="muted small">Notifies when a 🍅 session ends and when a break finishes — timings live in ⚙ Settings → Focus.</label></div>
-      <label class="setting-row setting-check"><span>Project deadline warnings</span><input type="checkbox" id="nProj"></label>
-      <div class="notif-timing"><label>Warn within <input type="number" id="nProjDays" min="0" max="30" step="1" size="3"> days of a project's due date</label></div>
-      <div class="notif-timing"><label>Default snooze <select id="nSnooze">
-        <option value="5">5 minutes</option><option value="10">10 minutes</option><option value="30">30 minutes</option>
-        <option value="60">1 hour</option><option value="tomorrow">Tomorrow 09:00</option>
-      </select></label></div>
-      <p class="muted small">Permission is only requested when you click “Enable Notifications” — never on load. On phones, alerts are delivered as persistent notifications through a service worker; where unsupported they appear in-app. Snooze offers 5/10/30/60 minutes and Tomorrow.</p>
     </div>
-
-    <p class="muted small" id="storageInfo"></p>
-    <p class="muted small">Your data is saved in this browser first (IndexedDB + backup mirror), and — when online — synced to the server so it survives cleared browser data and works on other devices. Exporting a backup JSON is still a great extra safety net.</p>
-
-    <h2 style="margin-top:14px">Cloud sync</h2>
-    <label class="setting-row">
-      <span>Sync enabled</span>
-      <input type="checkbox" id="cloudEnabled" checked>
-    </label>
-    <label class="setting-row">
-      <span>Server URL</span>
-      <input type="text" id="cloudEndpoint" placeholder="(blank = same server this page was loaded from)" autocomplete="off" spellcheck="false">
-    </label>
-    <div class="setting-row">
-      <span>Signed in as</span>
-      <span class="muted" id="cloudAcctName">Not signed in</span>
-    </div>
-    <div class="setting-row" style="justify-content:flex-end;gap:8px">
-      <button class="btn btn-sm btn-primary" id="cloudSignInBtn" type="button">Sign in / Create account</button>
-      <button class="btn btn-sm btn-ghost" id="cloudSignOutBtn" type="button" hidden>Sign out</button>
-    </div>
-    <p class="muted small" id="cloudInfo"></p>
   </section>
 </main>
 

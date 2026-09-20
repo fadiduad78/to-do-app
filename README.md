@@ -518,7 +518,8 @@ The app was re-skinned into a modern shell **without touching a single data
 path** — every guarantee in this README (IndexedDB write-through, mirror,
 drafts, trash/undo, migrations, quota & corruption recovery, cross-tab,
 sync, reminders) behaves exactly as before; the suite says so: the redesign
-added ~40 new UI checks and all pre-existing ones still pass (530 total).
+added ~40 new UI checks and all pre-existing ones still pass (530 total;
+581 after the September UX pass — see “UX pass” below).
 
 - **Sidebar IA (desktop ≥900 px):** Home · Today (with an “actionable now”
   count badge) · Upcoming · Calendar · Projects — the mental-model views —
@@ -564,10 +565,54 @@ added ~40 new UI checks and all pre-existing ones still pass (530 total).
   welcome/tip latches, teaching empty states with working CTAs, sprite/
   token/tooltip conventions — and, importantly, that the default landing
   view is UNCHANGED.
-- **Deferred deliberately to phase 2** (not silently dropped): the
-  click-through *detail drawer* replacing edit-via-composer, the
-  notifications center, the compact “Filter · N” popover, Settings
-  regrouping, calendar empty-slot create, and an error-copy pass.
+- **Delivered by the UX pass that followed** (see next section): Settings
+  regrouping, calendar empty-slot create, an error/human-copy pass.
+- **Deferred deliberately** (not silently dropped): the click-through
+  *detail drawer* replacing edit-via-composer, the notifications center,
+  and the compact “Filter · N” popover.
+
+## UX pass (September 2026) — calendar as time-planning, motivating habits, dedicated Settings
+
+A 51-brief review pass. Same engines, same data model, same records — the
+surface got clearer. Everything below is regression-pinned in
+`server/test-ui.mjs` §14 (calendar density contract) and new
+**§27–§29** (581 UI checks total, everything else still green).
+
+- **Numbers speak human.** Home shows an integer hero (“6 tasks remaining
+  today” + “5 of 8 completed · ~2h 10m of work left”); durations anywhere
+  the user sees them are `2h 10m`, never decimals, never raw minutes.
+- **The plan is honest.** Re-analyze truly re-runs (a signature of your
+  task set detects staleness; feedback arrives even when nothing changed),
+  the Your Day panel carries **Available / Planned / Free** with a bar, and
+  overload says “N task(s) did not fit into 8h 30m of time” with [Trim]
+  and [Keep] actions that edit the SUGGESTION only — acceptance is still
+  the only write path.
+- **Calendar is a time-planning view.** Month cells answer “how full is
+  this day?” with density dots + “3 tasks · ~1h 20m” (⚠ overdue, ↻ series
+  markers) — never crammed titles; every cell has an aria-label summary.
+  Week stays a planning board; the Day Overview is where titles live, under
+  a **Time Balance** bar (“2h 30m planned · 1h 20m free”, a neutral
+  **Workload**: Light/Moderate/Full/Overbooked). Empty slots show
+  “＋ 14:00 — click to create a task at 14:00” and open the normal composer
+  with the time pre-filled. Dragging still moves the real task — the task
+  is the source of truth, no duplicate records anywhere.
+- **Habits motivate without nagging.** The view leads with Today (N / M
+  completed + bar + your strongest streak), a week grid uses ✓/○ glyphs
+  (never color alone), milestones 3/7/14/30/60/100 are calm labels
+  (🏁 One week strong — no points, badges, leagues or threat copy), and a
+  broken streak says “You missed yesterday — start again today”. The editor
+  became a 5-step wizard *over the same fields and the same save path*, and
+  Recommended habits (💪 🧠 📚 😴, lightly personalized) one-click
+  pre-fill it — cancel writes nothing.
+- **Settings got a real screen.** A left-nav (General · Notifications ·
+  Focus · Habits · Data · Privacy · About) with one page visible at a time
+  (drill-down on mobile), each control with a plain-language description,
+  zero duplicated controls, and context deep-links from other views land on
+  the right page. New: *Open this view at launch* (General), backed by the
+  same `settings.view` the nav reads.
+- **Fix found along the way:** completing a RECURRING task now releases its
+  accepted plan slot too (previously the rolled task kept squatting on the
+  day).
 
 
 ## Where your data is stored

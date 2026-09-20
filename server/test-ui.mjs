@@ -309,15 +309,20 @@ ok($$('#calHost .cal-month .cal-cell').length === 42 && $$('#calHost .cal-week-h
 {
   const todayCell = doc.querySelector(`#calHost [data-cdate="${TODAY}"]`);
   const yCell = doc.querySelector(`#calHost [data-cdate="${YDAY}"]`);
-  ok(todayCell && todayCell.textContent.includes('Cal Alpha'), 'today chip renders the task due today');
-  ok(/0\/1/.test(todayCell.textContent), 'per-day done/total count badge (0/1)');
-  ok(yCell && yCell.querySelector('.cal-over') && /!1/.test(yCell.textContent), 'yesterday shows overdue indicator (!1 — Alpha is today, Gamma is done)');
-  ok(yCell.querySelector('.cal-chip.is-done') && yCell.querySelector('.cal-chip.prio-high') === null, 'completed chip carries is-done; high dot only where priority is high');
-  ok(yCell.querySelectorAll('.cal-chip').length === 2, 'both yesterday tasks in one cell (count=2, three chips max before "+more")');
+  ok(todayCell && /1 task/.test(todayCell.textContent) && !!todayCell.querySelector('.cal-dots .cal-dotm'),
+    'month cells answer “how full is the day?” — dots + words, NEVER titles crammed in (§13)');
+  ok(todayCell.getAttribute('aria-label').includes('1 task') && todayCell.getAttribute('role') === 'button',
+    'every dense cell carries a spoken summary (aria-label) and is keyboard-reachable');
+  ok(yCell && yCell.querySelector('.cal-over') && /⚠ 1/.test(yCell.textContent) && /2 tasks/.test(yCell.textContent),
+    'yesterday: “2 tasks” + ⚠ 1 overdue marker — symbol + words, not color alone');
+  ok(yCell.querySelector('.cal-dotm.p-done') && !yCell.querySelector('.cal-dotm.p-high'),
+    'density dots encode state (ring = done) and priority (no high dot when nothing is high)');
+  ok(!yCell.querySelector('.cal-chip'), 'month no longer renders chips at all — the Day Overview is where titles live');
 }
 
-/* click chip → EXISTING composer in edit mode; add a time there */
+/* click chip IN THE DAY OVERVIEW → EXISTING composer in edit mode; add a time there */
 {
+  doc.querySelector('#calBar [data-cview="day"]').click(); await sleep(170);
   const chip = doc.querySelector(`#calHost [data-cdate="${TODAY}"] .cal-chip`);
   chip.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await sleep(120);
@@ -326,6 +331,7 @@ ok($$('#calHost .cal-month .cal-cell').length === 42 && $$('#calHost .cal-week-h
   $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
   await sleep(250);
   ok(tskOf('Cal Alpha').dueTime === '09:00' && tskOf('Cal Alpha').dueDate === TODAY, 'edit writes dueTime onto the same task (id ' + (tskOf('Cal Alpha').id === chip.dataset.tid) + ', no duplicate: ' + (tsk().filter((x) => x.title === 'Cal Alpha').length === 1) + ')');
+  doc.querySelector('#calBar [data-cview="week"]').click(); await sleep(150); // back to the flow’s next view
 }
 
 /* week view: timed task lands on its hour row; empty slot quick-create */
@@ -356,11 +362,11 @@ const dragTo = async (chipSel, targetSel) => {
   await sleep(260);
 };
 {
-  doc.querySelector('#calBar [data-cview="month"]').click(); await sleep(140);
+  doc.querySelector('#calBar [data-cview="week"]').click(); await sleep(140);
   const beforeId = tskOf('Cal Beta').id, nBefore = tsk().length;
-  await dragTo(`#calHost [data-cdate="${YDAY}"] .cal-chip:nth-child(1)`, `#calHost [data-cdate="${IN3}"] .cal-cell-inner, #calHost [data-cdate="${IN3}"]`);
+  await dragTo(`#calHost .cal-allday-row [data-cdate="${YDAY}"] .cal-chip`, `#calHost .cal-allday-row [data-cdate="${TODAY}"]`);
   const af = tskOf('Cal Beta');
-  ok(af.dueDate === IN3 && af.id === beforeId && tsk().length === nBefore, 'drag to another day updates the EXISTING task (id kept, count ' + nBefore + ' → ' + tsk().length + ')');
+  ok(af.dueDate === TODAY && af.id === beforeId && tsk().length === nBefore, 'drag to another day (week all-day row) updates the EXISTING task (id kept, count ' + nBefore + ' → ' + tsk().length + ')');
   doc.querySelector('#calBar [data-cview="week"]').click(); await sleep(140);
   await dragTo(`#calHost [data-cdate="${TODAY}"][data-chour="16"] .cal-chip`, `#calHost [data-cdate="${TODAY}"][data-chour="10"]`);
   ok(tskOf('Slot Quick').dueTime === '10:00' && tskOf('Slot Quick').dueDate === TODAY, 'drag to 10:00 slot sets dueTime, keeps date & id');
@@ -386,7 +392,7 @@ const dragTo = async (chipSel, targetSel) => {
     doc.querySelector('#calBar [data-cnav="next"]').click(); await sleep(110);
   }
   ok($('#calHost').textContent.includes('Day Quick') && !$('#calHost').textContent.includes('Cal Alpha'), 'day view shows only the anchored day (Prev/Next navigate it)');
-  ok(/1 task\(s\)/.test($('#calHost .cal-day-summary').textContent) && /0 done/.test($('#calHost .cal-day-summary').textContent), 'day summary line (1 task, 0 done)');
+  ok(/1 task/.test($('#calHost .cal-day-summary').textContent) && /0 done/.test($('#calHost .cal-day-summary').textContent), 'day summary line: “1 task · 0 done” in words, not “1 task(s)” jargon');
   doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(120);
   void t0;
 }
@@ -410,12 +416,16 @@ const dragTo = async (chipSel, targetSel) => {
 
 /* filters: status/priority/project, applied to the view only — never the data */
 {
-  doc.querySelector('#calBar [data-cview="month"]').click(); await sleep(140);
-  const cell = doc.querySelector(`#calHost [data-cdate="${YDAY}"]`);
-  ok(cell.textContent.includes('Cal Gamma'), 'baseline: completed task visible in cell');
+  // week view keeps chips (month is density-only by design now) — filters must
+  // still apply to whatever view renders chips
+  doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(120); // re-anchor: earlier day-nav loops moved us weeks away
+  doc.querySelector('#calBar [data-cview="week"]').click(); await sleep(140);
+  const cell = doc.querySelector(`#calHost .cal-allday-row [data-cdate="${YDAY}"]`);
+  ok(cell && cell.textContent.includes('Cal Gamma'), 'baseline: completed task visible in its day (week all-day row)');
+  const monthCellForAria = doc.querySelector(`#calHost [data-cdate="not-real"]`); void monthCellForAria;
   const fStatus = doc.querySelector('#calBar [data-cfilter="calStatus"]');
   fStatus.value = 'active'; fStatus.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(140);
-  ok(!doc.querySelector(`#calHost [data-cdate="${YDAY}"]`).textContent.includes('Cal Gamma'), 'status filter hides completed (task itself untouched: ' + (tskOf('Cal Gamma').status === 'completed') + ')');
+  ok(!doc.querySelector(`#calHost .cal-allday-row [data-cdate="${YDAY}"]`).textContent.includes('Cal Gamma'), 'status filter hides completed (task itself untouched: ' + (tskOf('Cal Gamma').status === 'completed') + ')');
   const fPrio = doc.querySelector('#calBar [data-cfilter="calPriority"]');
   fPrio.value = 'high'; fPrio.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(140);
   ok(tsk().length > 6 && $$('#calHost .cal-chip').length === 1 && $('#calHost .cal-chip').textContent.includes('Cal Alpha'), 'priority filter shows only high — and task COUNT in storage is unchanged (' + tsk().length + ')');
@@ -433,7 +443,7 @@ const dragTo = async (chipSel, targetSel) => {
   const m = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
   const ids = m.tasks.map((x) => x.id);
   ok(m.schemaVersion === 5 && new Set(ids).size === ids.length, 'mirror at schema v5, task ids unique after all calendar ops');
-  ok(m.tasks.find((x) => x.title === 'Cal Alpha').dueTime === '09:00' && m.tasks.find((x) => x.title === 'Cal Beta').dueDate === IN3, 'refresh source-of-truth: edits live on the tasks themselves (dueTime/dueDate), nowhere else');
+  ok(m.tasks.find((x) => x.title === 'Cal Alpha').dueTime === '09:00' && m.tasks.find((x) => x.title === 'Cal Beta').dueDate === TODAY, 'refresh source-of-truth: edits live on the tasks themselves (dueTime/dueDate), nowhere else');
 }
 
 /* ===================== 13. Reminder engine + recurrence ===================== */
@@ -1187,7 +1197,10 @@ await sleep(300);
   // earlier sections persist calendar filters into settings — clear them
   for (const sel of $$('#calBar select')) if (sel.value !== '') { sel.value = ''; sel.dispatchEvent(new window.Event('change', { bubbles: true })); }
   await sleep(160);
-  const badge = () => doc.querySelector('#calHost [data-cdate="' + D3 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem');
+  // month cells are density-only now — dive to the DAY view for the chip, via the day-number click
+  const dn = doc.querySelector('#calHost [data-cdate="' + D3 + '"] .cal-day');
+  if (dn) { dn.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); await sleep(200); }
+  const badge = () => doc.querySelector('#calHost .cal-chip[data-tid="' + assignId + '"] .cal-rem');
     ok(!!badge() && /🔔\s*3/.test(badge().textContent), 'calendar chip carries a live 🔔 3 reminder indicator');
   ok(/next:/.test(badge().getAttribute('title') || ''), 'the indicator names the next scheduled fire in its tooltip');
   badge().click(); await sleep(160);
@@ -1213,6 +1226,7 @@ await sleep(300);
     ok(by.d1.triggerAt === locEpoch(y3, mo3, d3, 23, 59), 'd1 recalculated against the new due (now D4 → D3 23:59)');
     ok(by.h1.triggerAt === locEpoch(y4, mo4, d4, 22, 59), 'h1 recalculated against the new due');
     ok(by.custom.triggerAt === locEpoch(y3, mo3, d3, 22, 0), '"Keep them" left the absolute custom exactly where it was picked');
+    doc.querySelector('#calBar [data-cnav="next"]').click(); await sleep(170); // the DAY view follows the move: anchor D3 → D4
     ok(!doc.querySelector('#calHost [data-cdate="' + D3 + '"] .cal-chip[data-tid="' + assignId + '"]')
       && !!doc.querySelector('#calHost [data-cdate="' + D4 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem'),
       'calendar moved the chip to the new day — the 🔔 indicator rides along');
@@ -1249,6 +1263,11 @@ await sleep(300);
     const rs = remsById(assignId);
     ok(rs.length === 3 && remsFor('Submit assignment').map((r) => r.id).sort().join('|') === before, 'restore re-uses the same records — still no duplicates');
     ok(rs.every((r) => r.status === 'pending'), 'valid future reminders re-armed on restore');
+    { // day view, re-anchored DETERMINISTICALLY: Today + 5 (D5 is by construction today+5)
+      const d5b = doc.querySelector('#calBar [data-cview="day"]'); if (d5b && !d5b.classList.contains('on')) { d5b.click(); await sleep(140); }
+      doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(120);
+      for (let i = 0; i < 5; i++) { doc.querySelector('#calBar [data-cnav="next"]').click(); await sleep(80); }
+    }
     ok(!!doc.querySelector('#calHost [data-cdate="' + D5 + '"] .cal-chip[data-tid="' + assignId + '"] .cal-rem'), 'calendar presence restored with the indicator');
   }
 
@@ -1454,38 +1473,50 @@ await sleep(300);
   const c4 = tsk().length;
   {
     $('#calBtn').click(); await sleep(220);
-    const mBtn = doc.querySelector('#calBar [data-cview="month"]');
-    if (mBtn && !mBtn.classList.contains('on')) { mBtn.click(); await sleep(160); }
+    const dBtn = doc.querySelector('#calBar [data-cview="day"]');
+    if (dBtn && !dBtn.classList.contains('on')) { dBtn.click(); await sleep(160); } // the DAY view is where chips live now
     for (const sel of $$('#calBar select')) if (sel.value !== '') { sel.value = ''; sel.dispatchEvent(new window.Event('change', { bubbles: true })); }
     await sleep(180);
     const sid = tskOf('Standup').id;
     const cur = tskOf('Standup').dueDate;
-    for (let i = 0; i < 8 && !doc.querySelector(`#calHost [data-cdate="${cur}"]`); i++) {
-      const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(140); // walk to the month holding the occurrence
+    doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(130);
+    for (let i = 0; i < 40 && !doc.querySelector(`#calHost [data-cdate="${cur}"] .cal-chip[data-tid="${sid}"]`); i++) {
+      const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(90); // walk the day view to the occurrence
     }
-    const real = doc.querySelector(`#calHost [data-cdate="${cur}"] .cal-chip[data-tid="${sid}"]`);
+    const real = doc.querySelector(`#calHost .cal-chip[data-tid="${sid}"]`);
     ok(!!real && !!real.querySelector('.cal-rmark'), 'the current occurrence shows with a ↻ series marker');
-    const g1 = doc.querySelector(`#calHost [data-cdate="${addD(cur, 7)}"] .cal-chip.is-ghost[data-gtid="${sid}"]`);
-    const g2 = doc.querySelector(`#calHost [data-cdate="${addD(cur, 14)}"] .cal-chip.is-ghost[data-gtid="${sid}"]`);
-    ok(!!g1 && !!g2, 'future occurrences are PREVIEWED (ghost chips) without creating records');
-    ok(!g1.hasAttribute('draggable') && !g1.querySelector('.cal-rem'), 'ghosts are display-only: no drag, no reminder bell (the series owns the schedule)');
+    let g1 = null;
+    for (let i = 0; i < 9 && !g1; i++) { const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(90); g1 = doc.querySelector('#calHost .cal-chip.is-ghost[data-gtid="' + sid + '"]'); }
+    let g2 = null;
+    for (let i = 0; i < 9 && !g2; i++) { const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(90); g2 = doc.querySelector('#calHost .cal-chip.is-ghost[data-gtid="' + sid + '"]'); }
+    ok(!!g1 && !!g2, 'future occurrences are PREVIEWED (ghost chips) day by day, without creating records');
+    ok(g1 && !g1.hasAttribute('draggable') && !g1.querySelector('.cal-rem'), 'ghosts are display-only: no drag, no reminder bell (the series owns the schedule)');
     ok(tsk().length === c4, 'calendar previews cost zero task rows (still ' + c4 + ' tasks)');
     // trashing a recurring task removes its ghosts; restoring brings the pattern back
     $('#calBtn').click(); await sleep(160); // back to the list for the row action
     const li2 = $$('#taskList .task').find((x) => x.textContent.includes('Standup'));
     li2.querySelector('[data-act="delete"]').click(); await sleep(240);
     $('#calBtn').click(); await sleep(200);
-    for (let i = 0; i < 8 && !doc.querySelector(`#calHost [data-cdate="${cur}"]`); i++) {
-      const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(140);
-    }
-    ok($$('#calHost .cal-chip.is-ghost[data-gtid]').every((g) => g.dataset.gtid !== sid) && !doc.querySelector(`#calHost [data-tid="${sid}"]`), 'trash removes the task AND its ghost previews from the calendar');
+    const d2b = doc.querySelector('#calBar [data-cview="day"]'); if (d2b && !d2b.classList.contains('on')) { d2b.click(); await sleep(140); }
+    doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(130);
+    ok(!doc.querySelector(`#calHost [data-tid="${sid}"]`), 'trash removes the task from its day');
+    let ghostAfter = null;
+    for (let i = 1; i <= 7 && !ghostAfter; i++) { doc.querySelector('#calBar [data-cnav="next"]').click(); await sleep(90); ghostAfter = doc.querySelector(`#calHost .cal-chip.is-ghost[data-gtid="${sid}"]`); }
+    ok(!ghostAfter, '…and the next 8 days carry no ghost previews either (the series left the calendar entirely)');
     $('#calBtn').click(); await sleep(160);
     $('#undoBtn').click(); await sleep(320);
+
     $('#calBtn').click(); await sleep(200);
-    for (let i = 0; i < 8 && !doc.querySelector(`#calHost [data-cdate="${cur}"]`); i++) {
-      const nx = doc.querySelector('#calBar [data-cnav="next"]'); if (!nx) break; nx.click(); await sleep(140);
-    }
-    ok(!!doc.querySelector(`#calHost .cal-chip.is-ghost[data-gtid="${sid}"]`), 'restore brings the whole pattern (real chip + ghosts) back');
+    doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(130);
+    const d3b = doc.querySelector('#calBar [data-cview="day"]'); if (d3b && !d3b.classList.contains('on')) { d3b.click(); await sleep(140); }
+    doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(120);
+    // self-guiding walk: earlier rolls pushed the occurrence out, so walk
+    // UNTIL the real chip appears, then hunt the ghost one week past it
+    for (let i = 0; i < 40 && !doc.querySelector(`#calHost .cal-chip[data-tid="${sid}"]`); i++) { doc.querySelector('#calBar [data-cnav="next"]').click(); await sleep(65); }
+    const realBack = !!doc.querySelector(`#calHost .cal-chip[data-tid="${sid}"]`);
+    let g3 = null;
+    for (let i = 1; i <= 10 && !g3; i++) { doc.querySelector('#calBar [data-cnav="next"]').click(); await sleep(65); g3 = doc.querySelector(`#calHost .cal-chip.is-ghost[data-gtid="${sid}"]`); }
+    ok(realBack && !!g3, 'restore brings the whole pattern (real chip + ghosts) back');
     $('#calBtn').click(); await sleep(160);
   }
 
@@ -2336,7 +2367,7 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   $('#planBtn').click(); await sleep(300);
   const pv = () => $('#planView');
   ok(!pv().hidden && /Suggested plan/.test(pv().textContent), '✨ Plan opens the “Suggested plan” panel (the brief’s exact header)');
-  ok(/TODAY’S PLAN — /.test(pv().textContent), '…with the TODAY’S PLAN day header over the real day');
+  ok(/your day: \d{2}:\d{2}–\d{2}:\d{2}/.test(pv().textContent) && (pv().textContent.includes('Today') || pv().textContent.includes(new Date().toLocaleDateString(undefined, { month: 'long' }))), '…with the human day header (“Today”-relative date + your day range)');
   const blocks25 = [...pv().querySelectorAll('.plan-blk')];
   ok(blocks25.length > 0, 'blocks are proposed for the live store (the 17 tasks earlier sections seeded)');
   ok(/\d{2}:\d{2}–\d{2}:\d{2}/.test(pv().textContent), 'times render like the brief: 09:00–10:00');
@@ -2379,7 +2410,7 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   const de = pv().querySelector('input[data-pref-key="dayEnd"]');
   de.value = '10:30';
   de.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(250);
-  ok(/window 09:00–10:30/.test(pv().textContent), '⚙ preferences (day window / gap / cap / goal) re-drive the proposal live');
+  ok(/your day: 09:00–10:30/.test(pv().textContent), '⚙ preferences (day range / break / limit / priority project) re-drive the proposal live — in human words');
   const stPref = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
   ok(stPref.settings.planPrefs.dayEnd === '10:30', '…and persist into settings (survive the store mirror, sync like everything else)');
   ok(planned25.every((x) => stPref.tasks.find((y) => y.id === x.id).plan.date === planned25[0].plan.date), 'prefs changed the PROPOSAL only — accepted plan records were not silently rearranged');
@@ -2394,7 +2425,8 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   li25.querySelector('[data-act="toggle"]').click(); await sleep(400);
   const after25 = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
   const v25 = after25.tasks.find((x) => x.id === victim.id);
-  ok(v25.status === 'completed' && !v25.plan, 'completing the task clears its plan slot — a done task should not occupy the day');
+  const rolled25 = !!v25.recurrence && v25.status === 'active';
+  ok((v25.status === 'completed' || rolled25) && !v25.plan, 'completing the task clears its plan slot — a done (or occurrence-rolled recurring) task does not squat on the day');
   $('#planBtn').click(); await sleep(300);
   const clr25 = $('#planView').querySelector('[data-plan="clear"]');
   ok(!!clr25, 'the accepted-state panel offers [Clear today’s schedule]');
@@ -2590,6 +2622,204 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   r26.window.close();
 }
 
+/* 27. calendar Day Overview + planner balance — the time-planning contract (§§6-16) */
+console.log('\n--- 27. calendar day overview & planner balance ---');
+{
+  const EV = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  $('#calBtn').click(); await sleep(160);
+  doc.querySelector('#calBar [data-cview="day"]').click(); await sleep(140);
+  doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(160);
+  const sum = doc.querySelector('#calHost .cal-day-summary');
+  ok(!!sum, 'Day Overview opens with a summary bar (the day answers “how full is it?” before titles)');
+  ok(/\d+ task/.test(sum.textContent) && /Workload: (Light|Moderate|Full|Overbooked|unscheduled|clear|All clear ✓)/.test(sum.textContent),
+    '…“N tasks” count + a NEUTRAL Workload word (Light/Moderate/Full/Overbooked — never moral labels)');
+  const slot14 = doc.querySelector('#calHost .cal-cell.slot[data-chour="14"]');
+  ok(!!slot14, 'the day renders 06:00–22:00 hour slots as real targets');
+  ok(!slot14.classList.contains('has-t') ? /Click to create a task at 14:00/.test(slot14.getAttribute('title') || '') : true,
+    'an EMPTY slot whispers “Click to create a task at 14:00” — affordance, not decoration');
+  if (!slot14.classList.contains('has-t')) {
+    slot14.click(); await sleep(220);
+    ok(!$('#composer').hidden && $('#f-due').value === TODAY && $('#f-time').value === '14:00',
+      'clicking it opens the EXISTING composer with today + 14:00 pre-filled — one task record, created where it lands');
+    $('#cancelTaskBtn').click(); await sleep(140);
+  } else ok(false, 'slot 14:00 unexpectedly busy — test assumes an empty evening slot');
+  // planner balance panel (§6): words + bar, never raw minutes tables
+  $('#calBtn').click(); await sleep(140);
+  $('#planBtn').click(); await sleep(950);
+  const pvh = $('#planView');
+  const bal = pvh.querySelector('.plan-balance');
+  ok(!!bal && /Available/.test(bal.textContent) && /Planned/.test(bal.textContent) && /Free/.test(bal.textContent),
+    'Your Day carries an Available / Planned / Free balance in human time (“2h 10m”, never “130 min”)');
+  ok(!!bal.querySelector('.pb-bar i') && /percent of your day planned/.test(bal.querySelector('.pb-bar').getAttribute('aria-label') || ''),
+    '…with a progress bar whose aria-label states the percentage');
+  ok(!/Gap \(min\)/.test(pvh.textContent) && !/\bdayEndMin\b|\bstartMin\b/.test(pvh.textContent),
+    'raw minute fields are gone from the primary UI — prefs speak human (“your day starts at…”)');
+  const rescan = pvh.querySelector('[data-plan="rescan"]');
+  ok(!!rescan && /Re-analyze/i.test(rescan.textContent), 'a Re-analyze action exists in the plan header');
+  // home stats (§2-3): integer hero + words underneath
+  $('#planBtn').click(); await sleep(160);
+  $('#navHome') && $('#navHome').click(); await sleep(200);
+  const hs = doc.querySelector('.home-stats');
+  if (hs) {
+    const big = hs.querySelector('.hs-num, .hs-big, b');
+    ok(!!big && /^\d+$/.test(big.textContent.trim()), 'the Home number is a plain integer — no decimals, no “2.5h” nonsense');
+    ok(!!hs.querySelector('.hs-sub') && /completed|nothing due today/.test(hs.textContent), '…and sub-lines carry the words (“5 of 8 completed”)');
+  } else ok(false, 'home-stats strip missing from Home');
+  $('#navHome') && $('#navHome').click(); await sleep(140);
+  ok(true, 'section 27 completed without uncaught errors');
+}
+
+/* 28. habits: today view, milestones, forgiving misses, wizard, recommendations (§§20-33) */
+console.log('\n--- 28. habit motivation layer ---');
+{
+  const EV = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  $('#habBtn').click(); await sleep(220);
+  const host = $('#habitsHost');
+  ok(!!host.querySelector('.hab-today'), 'the Habits view leads with TODAY — not a raw card list');
+  ok(/\d \/ \d+ completed/.test(host.textContent), '“N / M completed” in integers up top');
+  ok(!!host.querySelector('.ht-bar i'), '…with a real progress bar');
+  const wk = host.querySelector('.hab-wk');
+  ok(!!wk && wk.querySelectorAll('thead th').length === 8 && /✓|○/.test(wk.textContent),
+    'week grid: seven day-headers + habit name, readable ✓/○ GLYPHS (never color alone) (§33)');
+  ok(!!wk.querySelector('td[title]') && /\d\/\d/.test(wk.querySelector('td[title]').getAttribute('title')),
+    '…every cell carries a tooltip with the real count (“Tue 22: 3/3 — met”)');
+  // —— wizard: 5 steps OVER the existing editor, same ids, same save ——
+  host.querySelector('[data-hact="new"]').click(); await sleep(200);
+  const mc = doc.querySelector('.hab-modal');
+  ok(!!mc && mc.querySelectorAll('.hw-step').length === 5, 'the habit editor presents 5 guided steps (fields themselves are unchanged)');
+  ok(/Step 1 of 5/.test(mc.querySelector('.hw-ind').textContent), '…with a visible position marker');
+  mc.querySelector('[data-hw="next"]').click(); await sleep(120);
+  ok(/Step 1 of 5/.test(mc.querySelector('.hw-ind').textContent) && !!doc.querySelector('.toast, #toastHost') && /name/i.test($('#toastHost').textContent),
+    'step 1 refuses an unnamed habit and says why (validation in place, not a silent save)');
+  mc.querySelector('#hh-name').value = 'Meditate';
+  mc.querySelector('[data-hw="next"]').click(); await sleep(120);
+  ok(/Step 2 of 5/.test(mc.querySelector('.hw-ind').textContent) && mc.querySelectorAll('.hw-dot.on').length === 2,
+    'Next advances with progress dots filling in');
+  mc.querySelector('[data-hw="back"]').click(); await sleep(100);
+  ok(/Step 1 of 5/.test(mc.querySelector('.hw-ind').textContent), 'Back returns — nothing is lost');
+  for (let i = 0; i < 4; i++) { mc.querySelector('[data-hw="next"]').click(); await sleep(70); }
+  ok(/Step 5 of 5/.test(mc.querySelector('.hw-ind').textContent) && /Meditate/.test(mc.querySelector('#hw-preview').textContent) && /streak starts/.test(mc.textContent),
+    'the last step previews “Meditate · Every day · 1× per day” and promises the streak starts now');
+  mc.querySelector('[data-hm="save"]').click(); await sleep(320);
+  ok(!doc.querySelector('.hab-modal') && (remMirror().habits || []).some((h) => h.name === 'Meditate' && h.target === 1),
+    'Create habit saves through the SAME record shape — the wizard is presentation, not a second engine');
+  // completion feedback (§31)
+  const medCard = [...doc.querySelectorAll('.hab-card')].find((c) => /Meditate/.test(c.textContent));
+  medCard.querySelector('[data-hact="plus"]').click(); await sleep(260);
+  const flash = $('#habitsHost .hab-flash');
+  ok(!!flash && /Day met ✓/.test(flash.textContent) && /🔥/.test(flash.textContent),
+    'checking off shows calm inline feedback — “Day met ✓ · 🔥 1-day streak”, not confetti');
+  ok(flash.getAttribute('role') === 'status', '…announced politely to screen readers (role=status)');
+  // recommendations (§27-30): categories, one-click, prefill
+  const recs = $('#habitsHost .hab-recs');
+  recs.open = true; await sleep(80);
+  const cats = [...recs.querySelectorAll('.hab-recat h4')].map((x) => x.textContent.trim());
+  ok(cats.length === 4 && /💪/.test(cats[0]) && /🧠/.test(cats[1]) && /📚/.test(cats[2]) && /😴/.test(cats[3]),
+    'Recommended habits grouped under 💪 Body · 🧠 Mind · 📚 Learning · 😴 Lifestyle');
+  const addBtn = [...recs.querySelectorAll('.hab-rec')].find((x) => /Walk 20 minutes/.test(x.textContent)).querySelector('[data-hact="suggest"]');
+  addBtn.click(); await sleep(220);
+  const mc2 = doc.querySelector('.hab-modal');
+  ok(!!mc2 && mc2.querySelector('#hh-name').value === 'Walk 20 minutes',
+    'one click opens the editor PRE-FILLED — nothing is created behind the user’s back');
+  mc2.querySelector('[data-hm="cancel"]').click(); await sleep(140);
+  ok(!(remMirror().habits || []).some((h) => h.name === 'Walk 20 minutes'), 'cancelling the prefill writes NOTHING');
+  await sleep(3000);
+  ok(!$('#habitsHost .hab-flash'), 'the feedback fades by itself — no persistent clutter');
+  ok(true, 'section 28 live flow done');
+
+  // —— deterministic boots: milestones + forgiving miss + empty teaching ——
+  const boot = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+  const dd = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+  boot.habits = (boot.habits || []).concat([
+    { id: 'hms1', name: 'Stretch', description: '', frequency: 'daily', weekdays: [], target: 1, archived: false, remindTime: null, createdAt: Date.now() - 8 * 864e5, updatedAt: Date.now(), history: [6, 5, 4, 3, 2, 1, 0].map((k) => ({ d: dd(-k), c: 1 })) },
+    { id: 'hms2', name: 'Read', description: '', frequency: 'daily', weekdays: [], target: 1, archived: false, remindTime: null, createdAt: Date.now() - 9 * 864e5, updatedAt: Date.now(), history: [7, 6, 5, 4, 3].map((k) => ({ d: dd(-k), c: 1 })) },
+  ]);
+  const dom3 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom3.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dom3.window.localStorage.setItem('todo_backup_v1', JSON.stringify(boot));
+  dom3.window.eval(storageSrc); dom3.window.eval(appSrc);
+  await sleep(450);
+  const d3x = dom3.window.document;
+  d3x.querySelector('#habBtn').click(); await sleep(260);
+  const stretch = [...d3x.querySelectorAll('.hab-card')].find((c) => /Stretch/.test(c.textContent));
+  ok(!!stretch && /🏁 One week strong/.test(stretch.textContent) && /🔥 7 days/.test(stretch.textContent),
+    'milestones are CALM LABELS on the card (🏁 One week strong) — points/badges/leagues are nowhere (§43)');
+  ok(/7-day streak/.test(d3x.querySelector('.hab-today').textContent) && /Keep it going today/.test(d3x.querySelector('.hab-today').textContent),
+    'the strongest streak is surfaced in Today’s header with an encouraging line');
+  const read = [...d3x.querySelectorAll('.hab-card')].find((c) => /Read/.test(c.textContent));
+  ok(!!read && /missed yesterday — start again today/.test(read.textContent) && /best run was 5 days/.test(read.textContent),
+    'a broken streak is FORGIVING, not punishing: “You missed yesterday — start again today.” (§26)');
+  ok(!/streak at risk|\ud83d\udc80|lose your streak/i.test(d3x.querySelector('#habitsHost').textContent),
+    'no threat language anywhere in the habits view');
+  dom3.window.close();
+  const emptyBoot = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+  emptyBoot.habits = [];
+  const dom4 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom4.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dom4.window.localStorage.setItem('todo_backup_v1', JSON.stringify(emptyBoot));
+  dom4.window.eval(storageSrc); dom4.window.eval(appSrc);
+  await sleep(450);
+  const d4x = dom4.window.document;
+  d4x.querySelector('#habBtn').click(); await sleep(240);
+  const eh = d4x.querySelector('#habitsHost');
+  ok(/No habits yet/.test(eh.textContent) && !!eh.querySelector('.hab-empty [data-hact="new"]'),
+    'the empty habits state teaches with ONE clear button — no wall of text');
+  ok(/Start small/.test(eh.textContent) && eh.querySelectorAll('.hab-reccols > div').length === 4,
+    '…and immediately offers the recommended-habits catalog with a “start small” nudge (§27)');
+  dom4.window.close();
+  $('#habBtn').click(); await sleep(160); // leave habits view as found
+  ok(true, 'section 28 completed without uncaught errors');
+}
+
+/* 29. settings: dedicated screen with categories, zero duplication (§§34-38) */
+console.log('\n--- 29. settings information architecture ---');
+{
+  const EV = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  const panel = $('#settingsPanel');
+  if (panel.hidden) $('#settingsBtn').click();
+  await sleep(200);
+  ok(!panel.hidden, '⚙ opens the Settings screen');
+  const tabs = [...panel.querySelectorAll('.set-nav [data-settab]')].map((b) => b.dataset.settab);
+  ok(tabs.join(',') === 'general,notifications,focus,habits,data,privacy,about',
+    'a left-nav lists exactly: General · Notifications · Focus · Habits · Data · Privacy · About (§35)');
+  panel.querySelector('.set-nav [data-settab="general"]').click(); await sleep(120); // land on a known tab (S.ui.setTab persists across sections)
+  ok(!panel.querySelector('.set-page[data-settab="general"]').hidden && panel.querySelector('.set-page[data-settab="focus"]').hidden,
+    'pages are exclusive — one visible at a time (no 500px scroll of everything)');
+  const every = (id) => doc.querySelectorAll('#' + id).length;
+  ok(every('themeSelect') === 1 && every('habInStats') === 1 && every('cloudEnabled') === 1 && every('aiMode') === 1,
+    'each global setting exists ONCE in the DOM — the old duplicates are gone (§38)');
+  // move to notifications + drill deeper
+  panel.querySelector('.set-nav [data-settab="notifications"]').click(); await sleep(120);
+  ok(!panel.querySelector('.set-page[data-settab="notifications"]').hidden && panel.querySelector('.set-page[data-settab="general"]').hidden
+    && !!panel.querySelector('#notifBox'), 'Notifications page owns #notifBox wholesale (all 8 switches still theirs)');
+  // data page: backup reminder + cloud + forwards to the existing export/import pipeline
+  panel.querySelector('.set-nav [data-settab="data"]').click(); await sleep(120);
+  const dp = panel.querySelector('.set-page[data-settab="data"]');
+  ok(!!dp.querySelector('#reminderSelect') && !!dp.querySelector('#cloudEnabled') && dp.querySelectorAll('[data-setforward]').length === 2,
+    'Data page = storage + sync + backup reminder + Export/Import (the topbar buttons, reused — not reimplemented) (§36)');
+  // habits page is TINY and links to itself being enough (§37: one description, one control)
+  panel.querySelector('.set-nav [data-settab="habits"]').click(); await sleep(120);
+  ok(/dashboard stats/i.test(panel.querySelector('.set-page[data-settab="habits"]').textContent),
+    'Habits page explains its single toggle in plain words');
+  // start-view preference writes S.settings.view (the same value nav clicks read)
+  panel.querySelector('.set-nav [data-settab="general"]').click(); await sleep(120);
+  const sv = panel.querySelector('#setStartView');
+  ok(!!sv && sv.value === (JSON.parse(window.localStorage.getItem('todo_backup_v1')).settings.view || 'all'),
+    'General offers “Open this view at launch” synced to the live setting');
+  sv.value = 'today'; EV(sv, 'change'); await sleep(300);
+  ok(JSON.parse(window.localStorage.getItem('todo_backup_v1')).settings.view === 'today' && doc.querySelector('#navToday') && doc.querySelector('#navToday').getAttribute('aria-current') === 'page',
+    'choosing Today persists the setting AND switches the running view — one source of truth');
+  sv.value = 'all'; EV(sv, 'change'); await sleep(260);
+  // context shortcut: from the habits view itself
+  $('#habBtn').click(); await sleep(200);
+  const gl = doc.querySelector('[data-gosettings="habits"]');
+  ok(!!gl, 'the Habits view links to its own settings page instead of duplicating controls');
+  gl.click(); await sleep(260);
+  ok(!panel.hidden && !panel.querySelector('.set-page[data-settab="habits"]').hidden && panel.querySelector('.set-page[data-settab="general"]').hidden,
+    'the link lands on Settings → Habits (deep-linked, not dumped at the top)');
+  if (!panel.hidden) $('#settingsBtn').click(); await sleep(120);
+  ok(true, 'section 29 completed without uncaught errors');
+}
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
 process.exit(failed ? 1 : 0);
