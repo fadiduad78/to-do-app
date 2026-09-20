@@ -1508,3 +1508,6 @@ body.sb-collapsed .sb-new { padding: 0; }
 
 /* §46: the redesign's 26px task checkbox must honor the mobile 30px floor */
 @media (max-width: 899px) { .task .check { width: 30px; height: 30px; } }
+
+/* §12 project glyph on calendar chips */
+.cal-proj { font-style: normal; margin: 0 4px 0 1px; font-size: 10.5px; opacity: .75; }

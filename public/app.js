@@ -777,7 +777,7 @@
       const vwE = S.ui.view;
       let cta = '<div class="es-cta"><button class="btn btn-primary btn-sm" data-ec="add" type="button">＋ Add task</button></div>';
       if (!inTrash && !S.settings.filterProject && !S.ui.search.trim() && S.tasks.length) {
-        if (vwE === 'today') cta = '<div class="es-cta"><button class="btn btn-ghost btn-sm" data-ec="upcoming" type="button">See Upcoming →</button><button class="btn btn-primary btn-sm" data-ec="plan" type="button">✨ Plan my day</button></div>';
+        if (vwE === 'today') cta = '<div class="es-cta"><button class="btn btn-ghost btn-sm" data-ec="upcoming" type="button">See Upcoming →</button><button class="btn btn-ghost btn-sm" data-ec="plan" type="button">✨ Plan my day</button><button class="btn btn-primary btn-sm" data-ec="add" type="button">＋ Add task</button></div>';
         else if (vwE === 'upcoming') cta = '<div class="es-cta"><button class="btn btn-primary btn-sm" data-ec="add" type="button">＋ Add task</button><button class="btn btn-ghost btn-sm" data-ec="today" type="button">← Back to Today</button></div>';
       }
       els.emptyState.innerHTML = '<span class="big">' + icon + '</span>' + text + cta;
@@ -843,13 +843,21 @@
       + (S.reminders.some((r) => r.status === 'pending') ? ' · ' + S.reminders.filter((r) => r.status === 'pending').length + ' reminder(s) armed' : '');
   }
 
+  const ZT_VERSION = '1.0.0'; // keep in step with package.json — About shows it (§35)
   function updateStorageInfo() {
+    const aboutV = document.getElementById('aboutVersion');
+    if (aboutV) aboutV.textContent = 'ZeroTodo v' + ZT_VERSION + ' — offline-first, no accounts required.';
+    const setBoth = (txt) => {
+      els.storageInfo.textContent = txt;
+      const as = document.getElementById('aboutStorage');
+      if (as) as.textContent = txt;
+    };
     if (navigator.storage && navigator.storage.estimate) {
       navigator.storage.estimate().then(({ usage = 0, quota = 0 }) => {
-        els.storageInfo.textContent = 'Approx. storage used by this app: ' + fmtBytes(usage) +
-          (quota ? ' of ' + fmtBytes(quota) + ' available' : '') + '.';
-      }).catch(() => {});
-    }
+        setBoth('Approx. storage used by this app: ' + fmtBytes(usage) +
+          (quota ? ' of ' + fmtBytes(quota) + ' available' : '') + '.');
+      }).catch(() => { setBoth('Storage: this browser (IndexedDB primary + backup mirror).'); });
+    } else setBoth('Storage: this browser (IndexedDB primary + backup mirror).');
   }
 
   function applyTheme() {
@@ -1922,11 +1930,12 @@
         '<i class="cal-dot" aria-hidden="true"></i>' + (t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') + '↻ ' + esc(truncate(t.title, 18)) + '</span>';
     }
     const onPlan = !ghost && ds && t.plan && t.plan.date === ds;
+    const pj = t.projectId && !ghost ? S.projects.find((p) => p.id === t.projectId && !p.deletedAt) : null; // §12: project indicator
     return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + (t.recurrence ? ' is-recur' : '') + (onPlan ? ' is-plan' : '') + '" data-tid="' + esc(t.id) + '" draggable="true"' +
-      ' title="' + esc((onPlan ? '🗓 planned ' + t.plan.start + '–' + t.plan.end + ' — ' : t.dueTime ? t.dueTime + ' — ' : '') + t.title + (t.recurrence ? ' — ' + recurLabel(t) : '')) + '">' +
+      ' title="' + esc((onPlan ? '🗓 planned ' + t.plan.start + '–' + t.plan.end + ' — ' : t.dueTime ? t.dueTime + ' — ' : '') + t.title + (pj ? ' · 📁 ' + pj.name : '') + (t.recurrence ? ' — ' + recurLabel(t) : '')) + '">' +
       '<i class="cal-dot" aria-hidden="true"></i>' + (onPlan ? '<b>' + esc(t.plan.start + '–' + t.plan.end) + '</b>' : t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') +
       (t.recurrence ? '<i class="cal-rmark" aria-hidden="true" title="Recurring — completes roll forward">↻</i>' : '') +
-      bell + (done ? '✓ ' : '') + esc(truncate(t.title, 22)) + '</span>';
+      bell + (done ? '✓ ' : '') + (pj ? '<i class="cal-proj" aria-hidden="true" title="Project: ' + esc(pj.name) + '">' + esc(pj.icon || '📁') + '</i>' : '') + esc(truncate(t.title, 22)) + '</span>';
   }
   function calMonthCell(ds, dim) {
     const st = calStats(ds);

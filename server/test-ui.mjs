@@ -2366,6 +2366,15 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   const before25 = mir25();
   $('#planBtn').click(); await sleep(300);
   const pv = () => $('#planView');
+  // Time-of-day independence: the engine legitimately refuses to schedule in
+  // the past (it floors at now+5min — right behavior), so the proposal is
+  // empty late at night. Pin this DOM's clock to 09:00 TODAY for the section.
+  const RealDate25 = window.Date;
+  const Fix25 = new RealDate25(); Fix25.setHours(9, 0, 0, 0);
+  const D25 = function (...a) { return a.length ? new RealDate25(...a) : new RealDate25(Fix25.getTime()); };
+  D25.now = () => Fix25.getTime(); D25.parse = RealDate25.parse; D25.UTC = RealDate25.UTC; D25.prototype = RealDate25.prototype;
+  window.Date = D25;
+  pv().querySelector('[data-plan="rescan"]') && pv().querySelector('[data-plan="rescan"]').click(); await sleep(600); // re-run the analysis under the pinned clock
   ok(!pv().hidden && /Suggested plan/.test(pv().textContent), '✨ Plan opens the “Suggested plan” panel (the brief’s exact header)');
   ok(/your day: \d{2}:\d{2}–\d{2}:\d{2}/.test(pv().textContent) && (pv().textContent.includes('Today') || pv().textContent.includes(new Date().toLocaleDateString(undefined, { month: 'long' }))), '…with the human day header (“Today”-relative date + your day range)');
   const blocks25 = [...pv().querySelectorAll('.plan-blk')];
@@ -2436,6 +2445,7 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   const v25 = JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks.find((x) => x.id === plannedNow.id);
   const rolled25 = !!v25.recurrence && v25.status === 'active';
   ok((v25.status === 'completed' || rolled25) && !v25.plan, 'completing the task clears its plan slot — a done (or occurrence-rolled recurring) task does not squat on the day');
+  window.Date = RealDate25; // un-pin the clock for every later section
   ok(true, 'daily-plan section completed without uncaught errors');
 }
 
@@ -2880,6 +2890,71 @@ console.log('\n--- 30. planner overload state ---');
   } else { ok(false, 'tomorrow action missing'); ok(false, 'no hand-off'); ok(false, 'no write check'); }
   dom30.window.close();
   ok(true, 'section 30 completed without uncaught errors');
+}
+
+/* 31. brief close-out checks: §12 project glyph on chips · §35 About version/storage · §40 Add-task in Today empty */
+console.log('\n--- 31. §12/§35/§40 close-out ---');
+{
+  const EV = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  // get back to the plain list so quick-add behaves normally
+  for (const id of ['#habBtn', '#calBtn', '#dashBtn', '#planBtn']) { const b = $(id); if (b && b.classList.contains('on')) { b.click(); await sleep(120); } }
+  // a project must exist for the indicator test — use or make one
+  let pid31 = (JSON.parse(window.localStorage.getItem('todo_backup_v1')).projects || []).find((p) => !p.deletedAt);
+  if (!pid31) {
+    $('#projectBar') && $('#projectBar').querySelector('[data-act="new"]') && $('#projectBar [data-act="new"]').click(); await sleep(180);
+    if (!doc.querySelector('#modalHost')) { $('#navProjects').click(); await sleep(200); $('#projectsHost [data-pact="new"]').click(); await sleep(180); }
+    doc.querySelector('#modalHost #pf-name').value = 'Audit Proj';
+    doc.querySelector('#modalHost [data-m="save"]').click(); await sleep(300);
+    pid31 = (JSON.parse(window.localStorage.getItem('todo_backup_v1')).projects || []).find((p) => !p.deletedAt);
+  }
+  ok(!!pid31, 'section precondition: a project exists to point a chip at');
+  // create a plain task due today via the quick-add
+  $('#qaInput').value = 'Chip Audit today';
+  $('#qaInput').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await sleep(260);
+  $('#qaCard [data-nl="create"]').click(); await sleep(420);
+  const t31 = tsk().find((x) => /Chip Audit/.test(x.title)); // NL create strips the date word
+  ok(!!t31, 'quick-add created the audit task (ordinary record, ordinary flow)');
+  // assign it to the project through the NORMAL editor — opened from the chip in Day view
+  $('#calBtn').click(); await sleep(200);
+  doc.querySelector('#calBar [data-cview="day"]').click(); await sleep(140);
+  doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(160);
+  const chip31 = doc.querySelector(`#calHost [data-cdate="${TODAY}"] .cal-chip[data-tid="${t31.id}"]`);
+  ok(!!chip31, 'the task appears in the Day Overview like any other');
+  const chip31c = doc.querySelector(`#calHost [data-cdate="${TODAY}"] .cal-chip[data-tid="${t31.id}"]`) || doc.querySelector(`#calHost .cal-chip[data-tid="${t31.id}"]`);
+  { const c31 = chip31 || chip31c;
+    c31.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); await sleep(220);
+    const sel31 = $('#f-project');
+    const vals = [...sel31.options].map((o2) => o2.value).filter(Boolean);
+    pid31 = vals.includes(pid31.id) ? pid31 : (JSON.parse(window.localStorage.getItem('todo_backup_v1')).projects || []).find((p) => p.id === vals[0]);
+    sel31.value = pid31.id; EV(sel31, 'change');
+    $('#saveTaskBtn').click(); await sleep(420); }
+  const chip31b = doc.querySelector(`#calHost [data-cdate="${TODAY}"] .cal-chip[data-tid="${t31.id}"]`) || doc.querySelector(`#calHost .cal-chip[data-tid="${t31.id}"]`);
+  ok(!!chip31b && !!chip31b.querySelector('.cal-proj'), '§12: the calendar chip now carries the PROJECT indicator (icon, not color)');
+  ok(/· 📁 \S/.test(chip31b.getAttribute('title') || ''), '§12: …and the tooltip names the project (· 📁 <name>)');
+  // §35 About page: version + storage status
+  $('#settingsBtn').click(); await sleep(220);
+  doc.querySelector('#settingsPanel .set-nav [data-settab="about"]').click(); await sleep(160);
+  ok(/v\d+\.\d+\.\d+/.test(doc.querySelector('#aboutVersion').textContent), '§35: About states the ZeroTodo version');
+  ok((doc.querySelector('#aboutStorage').textContent || '').length > 4, '§35: About reports storage status (mirrored from the live estimate)');
+  $('#settingsBtn').click(); await sleep(140);
+  // §40 empty-Today ships the briefed [＋ Add task]
+  const future = (() => { const x = new Date(); x.setDate(x.getDate() + 9); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); })();
+  const b31 = { app: 'zerotodo', schemaVersion: 6, savedAt: Date.now(), settings: {}, trash: [], subtasks: [], reminders: [], habits: [], focusSessions: [], projects: [], version: 6,
+    tasks: [{ id: 'fut31', title: 'Someday thing', dueDate: future, status: 'active', priority: 'med', tags: [], createdAt: Date.now() - 1e5, updatedAt: Date.now() - 1e5 }] };
+  const dom5 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom5.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dom5.window.localStorage.setItem('todo_backup_v1', JSON.stringify(b31));
+  dom5.window.eval(storageSrc); dom5.window.eval(appSrc);
+  await sleep(450);
+  const d5 = dom5.window.document;
+  d5.querySelector('#navToday').click(); await sleep(260);
+  const es5 = d5.querySelector('#emptyState');
+  ok(es5 && !es5.hidden && /caught up/.test(es5.textContent) && !!es5.querySelector('[data-ec="add"]'),
+    '§40: an empty Today says “all caught up” AND offers [＋ Add task] exactly as briefed');
+  es5.querySelector('[data-ec="add"]').click(); await sleep(200);
+  ok(!dom5.window.document.querySelector('#composer').hidden, '…and the CTA actually opens the composer');
+  dom5.window.close();
+  ok(true, 'section 31 completed without uncaught errors');
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

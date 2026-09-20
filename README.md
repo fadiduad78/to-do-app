@@ -597,7 +597,8 @@ surface got clearer. Everything below is regression-pinned in
 - **Calendar is a time-planning view.** Month cells answer “how full is
   this day?” with density dots + “3 tasks · ~1h 20m” (⚠ overdue, ↻ series
   markers) — never crammed titles; every cell has an aria-label summary.
-  Week stays a planning board; the Day Overview is where titles live, under
+  Chips in the time views carry the project indicator (📁 icon + tooltip,
+  §12). Week stays a planning board; the Day Overview is where titles live, under
   a **Time Balance** bar (“2h 30m planned · 1h 20m free”, a neutral
   **Workload**: Light/Moderate/Full/Overbooked). Empty slots show
   “＋ 14:00 — click to create a task at 14:00” and open the normal composer
