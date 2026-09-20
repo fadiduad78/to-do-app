@@ -130,16 +130,23 @@
     }
 
     // ---------- 2. the day's schedule = busy windows (never overlapped) ----------
+    // Two kinds of busy: HARD = things the plan must never move (reminders,
+    // and events on tasks it will not schedule at all). SOFT = time-pinned
+    // events that are also candidates: a candidate may claim its OWN hour
+    // (pin phase, hard-only), but anything else steers clear of every pinned
+    // hour — an unscheduled “Dentist 14:00” still happens in real life.
     var busy = [];
+    var poolIds = {};
+    scored.forEach(function (x) { poolIds[x.t.id] = true; });
     live.forEach(function (t) {
       if (t.dueDate === date && toMin(t.dueTime) != null) {
         var s0 = toMin(t.dueTime), dur0 = blockMin(t);
-        busy.push({ s: s0, e: Math.min(1440, s0 + dur0), label: t.title, owner: t.id });
+        busy.push({ s: s0, e: Math.min(1440, s0 + dur0), label: t.title, owner: t.id, soft: !!poolIds[t.id] });
       }
     });
     remToday.forEach(function (r) {
       var d = new Date(r.triggerAt), m = d.getHours() * 60 + d.getMinutes();
-      busy.push({ s: Math.max(0, m - GRID), e: m, label: 'reminder' });
+      busy.push({ s: Math.max(0, m - GRID), e: m, label: 'reminder', soft: false });
     });
     busy.sort(function (x, y) { return x.s - y.s || x.e - y.e; });
 
@@ -157,9 +164,9 @@
     // pinned to 17:00 leaves a real morning hole, and the planner fills it.
     // Between plan blocks the user's gap rule holds; busy windows just must
     // not be overlapped.
-    function collides(s, e, ignoreOwner) {
+    function collides(s, e, pinMode) {
       for (var k = 0; k < busy.length; k++) {
-        if (busy[k].owner === ignoreOwner) continue; // the task's OWN pin is not an obstacle
+        if (pinMode && busy[k].soft) continue; // pin phase: only immutable schedule blocks a claim
         if (s < busy[k].e && e > busy[k].s) return true;
       }
       for (var j = 0; j < placed.length; j++) {
@@ -180,12 +187,12 @@
       // uses the user's schedule, it does not fight it (the brief's 17:00
       // Exercise is exactly this case)
       var pin = (cand.t.dueDate === date) ? toMin(cand.t.dueTime) : null;
-      if (pin != null && pin >= floorMin && pin + dur <= closeMin && !collides(pin, pin + dur, cand.t.id)) {
+      if (pin != null && pin >= floorMin && pin + dur <= closeMin && !collides(pin, pin + dur, true)) {
         found = pin; pinned = true;
       } else {
         var s = snapUp(floorMin);
         while (s + dur <= closeMin) {
-          if (!collides(s, s + dur, cand.t.id)) { found = s; break; }
+          if (!collides(s, s + dur, false)) { found = s; break; }
           s += GRID;
         }
       }

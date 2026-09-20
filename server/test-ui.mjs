@@ -2289,7 +2289,7 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   ok(span('gym') === '17:00–18:00' && /at its scheduled time/.test(p.blocks[at('gym')].why.join()), 'the day’s schedule wins: 17:00 Exercise keeps its own slot (the brief’s exact example)');
   ok(p.blocks.every((b) => !(T.toMin(b.start) < 990 && T.toMin(b.end) > 975)), 'the 16:30 reminder window stays clear — no block overlaps it');
   ok(p.blocks.every((b) => T.toMin(b.start) % 15 === 0 && T.toMin(b.end) % 15 === 0), 'every block snaps to the 15-minute grid, with 15-min gaps');
-  ok(p.blocks.every((b, i) => i === 0 || T.toMin(b.start) - T.toMin(p.blocks[i - 1].end) >= 15 || T.toMin(b.start) > T.toMin(p.blocks[i - 1].end) + 15 || p.blocks[i - 1].title === 'Exercise'), 'consecutive planned blocks keep a breathing gap');
+  ok(p.blocks.every((b, i) => i === 0 || T.toMin(b.start) - T.toMin(p.blocks[i - 1].end) >= 15), 'consecutive planned blocks keep a breathing gap (gapMin holds between every pair)');
   ok(p.blocks.every((b) => T.toMin(b.end) <= T.toMin('22:00') && T.toMin(b.start) >= T.toMin('08:45')), 'nothing spills past the day end or starts before “now”');
   ok(span('exp') === '11:15–12:45' && span('rev') === '13:00–13:30', 'durations come from the estimates (90m, 30m) rounded to the grid');
   ok(/analyzed 5 open tasks · 1 overdue/.test(p.notes[0]), 'the panel’s transparency line lists what was analyzed');
@@ -2314,6 +2314,18 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   ok(T.planDay({ tasks: LOW, now: NOW25, prefs: PR }).blocks.length === 0, 'a lone low-priority task with no deadline is left OUT (plan stays optional, filler has bounds)');
   ok(JSON.stringify(T.planDay({ tasks: BRIEF, reminders: BRIEFREM, now: NOW25, prefs: PR })) === JSON.stringify(p), 'determinism: same input → identical plan, byte for byte');
   ok(T.fmtRange({ start: '09:00', end: '10:00' }) === '09:00–10:00' && T.validEditedBlock({ start: '09:00', end: '10:00' }) && !T.validEditedBlock({ start: '10:00', end: '09:00' }), 'helpers: fmtRange + edited-block validation (end must beat start)');
+  const p7 = T.planDay({ tasks: [
+    mk('g1', { title: 'Gym A', dueDate: '2026-09-20', dueTime: '17:00', estMin: 60, sortOrder: 1 }),
+    mk('g2', { title: 'Gym B', dueDate: '2026-09-20', dueTime: '17:00', estMin: 60, sortOrder: 2 }),
+  ], now: NOW25, prefs: PR });
+  ok(p7.blocks.length === 2 && p7.blocks.some((b) => b.start === '17:00' && b.end === '18:00') && p7.blocks.some((b) => b.start !== '17:00'),
+    'two tasks pinned to the SAME 17:00: the first claim takes the slot, the other searches on — a pin never deadlocks the day');
+  const p8 = T.planDay({ tasks: [
+    mk('x1', { title: 'Fixed event', dueDate: '2026-09-20', dueTime: '10:00', estMin: 60 }),
+  ].concat([mk('x2', { title: 'Filler', priority: 'low' }), mk('x3', { title: 'Later', dueDate: '2026-09-20', sortOrder: -1, priority: 'high', estMin: 45 })]), now: NOW25, prefs: PR });
+  const x1b = p8.blocks.find((b) => b.title === 'Fixed event');
+  ok(x1b && x1b.start === '10:00' && p8.blocks.every((b) => b === x1b || T.toMin(b.start) >= 660 || T.toMin(b.end) <= 600),
+    'the 10:00 event OWNS its hour: pinned exactly there, and no other block lands on top of it');
   const snap = T.planDay({ tasks: [mk('z', { title: 'Z', estMin: 500, dueDate: '2026-09-20' })], now: NOW25, prefs: PR }).blocks[0];
   ok(snap.min === 120, 'a 500-minute estimate is capped to a 120-minute block — the planner never schedules a 8-hour slab');
 }

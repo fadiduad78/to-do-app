@@ -489,6 +489,13 @@ TODAY’S PLAN — September 20 · window 09:00–22:00
   not overlap. A task already pinned to a time gets **its own slot** (the
   planner follows your schedule instead of fighting it); other tasks then
   fill holes around it on a 15-minute grid with a configurable gap.
+  Two kinds of busy: **hard** (reminders, and events on tasks the plan will not
+  move) and **soft** (time-pinned events that are themselves candidates). A
+  candidate may claim its own hour despite everything (pin phase checks only
+  hard busy, so two tasks wanting 17:00 never deadlock — first claim takes it,
+  the other searches on), while every other block still steers clear of all
+  pinned hours — an unscheduled dentist appointment keeps its 14:00 real-estate
+  free, because that appointment happens whether or not the plan mentions it.
 - **Confirmation is the contract:** the proposal lives only in memory
   (`S.ui.plan.sug`) — a byte-equality test proves the store is untouched
   while it is shown, edited, or rejected. The footer is exactly
