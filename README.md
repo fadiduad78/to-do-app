@@ -510,7 +510,65 @@ TODAY’S PLAN — September 20 · window 09:00–22:00
 - **Deterministic & offline:** no network, no randomness — same input (incl.
   `now`) → identical plan. `server/test-ui.mjs` §25 pins all five ranking
   tiers, grid/gap/busy behavior, the cap-and-skip honesty, the zero-write
-  gate, and the accept/clear flows (481 UI checks total).
+  gate, and the accept/clear flows (489 UI checks at the time — 530 with the redesign).
+
+## Interface redesign — the shell, the views, and what deliberately did NOT change
+
+The app was re-skinned into a modern shell **without touching a single data
+path** — every guarantee in this README (IndexedDB write-through, mirror,
+drafts, trash/undo, migrations, quota & corruption recovery, cross-tab,
+sync, reminders) behaves exactly as before; the suite says so: the redesign
+added ~40 new UI checks and all pre-existing ones still pass (530 total).
+
+- **Sidebar IA (desktop ≥900 px):** Home · Today (with an “actionable now”
+  count badge) · Upcoming · Calendar · Projects — the mental-model views —
+  then tools (Plan/Dashboard/Habits) and Completed/Trash/Settings. Collapse
+  to icons-only is persisted separately from synced app data
+  (`zerotodo_sidebar_v1`) because it is chrome, not content.
+- **Mobile (<900 px) gets its own navigation, not a shrunken sidebar:** a
+  bottom bar (Home/Today/+ FAB/Upcoming/Projects) with safe-area padding and
+  ≥44 px targets; the toolbar’s extra view toggles became a thumb-scrollable
+  group instead of an overflow bug (the §16 real-Chromium scan keeps this
+  pinned at 320–414 px).
+- **Four mental-model views over ONE dataset:** *Today* (only overdue +
+  due-today + undated; grouped `⚠ Overdue → High priority → Today →
+  Completed`, empty groups never rendered), *Upcoming* (due > today, grouped
+  by day with real weekday names), *Home* (a command center: greeting,
+  remaining-today counts, the short list, upcoming-by-day, project progress
+  bars — analytics stay on the Dashboard), and *Projects* (progress cards
+  that jump into the same filtered list). **Existing users still land on the
+  familiar full list** (`settings.view: 'all'`) — Today/Home are a choice,
+  not an ambush; the preference syncs like every other setting.
+- **Home mutates nothing itself** — its checkboxes delegate to the real
+  hidden list rows, so completion, undo, recurrence rolls and write-through
+  are literally the same code path (pinned by §26).
+- **Composer = progressive disclosure + right-side drawer:** one row of
+  title/due/priority, then “More options ▾” for description/time/project/
+  tags/repeat/reminders — and it auto-expands whenever the task actually
+  *has* advanced data, so disclosure never hides something you should see.
+  On desktop it slides in as a drawer (`body.composer-open`); on mobile it
+  is a bottom sheet. `Ctrl/⌘ + K` anywhere focuses the quick-add bar.
+- **Onboarding is two sentences and gone:** a single welcome card for a
+  brand-new empty user (`zerotodo_welcome_v1` latch, never re-shown) and one
+  post-first-task tip about ⌘K (`zerotodo_tip_k`). No tours, no modals, no
+  dots.
+- **Design system:** spacing/type/radius/duration tokens in `:root`,
+  consistent inline-SVG icon sprite for chrome (emoji remain only inside
+  content, by design), priority = Low neutral / Med amber / High red **with
+  words and symbols, color never alone**, visible `:focus-visible` rings,
+  `prefers-reduced-motion` respected, and a redesigned (not inverted) dark
+  theme.
+- **Tests:** `server/test-ui.mjs` **§26** (~40 checks) pins the shell
+  structure, view windows and group headers, Home delegation + re-derive,
+  drawer class + disclosure auto-open, ⌘K, collapse persistence, the
+  welcome/tip latches, teaching empty states with working CTAs, sprite/
+  token/tooltip conventions — and, importantly, that the default landing
+  view is UNCHANGED.
+- **Deferred deliberately to phase 2** (not silently dropped): the
+  click-through *detail drawer* replacing edit-via-composer, the
+  notifications center, the compact “Filter · N” popover, Settings
+  regrouping, calendar empty-slot create, and an error-copy pass.
+
 
 ## Where your data is stored
 

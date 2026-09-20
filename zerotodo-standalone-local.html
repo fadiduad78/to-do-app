@@ -37,6 +37,12 @@
   --info: #1d4ed8;
   --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 4px 14px rgba(16, 24, 40, .06);
   --radius: 10px;
+  /* --- design-system tokens (redesign pass): one scale, everywhere --- */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --sp-8: 48px;
+  --fs-xs: 12px; --fs-s: 13.5px; --fs-m: 15px; --fs-l: 17px; --fs-xl: 22px; --fs-2xl: 27px;
+  --r-s: 8px; --r-m: 12px; --r-l: 16px; --r-xl: 20px;
+  --t-fast: 140ms; --t-med: 220ms;
+  --sidebar-w: 218px; --sidebar-w-c: 62px;
 }
 
 [data-theme="dark"] {
@@ -1084,12 +1090,329 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
 .nl-foot .nl-hint { font-size: 11px; color: var(--muted); }
 @media (max-width: 560px) { .nl-i { grid-template-columns: 74px minmax(0, 1fr); } }
 
+
+/* ════════════════════════════════════════════════════════════════════════
+   REDESIGN PHASE 1 — calm shell, sidebar IA, Home/Today/Upcoming views,
+   progressive disclosure, one icon family, motion + a11y layer.
+   Data-layer rules above stay exactly as they were; nothing here changes
+   persistence behavior — it is layout & paint only.
+   ══════════════════════════════════════════════════════════════════════ */
+
+body { background: var(--bg); }
+h1, h2, h3 { letter-spacing: -.01em; }
+
+/* ---------- shell ---------- */
+#appShell { display: block; }
+#mainCol { display: flex; flex-direction: column; min-height: 100vh; min-width: 0; }
+#mainCol > .container { flex: 1 0 auto; width: 100%; max-width: 780px; }
+@media (min-width: 900px) {
+  #appShell { display: flex; align-items: flex-start; }
+  #mainCol { flex: 1 1 auto; min-height: 100vh; }
+  #mainCol > .container, #mainCol > .footer > .container { max-width: 860px; }
+}
+
+/* ---------- sidebar ---------- */
+#sidebar { display: none; }
+@media (min-width: 900px) {
+  #sidebar {
+    display: flex; flex-direction: column; gap: var(--sp-1);
+    position: sticky; top: 0; flex: 0 0 var(--sidebar-w); width: var(--sidebar-w);
+    height: 100vh; padding: var(--sp-4) var(--sp-3);
+    background: var(--panel); border-right: 1px solid var(--border);
+    transition: flex-basis var(--t-med) ease, width var(--t-med) ease;
+    overflow: hidden;
+  }
+  body.sb-collapsed #sidebar { flex-basis: var(--sidebar-w-c); width: var(--sidebar-w-c); }
+}
+.sb-top { display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-1) var(--sp-3); }
+.sb-top .brand { min-width: 0; }
+.brand-mob { display: inline-flex; }
+@media (min-width: 900px) { .topbar .brand-mob { display: none; } .topbar { justify-content: flex-end; } .topbar .save-pill:first-of-type { margin-right: auto; } }
+.sb-collapse { margin-left: auto; flex: none; width: 30px; height: 30px; border: none; border-radius: var(--r-s); background: none; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background var(--t-fast); }
+.sb-collapse:hover { background: var(--panel-2); color: var(--text); }
+.sb-collapse svg { transition: transform var(--t-med) ease; }
+body.sb-collapsed .sb-collapse svg { transform: rotate(180deg); }
+.sb-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.sb-collapsed .sb-label { display: none; }
+.sb-new {
+  display: flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  min-height: 40px; margin: 0 var(--sp-1) var(--sp-3); padding: 0 var(--sp-3);
+  border: none; border-radius: var(--r-m); background: var(--accent); color: #fff;
+  font: inherit; font-weight: 600; font-size: var(--fs-m); cursor: pointer;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .18); transition: filter var(--t-fast);
+}
+.sb-new:hover { filter: brightness(1.07); }
+.sb-nav { display: flex; flex-direction: column; gap: 2px; }
+.sb-rule { height: 1px; background: var(--border); margin: var(--sp-3) var(--sp-2); }
+.sb-spacer { flex: 1; }
+.sb-item {
+  position: relative; display: flex; align-items: center; gap: var(--sp-3);
+  min-height: 40px; padding: 0 var(--sp-3); border: none; border-radius: var(--r-m);
+  background: none; color: var(--text); font: inherit; font-size: var(--fs-m); text-align: left;
+  cursor: pointer; width: 100%; transition: background var(--t-fast);
+}
+.sb-item svg { flex: none; color: var(--muted); transition: color var(--t-fast); }
+.sb-item:hover { background: var(--panel-2); }
+.sb-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sb-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.sb-item[aria-current="page"] svg { color: var(--accent); }
+.sb-n { margin-left: auto; font: inherit; font-style: normal; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); background: var(--panel-2); border-radius: 999px; padding: 1px 7px; }
+.sb-item[aria-current="page"] .sb-n { background: #fff; color: var(--accent); }
+body.sb-collapsed .sb-n { display: none; }
+body.sb-collapsed .sb-item { justify-content: center; padding: 0; }
+body.sb-collapsed .sb-new { padding: 0; }
+
+/* tooltips for icon-only controls (CSS-only, zero JS): sidebar-collapsed and bottom nav */
+[data-tip] { position: relative; }
+@media (min-width: 900px) {
+  [data-tip]:hover::after, [data-tip]:focus-visible::after {
+    content: attr(data-tip); position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+    background: var(--text); color: var(--bg); font-size: var(--fs-xs); font-weight: 500; white-space: nowrap;
+    padding: 5px 10px; border-radius: var(--r-s); box-shadow: var(--shadow); z-index: 200; pointer-events: none;
+  }
+  .topbar [data-tip]:hover::after, .topbar [data-tip]:focus-visible::after, #bottomNav [data-tip]:hover::after {
+    left: auto; right: 0; top: calc(100% + 8px);
+  }
+  #sidebar [data-tip]:not(.sb-item):hover::after { left: calc(100% + 8px); }
+  body:not(.sb-collapsed) .sb-item[data-tip]:hover::after { display: none; }
+}
+
+/* ---------- mobile bottom navigation (never a shrunk sidebar) ---------- */
+#bottomNav { display: none; }
+@media (max-width: 899px) {
+  #bottomNav {
+    position: fixed; z-index: 90; left: 0; right: 0; bottom: 0;
+    display: grid; grid-template-columns: repeat(4, 1fr) auto repeat(0, 1fr);
+    align-items: center; gap: var(--sp-1);
+    padding: 6px 14px calc(6px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border);
+  }
+  #bottomNav { grid-template-columns: 1fr 1fr auto 1fr 1fr; }
+  .bn-item { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 46px; padding: 4px 0 2px; border: none; background: none; color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 600; cursor: pointer; border-radius: var(--r-m); }
+  .bn-item span { letter-spacing: .01em; }
+  .bn-item[aria-current="page"] { color: var(--accent); }
+  .bn-fab { flex: none; width: 52px; height: 52px; border-radius: 50%; border: none; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 45%, transparent); cursor: pointer; margin: 0 6px; }
+  .mainCol-pad, #mainCol { padding-bottom: 84px; }
+  @media (min-width: 900px) { #mainCol { padding-bottom: 0; } }
+}
+
+/* ---------- view head & toolbars ---------- */
+.view-head { padding: var(--sp-5) var(--sp-1) 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.015em; display: flex; align-items: baseline; gap: var(--sp-2); }
+.view-head:empty { display: none; }
+.view-head small { font-size: var(--fs-s); font-weight: 500; color: var(--muted); }
+@media (max-width: 899px) { .view-head { font-size: var(--fs-l); padding-top: var(--sp-3); } }
+.tb-views { display: inline-flex; gap: 6px; }
+@media (min-width: 900px) { .tb-views { display: none; } } /* the sidebar owns navigation on desktop */
+.search-wrap { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0 var(--sp-3); background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-m); color: var(--muted); transition: border-color var(--t-fast), box-shadow var(--t-fast); }
+.search-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search-wrap input, .search-wrap input:focus { border: none; outline: none; background: none; box-shadow: none; flex: 1; min-width: 0; font-size: var(--fs-m); color: var(--text); padding: 9px 0; }
+
+/* ---------- composer: quiet by default, powerful on demand, a drawer on desktop ---------- */
+.more-btn { display: inline-flex; align-items: center; gap: 5px; margin: 2px 0 8px; padding: 5px 10px; border: 1px dashed var(--border); border-radius: 999px; background: none; color: var(--muted); font: inherit; font-size: var(--fs-s); cursor: pointer; transition: color var(--t-fast), border-color var(--t-fast); }
+.more-btn:hover { color: var(--accent); border-color: var(--accent); }
+.more-chev { transform: rotate(-90deg); transition: transform var(--t-fast); }
+.more-btn[aria-expanded="true"] .more-chev { transform: rotate(90deg); }
+#advFields[hidden] { display: none; }
+#composer { border: 1px solid var(--border); border-radius: var(--r-l); box-shadow: var(--shadow); background: var(--panel); }
+@media (min-width: 900px) {
+  body.composer-open #composer {
+    position: fixed; z-index: 120; right: 22px; top: 78px; width: min(420px, calc(100vw - 40px));
+    max-height: calc(100vh - 100px); overflow: auto; margin: 0;
+    box-shadow: -8px 10px 40px rgba(16, 24, 40, .16); animation: drawerIn var(--t-med) ease;
+  }
+}
+@media (max-width: 899px) {
+  body.composer-open #composer { position: fixed; z-index: 120; left: 0; right: 0; bottom: 0; max-height: 88vh; overflow: auto; border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: none; animation: sheetUp var(--t-med) ease; }
+}
+@keyframes drawerIn { from { opacity: 0; transform: translateX(14px); } }
+@keyframes sheetUp { from { opacity: 0; transform: translateY(18px); } }
+
+/* ---------- welcome (first run) ---------- */
+.welcome { padding: var(--sp-8) 0; }
+.wc-card { max-width: 480px; margin: 4vh auto; padding: var(--sp-6); border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--panel); box-shadow: var(--shadow); text-align: center; display: grid; gap: var(--sp-3); justify-items: center; }
+.wc-card h1 { margin: 0; font-size: var(--fs-2xl); }
+.wc-card p { margin: 0; color: var(--muted); font-size: var(--fs-m); line-height: 1.55; }
+.wc-card .btn-primary { margin-top: var(--sp-2); }
+.btn-lg { min-height: 46px; padding: 0 var(--sp-5); font-size: var(--fs-l); border-radius: var(--r-m); }
+@media (max-width: 899px) { .welcome { padding: var(--sp-4) 0; } .wc-card { padding: var(--sp-5) var(--sp-4); margin: 0; } }
+
+/* ---------- HOME ---------- */
+.home-view { display: grid; gap: var(--sp-4); padding: var(--sp-5) 0 var(--sp-6); }
+.home-hi { margin: 0; font-size: var(--fs-2xl); letter-spacing: -.02em; }
+.home-sub { margin: -6px 0 0; color: var(--muted); font-size: var(--fs-m); }
+.home-cta { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.home-stats { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.hs { flex: 1 1 140px; padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-l); background: var(--panel); }
+.hs b { display: block; font-size: var(--fs-xl); letter-spacing: -.02em; }
+.hs span { color: var(--muted); font-size: var(--fs-s); }
+.home-sec { border: 1px solid var(--border); border-radius: var(--r-l); background: var(--panel); padding: var(--sp-3) var(--sp-4) var(--sp-2); }
+.home-sec h3 { margin: var(--sp-1) 0 var(--sp-2); font-size: var(--fs-m); display: flex; align-items: center; gap: var(--sp-2); }
+.home-sec h3 a { margin-left: auto; color: var(--accent); font-size: var(--fs-s); font-weight: 600; text-decoration: none; cursor: pointer; }
+.home-task { display: flex; align-items: center; gap: var(--sp-3); padding: 9px 2px; border-top: 1px solid var(--border); }
+.home-task:first-of-type { border-top: none; }
+.home-task .ht-title { font-size: var(--fs-m); font-weight: 550; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.home-task .ht-meta { margin-left: auto; flex: none; color: var(--muted); font-size: var(--fs-xs); display: inline-flex; gap: 7px; align-items: center; }
+.ht-prio { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ht-prio.high { background: var(--danger); } .ht-prio.med { background: var(--warn); } .ht-prio.low { background: var(--border); }
+.home-empty { padding: var(--sp-4) var(--sp-2) var(--sp-3); color: var(--muted); font-size: var(--fs-s); text-align: center; }
+.prog-row { display: grid; grid-template-columns: 1fr auto; gap: 4px var(--sp-3); padding: 9px 2px; border-top: 1px solid var(--border); cursor: pointer; align-items: center; }
+.prog-row:first-of-type { border-top: none; }
+.prog-row:hover .pr-name { color: var(--accent); }
+.pr-name { font-size: var(--fs-m); font-weight: 600; display: flex; gap: 7px; align-items: center; min-width: 0; }
+.pr-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-nums { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+.pr-bar { grid-column: 1 / -1; height: 6px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+.pr-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--t-med); }
+
+/* ---------- PROJECTS view ---------- */
+.projects-view { display: grid; gap: var(--sp-3); padding: var(--sp-3) 0 var(--sp-6); grid-template-columns: 1fr; }
+@media (min-width: 640px) { .projects-view { grid-template-columns: 1fr 1fr; } }
+.pj-card { border: 1px solid var(--border); border-radius: var(--r-l); background: var(--panel); padding: var(--sp-4); display: grid; gap: var(--sp-2); cursor: pointer; transition: border-color var(--t-fast), box-shadow var(--t-fast); }
+.pj-card:hover { border-color: var(--accent); box-shadow: var(--shadow); }
+.pj-card h3 { margin: 0; font-size: var(--fs-l); display: flex; align-items: center; gap: var(--sp-2); }
+.pj-card .muted { font-size: var(--fs-s); }
+.pj-empty { grid-column: 1 / -1; text-align: center; padding: var(--sp-8) var(--sp-4); border: 1px dashed var(--border); border-radius: var(--r-l); display: grid; gap: var(--sp-3); justify-items: center; color: var(--muted); }
+
+/* ---------- group headers in list views ---------- */
+.grp { list-style: none; display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-4) 0 calc(-1 * var(--sp-1)); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.grp:first-child { margin-top: var(--sp-1); }
+.grp.over { color: var(--danger); }
+.grp em { font-style: normal; font-weight: 600; color: var(--muted); background: var(--panel-2); border-radius: 999px; padding: 1px 8px; letter-spacing: 0; }
+.task-list { gap: 6px; }
+
+/* ---------- calmer buttons: one primary voice ---------- */
+.btn { font-size: var(--fs-s); min-height: 36px; border-radius: var(--r-m); transition: background var(--t-fast), border-color var(--t-fast), filter var(--t-fast); }
+.btn-primary { box-shadow: 0 1px 2px rgba(16, 24, 40, .14); }
+.btn-ghost { color: var(--muted); border-color: transparent; }
+.btn-ghost:hover { color: var(--text); background: var(--panel-2); border-color: transparent; }
+.btn-icon { width: 36px; padding: 0; justify-content: center; color: var(--muted); border: none; }
+.btn-icon:hover { background: var(--panel-2); color: var(--text); }
+.filters .tab { border-radius: 999px; padding: 4px 13px; font-size: var(--fs-s); border: none; background: none; color: var(--muted); }
+.filters .tab.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* ---------- quick-add stays the loudest input (per the NL brief) ---------- */
+#qaInput { font-size: 16px; padding: 13px 16px; border-radius: var(--r-l); box-shadow: var(--shadow); border-color: var(--border); background: var(--panel); }
+#qaInput:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ---------- footer whisper ---------- */
+.footer { border-top: 1px solid var(--border); background: var(--panel); }
+.footer .footer-inner { font-size: 11.5px; opacity: .8; line-height: 1.5; }
+@media (max-width: 899px) { .footer { padding-bottom: 74px; } }
+
+/* ---------- accessibility & motion ---------- */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+::selection { background: var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+/* checkbox affordance: bigger tap target without bigger pixels */
+.task .check { width: 26px; height: 26px; transition: border-color var(--t-fast), background var(--t-fast); }
+.task.is-done .check svg, .task .check svg { transition: transform var(--t-fast); }
+
+/* dark mode, redesigned: layered surfaces, not inverted black */
+[data-theme="dark"] { --bg: #101623; --panel: #171f31; --panel-2: #1f2a42; --border: #2b3a5c;
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.4);
+}
+[data-theme="dark"] .sb-new, [data-theme="dark"] .bn-fab { box-shadow: 0 1px 2px rgba(0,0,0,.5); }
+ 
+/* welcome is a centered overlay (never a shrunk dialog; dismissible to keys) */
+.welcome { position: fixed; inset: 0; z-index: 160; display: grid; place-items: center; padding: var(--sp-4);
+  background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: blur(6px); }
+.welcome[hidden] { display: none; }
+.wc-card { box-shadow: 0 24px 60px rgba(16, 24, 40, .18); animation: drawerIn var(--t-med) ease; }
+.wc-wave { display: inline-block; }
+.home-task .hcheck { width: 22px; height: 22px; flex: none; border: 1.8px solid var(--border); border-radius: 50%; background: none; cursor: pointer; padding: 0; transition: border-color var(--t-fast); }
+.home-task .hcheck:hover { border-color: var(--accent); }
+.es-cta { display: flex; gap: var(--sp-2); justify-content: center; margin-top: var(--sp-3); }
+.home-sec h3 a { color: var(--accent); }
+.pj-empty .btn { margin-top: var(--sp-2); }
+
+/* flexbox shrink-safety: an input is only as narrow as its default size unless
+   min-width:0 lets it shrink; small chrome groups scroll instead of exceeding
+   the viewport (§16 overflow scan stays clean at 320px by construction) */
+#qaInput, .toolbar input[type="search"] { min-width: 0; }
+@media (max-width: 899px) {
+  .tb-views { max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .tb-views::-webkit-scrollbar { display: none; }
+  .tb-views .btn { flex: 0 0 auto; }
+}
+
+/* banners: long messages must wrap as text, not one-word columns — and the
+   action pair drops under the message on narrow screens */
+.banner-msg { flex: 1 1 auto; min-width: 0; }
+@media (max-width: 640px) {
+  .banner { flex-wrap: wrap; }
+  .banner-actions { width: 100%; justify-content: flex-end; margin-top: 6px; }
+}
+/* one primary per screen: the sidebar holds the real [＋ New task]; the toolbar
+   twin stays for keyboard/test flows but reads as secondary chrome */
+.toolbar #newTaskBtn, .topbar #newTaskBtn { background: var(--surface); color: var(--accent); border: 1px solid var(--border); box-shadow: none; }
+.toolbar #newTaskBtn:hover, .topbar #newTaskBtn:hover { border-color: var(--accent); background: var(--accent-soft); }
+
   </style>
 </head>
 <body>
 
+<!-- ONE icon family (24px grid, 1.7 stroke, round caps) for all chrome icons.
+     Filled spans of emoji stay inside CONTENT (badges, project icons) where
+     they carry meaning; navigation and actions are always this set. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><defs>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5M6 10v9h12v-9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6l1.4 1.4m10 10 1.4 1.4m0-12.8-1.4 1.4m-10 10-1.4 1.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-up" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 3v4m8-4v4M4 11h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 3v4m8-4v4M4 11h16m-8 3v2.5m0 0 1.8 1.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h3.5L11 6.5H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+<symbol id="i-sparkle" viewBox="0 0 24 24"><path d="m12 4 1.7 4.8L18.5 10l-4.8 1.7L12 16.5l-1.7-4.8L5.5 10l4.8-1.2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M18 15.5 18.8 18l2.2.8-2.2.7-.8 2.2-.7-2.2-2.2-.7 2.2-.8Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 19V9m6 10V4m6 15v-7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 20c3.9 0 6-2.5 6-5.6C18 10 14.5 7 13 3c-3.5 2-7 5.6-7 11.4C6 17.5 8.1 20 12 20Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+<symbol id="i-done" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m8.5 12 2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 4h4m-6.5 3L8.5 20h7l1-13M10.5 10.5v6m3-6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 4.5V3m0 18v-1.5M19.5 12H21M3 12h1.5m12-5.3 1.1-1.1M6.4 17.6l-1.1 1.1m0-13.4 1.1 1.1m11.2 11.2 1.1 1.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m15.5 15.5 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24"><path d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+<symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17 9.4 3.6 3.6 0 0 1 16.8 18Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+</defs></svg>
+
+<div id="appShell">
+
+<!-- SIDEBAR (desktop): mental-model navigation. Collapsible to icons-only,
+     labels return as tooltips; persistence is a client preference (localStorage,
+     not app data). Mobile replaces this with the bottom nav — nothing shrinks. -->
+<aside id="sidebar" aria-label="Main navigation">
+  <div class="sb-top">
+    <div class="brand"><span class="brand-mark"><svg width="14" height="14"><use href="#i-check"/></svg></span><span class="sb-label">ZeroTodo</span></div>
+    <button id="sideCollapse" class="sb-collapse" type="button" data-tip="Collapse sidebar" aria-label="Collapse sidebar"><svg width="18" height="18"><use href="#i-chev"/></svg></button>
+  </div>
+  <button id="sideNewBtn" class="sb-new" type="button"><svg width="16" height="16" aria-hidden="true"><use href="#i-plus"/></svg><span class="sb-label">New task</span></button>
+  <nav class="sb-nav" aria-label="Views">
+    <button id="navHome" class="sb-item" type="button" data-view="home" data-tip="Home"><svg width="18" height="18" aria-hidden="true"><use href="#i-home"/></svg><span class="sb-label">Home</span></button>
+    <button id="navToday" class="sb-item" type="button" data-view="today" data-tip="Today"><svg width="18" height="18" aria-hidden="true"><use href="#i-sun"/></svg><span class="sb-label">Today</span><em class="sb-n" id="navTodayN"></em></button>
+    <button id="navUpcoming" class="sb-item" type="button" data-view="upcoming" data-tip="Upcoming"><svg width="18" height="18" aria-hidden="true"><use href="#i-up"/></svg><span class="sb-label">Upcoming</span></button>
+    <button id="navCalendar" class="sb-item" type="button" data-tip="Calendar"><svg width="18" height="18" aria-hidden="true"><use href="#i-cal"/></svg><span class="sb-label">Calendar</span></button>
+    <button id="navProjects" class="sb-item" type="button" data-view="projects" data-tip="Projects"><svg width="18" height="18" aria-hidden="true"><use href="#i-folder"/></svg><span class="sb-label">Projects</span></button>
+  </nav>
+  <div class="sb-rule" role="presentation"></div>
+  <nav class="sb-nav" aria-label="Tools">
+    <button id="navPlan" class="sb-item" type="button" data-tip="Plan my day — a suggestion you confirm, never a reshuffle"><svg width="18" height="18" aria-hidden="true"><use href="#i-sparkle"/></svg><span class="sb-label">Plan my day</span></button>
+    <button id="navDash" class="sb-item" type="button" data-tip="Dashboard — the numbers, kept in their own room"><svg width="18" height="18" aria-hidden="true"><use href="#i-chart"/></svg><span class="sb-label">Dashboard</span></button>
+    <button id="navHabits" class="sb-item" type="button" data-tip="Habits"><svg width="18" height="18" aria-hidden="true"><use href="#i-flame"/></svg><span class="sb-label">Habits</span></button>
+    <button id="navCompleted" class="sb-item" type="button" data-tip="Completed tasks"><svg width="18" height="18" aria-hidden="true"><use href="#i-done"/></svg><span class="sb-label">Completed</span></button>
+    <button id="navTrash" class="sb-item" type="button" data-tip="Trash — 30 days of undo"><svg width="18" height="18" aria-hidden="true"><use href="#i-trash"/></svg><span class="sb-label">Trash</span></button>
+  </nav>
+  <div class="sb-spacer"></div>
+  <nav class="sb-nav" aria-label="App">
+    <button id="navSettings" class="sb-item" type="button" data-tip="Settings"><svg width="18" height="18" aria-hidden="true"><use href="#i-gear"/></svg><span class="sb-label">Settings</span></button>
+  </nav>
+</aside>
+
+<div id="mainCol">
+
 <header class="topbar">
-  <div class="brand"><span class="brand-mark">✓</span> ZeroTodo</div>
 
   <!-- Save-status indicator: the user always knows whether their data is safe on disk. -->
   <div id="savePill" class="save-pill" role="status" aria-live="polite">
@@ -1102,11 +1425,12 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     <span class="dot"></span><span id="cloudPillText">☁ Connecting…</span>
   </div>
 
+  <div class="brand brand-mob"><span class="brand-mark"><svg width="14" height="14"><use href="#i-check"/></svg></span> ZeroTodo</div>
   <div class="top-actions">
-    <button id="exportBtn" class="btn btn-ghost" title="Download all tasks as a JSON backup file">Export</button>
-    <button id="importBtn" class="btn btn-ghost" title="Restore tasks from a JSON backup file">Import</button>
-    <button id="themeBtn" class="btn btn-icon" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
-    <button id="settingsBtn" class="btn btn-icon" title="Settings" aria-label="Settings">⚙</button>
+    <button id="exportBtn" class="btn btn-icon" data-tip="Export a JSON backup" title="Download all tasks as a JSON backup file" aria-label="Export backup"><svg width="17" height="17"><use href="#i-cloud"/></svg></button>
+    <button id="importBtn" class="btn btn-icon" data-tip="Restore from a backup" title="Restore tasks from a JSON backup file" aria-label="Import backup"><svg width="17" height="17" style="transform:rotate(180deg)"><use href="#i-cloud"/></svg></button>
+    <button id="themeBtn" class="btn btn-icon" data-tip="Dark or light" title="Toggle dark mode" aria-label="Toggle dark mode"><svg width="17" height="17"><use href="#i-moon"/></svg></button>
+    <button id="settingsBtn" class="btn btn-icon" data-tip="Settings" title="Settings" aria-label="Settings"><svg width="17" height="17"><use href="#i-gear"/></svg></button>
   </div>
 </header>
 
@@ -1115,28 +1439,58 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
 
 <main class="container">
 
+  <!-- First-run onboarding: 10 seconds, one button, never again (flagged
+       client-side). Returning users with data never see it at all. -->
+  <section id="welcome" class="welcome" hidden aria-label="Welcome">
+    <div class="wc-card">
+      <h1>Welcome to ZeroTodo <span class="wc-wave">👋</span></h1>
+      <p>Capture anything in a sentence, organize projects, and stay on schedule.
+         Your data is saved in this browser automatically — it survives refreshes,
+         crashes and even cleared site storage when sync is on.</p>
+      <button id="wcGoBtn" class="btn btn-primary btn-lg" type="button">Create my first task</button>
+      <button id="wcSkipBtn" class="btn btn-ghost" type="button">Just looking</button>
+    </div>
+  </section>
+
+  <!-- One-line orientation for the list views (Today · Sunday, September 20). -->
+  <div id="viewHead" class="view-head"></div>
+
+  <!-- HOME: the command center — actionable summary, not a stats wall. -->
+  <section id="homeView" class="home-view" hidden aria-label="Home"></section>
+
+  <!-- PROJECTS: progress-first list. Opens a project by filtering the same list. -->
+  <section id="projectsView" class="projects-view" hidden aria-label="Projects"></section>
+
   <!-- Add / edit composer. In-progress input is auto-saved to a draft key (see app.js). -->
   <section id="composer" class="composer" hidden>
     <h2 id="composerTitle">New task</h2>
     <form id="taskForm" novalidate>
       <input id="f-title" type="text" maxlength="200" placeholder="What needs to be done?" autocomplete="off" required>
-      <textarea id="f-desc" rows="2" maxlength="2000" placeholder="Description (optional)"></textarea>
-      <div class="form-row">
+      <div class="form-row primary-row">
         <label class="field">
-          <span>Due date</span>
+          <span>Due</span>
           <input id="f-due" type="date">
         </label>
         <label class="field">
-          <span>Time</span>
-          <input id="f-time" type="time">
-        </label>
-        <label class="field">
           <span>Priority</span>
-          <select id="f-priority">
+          <select id="f-priority" aria-label="Priority">
             <option value="low">Low</option>
-            <option value="med" selected>Medium</option>
+            <option value="med" selected>Normal</option>
             <option value="high">High</option>
           </select>
+        </label>
+      </div>
+      <!-- Progressive disclosure: simple by default; power appears on demand.
+           Opens itself whenever a task/draft/prefill actually HAS advanced data. -->
+      <button type="button" id="moreBtn" class="more-btn" aria-expanded="false" aria-controls="advFields">
+        More options <svg class="more-chev" width="14" height="14" aria-hidden="true"><use href="#i-chev"/></svg>
+      </button>
+      <div id="advFields" hidden>
+      <textarea id="f-desc" rows="2" maxlength="2000" placeholder="Description (optional)"></textarea>
+      <div class="form-row">
+        <label class="field">
+          <span>Time</span>
+          <input id="f-time" type="time">
         </label>
         <label class="field">
           <span>Project</span>
@@ -1191,6 +1545,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
           <div id="remRows" class="rem-rows"></div>
         </div>
       </div>
+      </div><!-- /advFields -->
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" id="saveTaskBtn">Add task</button>
         <button type="button" class="btn btn-ghost" id="cancelTaskBtn">Cancel</button>
@@ -1213,11 +1568,18 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
   </div>
 
   <section class="toolbar">
-    <input id="searchInput" type="search" placeholder="Search title or description…" autocomplete="off" aria-label="Search tasks">
-    <button id="habBtn" class="btn btn-ghost" aria-pressed="false" title="Habits: recurring check-ins, kept separate from one-time tasks">🔥 Habits</button>
-    <button id="dashBtn" class="btn btn-ghost" aria-pressed="false" title="Dashboard: your productivity state, computed live from the same data">📊 Dashboard</button>
-    <button id="calBtn" class="btn btn-ghost" aria-pressed="false" title="Calendar: a view over the same tasks">📅 Calendar</button>
-    <button id="planBtn" class="btn btn-ghost" aria-pressed="false" title="Daily plan: the app studies your tasks, deadlines, projects and schedule, then SUGGESTS a plan — nothing moves until you accept">✨ Plan</button>
+    <label class="search-wrap"><svg width="16" height="16" aria-hidden="true"><use href="#i-search"/></svg>
+      <input id="searchInput" type="search" placeholder="Search tasks, projects, subtasks…" autocomplete="off" aria-label="Search tasks">
+    </label>
+    <!-- The view switchers still live HERE (same ids, same handlers) so mobile +
+         no-JS-oddities keep working — CSS simply steps them aside on wide
+         screens where the sidebar owns navigation. -->
+    <span class="tb-views h-scroller">
+      <button id="habBtn" class="btn btn-ghost" aria-pressed="false" title="Habits: recurring check-ins, kept separate from one-time tasks">🔥 Habits</button>
+      <button id="dashBtn" class="btn btn-ghost" aria-pressed="false" title="Dashboard: your productivity state, computed live from the same data">📊 Dashboard</button>
+      <button id="calBtn" class="btn btn-ghost" aria-pressed="false" title="Calendar: a view over the same tasks">📅 Calendar</button>
+      <button id="planBtn" class="btn btn-ghost" aria-pressed="false" title="Daily plan: the app studies your tasks, deadlines, projects and schedule, then SUGGESTS a plan — nothing moves until you accept">✨ Plan</button>
+    </span>
     <button id="newTaskBtn" class="btn btn-primary">＋ New task</button>
   </section>
 
@@ -1375,6 +1737,17 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     <p class="muted small" id="cloudInfo"></p>
   </section>
 </main>
+
+<nav id="bottomNav" aria-label="Views">
+  <button class="bn-item" type="button" data-view="home" data-tip="Home"><svg width="20" height="20" aria-hidden="true"><use href="#i-home"/></svg><span>Home</span></button>
+  <button class="bn-item" type="button" data-view="today" data-tip="Today"><svg width="20" height="20" aria-hidden="true"><use href="#i-sun"/></svg><span>Today</span></button>
+  <button id="mobFab" class="bn-fab" type="button" aria-label="New task" data-tip="New task"><svg width="22" height="22" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  <button class="bn-item" type="button" data-view="upcoming" data-tip="Upcoming"><svg width="20" height="20" aria-hidden="true"><use href="#i-up"/></svg><span>Upcoming</span></button>
+  <button class="bn-item" type="button" data-view="projects" data-tip="Projects"><svg width="20" height="20" aria-hidden="true"><use href="#i-folder"/></svg><span>Projects</span></button>
+</nav>
+
+</div><!-- /mainCol -->
+</div><!-- /appShell -->
 
 <footer class="footer">
   <div class="container footer-inner">
@@ -4925,6 +5298,14 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
     habBtn: $('habBtn'), habitsView: $('habitsView'), habitsHost: $('habitsHost'), habInStats: $('habInStats'),
     planBtn: $('planBtn'), planView: $('planView'),
+    sidebar: $('sidebar'), sideCollapse: $('sideCollapse'), sideNewBtn: $('sideNewBtn'),
+    navHome: $('navHome'), navToday: $('navToday'), navTodayN: $('navTodayN'), navUpcoming: $('navUpcoming'),
+    navCalendar: $('navCalendar'), navProjects: $('navProjects'), navPlan: $('navPlan'), navDash: $('navDash'),
+    navHabits: $('navHabits'), navCompleted: $('navCompleted'), navTrash: $('navTrash'), navSettings: $('navSettings'),
+    bottomNav: $('bottomNav'), mobFab: $('mobFab'), viewHead: $('viewHead'),
+    homeView: $('homeView'), projectsView: $('projectsView'),
+    welcome: $('welcome'), wcGoBtn: $('wcGoBtn'), wcSkipBtn: $('wcSkipBtn'),
+    moreBtn: $('moreBtn'), advFields: $('advFields'),
     aiMode: $('aiMode'),
     qaWrap: $('qaWrap'), qaInput: $('qaInput'), qaBtn: $('qaBtn'), qaCard: $('qaCard'),
     focusBar: $('focusBar'),
@@ -4993,7 +5374,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null,
                cal: { open: false, view: 'month', anchor: '' },
                dash: { open: false }, hab: { open: false, showArch: false }, focus: { taskId: null },
-               plan: { open: false, sug: null, edit: false } };
+               plan: { open: false, sug: null, edit: false }, view: 'today', advOpen: false, welcomed: false };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
@@ -5009,6 +5390,11 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     // engine itself so client and future importers can never disagree.
     S.settings.planPrefs = window.ZTPLAN ? ZTPLAN.sanitizePrefs(S.settings.planPrefs) : (S.settings.planPrefs && typeof S.settings.planPrefs === 'object' ? S.settings.planPrefs : {});
     if (S.settings.planPrefs.goalProjectId && !S.projects.some((p) => p.id === S.settings.planPrefs.goalProjectId && !p.deletedAt)) S.settings.planPrefs.goalProjectId = null;
+    // Which mental-model view the user lives in (Home/Today/Upcoming/Projects) —
+    // a preference like the filter tabs; default Today (full list as before).
+    S.settings.view = ['all', 'home', 'today', 'upcoming', 'projects'].includes(S.settings.view) ? S.settings.view : 'all';
+    S.ui.view = S.settings.view;
+    try { if (window.localStorage.getItem('zerotodo_sidebar_v1') === '0') document.body.classList.add('sb-collapsed'); } catch (_) {}
     S.settings.calendarFilters = (S.settings.calendarFilters && typeof S.settings.calendarFilters === 'object') ? S.settings.calendarFilters : {};
     S.ui.cal.view = S.settings.calendarView;
     S.ui.cal.anchor = ymd(new Date());
@@ -5110,6 +5496,13 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
       : sortedTasks();
     if (mode === 'active') list = list.filter((t) => t.status !== 'completed');
     if (mode === 'completed') list = list.filter((t) => t.status === 'completed');
+    const vwv = S.ui.view;
+    if ((vwv === 'today' || vwv === 'upcoming') && mode !== 'trash' && !S.settings.filterProject && !S.ui.search.trim()) {
+      const Tv = ymd(new Date());
+      list = vwv === 'today'
+        ? list.filter((x) => !x.dueDate || x.dueDate <= Tv)
+        : list.filter((x) => x.dueDate && x.dueDate > Tv);
+    }
     if (S.settings.filterTag) list = list.filter((t) => (t.tags || []).includes(S.settings.filterTag));
     if (S.settings.filterProject) list = list.filter((t) => t.projectId === S.settings.filterProject);
     const q = S.ui.search.trim().toLowerCase();
@@ -5384,12 +5777,43 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
       els.planBtn.classList.toggle('on', planOn && !calOn && !dashOn && !habOn);
       els.planBtn.setAttribute('aria-pressed', String(planOn));
     }
-    if (calOn || dashOn || habOn || planOn) {
+    // —— mental-model views (Home / Today / Upcoming / Projects). The overlays
+    // (calendar, dashboard, habits, plan) float on top of the list; Home and
+    // Projects replace it. One dataset underneath, always. ——
+    const vw = S.ui.view || 'today';
+    const listMode = !calOn && !dashOn && !habOn && !planOn;
+    const homeOn = listMode && vw === 'home';
+    const projOn = listMode && vw === 'projects';
+    if (els.homeView) els.homeView.hidden = !homeOn;
+    if (els.projectsView) els.projectsView.hidden = !projOn;
+    for (const [el2, v2] of [[els.navHome, 'home'], [els.navToday, 'today'], [els.navUpcoming, 'upcoming'], [els.navProjects, 'projects']]) {
+      if (!el2) continue;
+      if (listMode && vw === v2) el2.setAttribute('aria-current', 'page'); else el2.removeAttribute('aria-current');
+    }
+    if (els.bottomNav) for (const el2 of els.bottomNav.querySelectorAll('[data-view]')) {
+      if (listMode && vw === el2.dataset.view) el2.setAttribute('aria-current', 'page'); else el2.removeAttribute('aria-current');
+    }
+    if (els.navCalendar) { els.navCalendar.classList.toggle('on', calOn); if (calOn) els.navCalendar.setAttribute('aria-current', 'page'); else els.navCalendar.removeAttribute('aria-current'); }
+    if (els.navPlan) { els.navPlan.classList.toggle('on', planOn); if (planOn) els.navPlan.setAttribute('aria-current', 'page'); else els.navPlan.removeAttribute('aria-current'); }
+    if (els.navTodayN) {
+      const Tn = ymd(new Date());
+      els.navTodayN.textContent = S.tasks.filter((x) => x.status !== 'completed' && (!x.dueDate || x.dueDate <= Tn)).length || '';
+    }
+    if (els.viewHead) els.viewHead.innerHTML = !listMode ? '' : vw === 'today'
+      ? 'Today <small>' + esc(new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })) + '</small>'
+      : vw === 'upcoming' ? 'Upcoming <small>what lands next</small>'
+      : vw === 'projects' ? 'Projects <small>groups with progress</small>' : '';
+    maybeWelcome();
+    if (homeOn) renderHome();
+    if (projOn) renderProjectsView();
+    if (homeOn || projOn || calOn || dashOn || habOn || planOn) {
       for (const el of [els.qaWrap, els.filterTabs, els.tagChips, els.projectBar, els.projectDetail, els.trashBar, els.taskList, els.emptyState]) el.hidden = true;
-      if (habOn && !planOn) renderHabits();
-      if (dashOn && !habOn && !planOn) renderDashboard();
-      if (calOn && !dashOn && !habOn && !planOn) renderCalendar();
-      if (planOn) renderPlan();
+      if (habOn && !planOn && !homeOn && !projOn) renderHabits();
+      if (dashOn && !habOn && !planOn && !homeOn && !projOn) renderDashboard();
+      if (calOn && !dashOn && !habOn && !planOn && !homeOn && !projOn) renderCalendar();
+      if (planOn && !homeOn && !projOn) renderPlan();
+      if (homeOn) renderHome();
+      if (projOn) renderProjectsView();
     } else {
       els.taskList.hidden = false;
       if (els.qaWrap) els.qaWrap.hidden = !window.ZTNL;
@@ -5586,6 +6010,8 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
 
   function renderList() {
     if (S.ui.cal.open) return; // calendar is showing; list content is hidden
+    // under Home/Projects the list stays rendered-but-hidden on purpose:
+    // Home’s checkboxes delegate to real rows (one behavior, one code path)
     const inTrash = S.settings.filterMode === 'trash';
     const list = visibleTasks();
     const trashedProj = inTrash ? trashedProjects() : [];
@@ -5593,19 +6019,63 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
       els.taskList.innerHTML = '';
       els.emptyState.hidden = false;
       let icon = '🗒️', text = 'No tasks yet — click <b>＋ New task</b> to add one. Everything you write is saved automatically, on every change.';
+      let teaching = false;
+      if (S.ui.view === 'today' && (S.tasks.length || S.trash.length) && !S.settings.filterProject && !S.ui.search.trim() && S.settings.filterMode === 'all') { icon = '🎉'; text = '<b>Nothing due today — you’re all caught up.</b>'; teaching = true; }
+      else if (S.ui.view === 'upcoming' && (S.tasks.length || S.trash.length) && !S.settings.filterProject && !S.ui.search.trim() && S.settings.filterMode === 'all') { icon = '🌱'; text = '<b>Nothing scheduled ahead.</b> A quiet calendar is a valid state — or get a head start.'; teaching = true; }
       if (inTrash) { icon = '🗑️'; text = 'Trash is empty. Deleted tasks (and projects) land here for 30 days before they are removed automatically.'; }
       else if (S.settings.filterProject) {
         const p = projectById(S.settings.filterProject);
         icon = (p && p.icon) || '📁';
         text = 'Nothing in this project yet — use <b>＋ Add task</b> to put the first one here.';
       }
-      else if (S.tasks.length || S.trash.length) { icon = '🔍'; text = 'No tasks match the current filter or search.'; }
-      els.emptyState.innerHTML = '<span class="big">' + icon + '</span>' + text;
+      else if (!teaching && (S.tasks.length || S.trash.length)) { icon = '🔍'; text = 'No tasks match the current filter or search.'; }
+      const vwE = S.ui.view;
+      let cta = '<div class="es-cta"><button class="btn btn-primary btn-sm" data-ec="add" type="button">＋ Add task</button></div>';
+      if (!inTrash && !S.settings.filterProject && !S.ui.search.trim() && S.tasks.length) {
+        if (vwE === 'today') cta = '<div class="es-cta"><button class="btn btn-ghost btn-sm" data-ec="upcoming" type="button">See Upcoming →</button><button class="btn btn-primary btn-sm" data-ec="plan" type="button">✨ Plan my day</button></div>';
+        else if (vwE === 'upcoming') cta = '<div class="es-cta"><button class="btn btn-primary btn-sm" data-ec="add" type="button">＋ Add task</button><button class="btn btn-ghost btn-sm" data-ec="today" type="button">← Back to Today</button></div>';
+      }
+      els.emptyState.innerHTML = '<span class="big">' + icon + '</span>' + text + cta;
       return;
     }
     els.emptyState.hidden = true;
-    els.taskList.innerHTML = trashedProj.map((p) => projectRowTrash(p)).join('')
-      + list.map((t) => taskItemHTML(t, inTrash)).join('');
+    let html = trashedProj.map((p) => projectRowTrash(p)).join('');
+    const vw2 = S.ui.view;
+    const grouping = (vw2 === 'today' || vw2 === 'upcoming') && !inTrash && !S.settings.filterProject && !S.ui.search.trim() && S.settings.filterMode !== 'completed';
+    if (!grouping) {
+      els.taskList.innerHTML = html + list.map((t) => taskItemHTML(t, inTrash)).join('');
+      return;
+    }
+    const T2 = ymd(new Date());
+    const buckets = new Map();
+    const labelFor = (t) => {
+      if (vw2 === 'upcoming') {
+        const dd = Math.round((ymdParse(t.dueDate) - ymdParse(T2)) / 86400000);
+        if (dd > 14) return 'later|Later';
+        if (dd === 1) return 'd|Tomorrow';
+        if (dd <= 6) return 'd|' + ymdParse(t.dueDate).toLocaleDateString(undefined, { weekday: 'long' });
+        return 'd|' + ymdParse(t.dueDate).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+      }
+      if (t.status === 'completed') return 'done|Completed';
+      if (t.dueDate && t.dueDate < T2) return 'over|⚠ Overdue';
+      if (t.priority === 'high') return 'high|High priority';
+      return 'now|Today';
+    };
+    for (const t of list) {
+      const [k, lbl] = (({ 0: a, 1: b }) => [a, b])(labelFor(t).split('|'));
+      if (!buckets.has(k)) buckets.set(k, { lbl, items: [] });
+      buckets.get(k).items.push(t);
+    }
+    const todayOrder = ['over', 'high', 'now', 'done'];
+    const keys = vw2 === 'today' ? todayOrder.filter((k) => buckets.has(k))
+      : [...buckets.keys()].sort((a, b) => a === 'later' ? 1 : b === 'later' ? -1 : (buckets.get(a).items[0].dueDate < buckets.get(b).items[0].dueDate ? -1 : 1));
+    for (const k of keys) {
+      const bk = buckets.get(k);
+      if (!bk || !bk.items.length) continue; // NEVER an “Overdue: 0” header — empty groups are simply absent
+      html += '<li class="grp' + (k === 'over' ? ' over' : '') + '" aria-hidden="true">' + esc(bk.lbl) + ' <em>' + bk.items.length + '</em></li>';
+      html += bk.items.map((t) => taskItemHTML(t, false)).join('');
+    }
+    els.taskList.innerHTML = html;
   }
 
   function renderSettings() {
@@ -5651,6 +6121,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     S.ui.editingId = editing ? editing.id : null;
     S.ui.composerOpen = true;
     els.composer.hidden = false;
+    document.body.classList.add('composer-open');
     els.composerTitle.textContent = editing ? 'Edit task' : 'New task';
     els.saveTaskBtn.textContent = editing ? 'Save changes' : 'Add task';
     els.fTitle.value = prefill && prefill.title != null ? prefill.title : (editing ? editing.title : '');
@@ -5702,6 +6173,7 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
 
   function closeComposer() {
     S.ui.composerOpen = false;
+    document.body.classList.remove('composer-open');
     S.ui.editingId = null;
     els.composer.hidden = true;
     els.draftHint.hidden = true;
@@ -5728,6 +6200,14 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     const title = v.title.trim();
     if (!title) {
       els.fTitle.classList.add('invalid');
+    // progressive disclosure: open “More options” when the task/prefill actually
+    // HAS advanced data — the form never hides something the user should see.
+    const advDirty = !!(els.fDesc.value || els.fTime.value || (els.fTags && els.fTags.value.trim())
+      || els.fProject.value !== '' || els.fRecurrence.value || (els.remRows && els.remRows.children.length));
+    const advOpen = advDirty || !!S.ui.advOpen;
+    if (els.advFields) els.advFields.hidden = !advOpen;
+    if (els.moreBtn) els.moreBtn.setAttribute('aria-expanded', String(advOpen));
+
       els.fTitle.focus();
       return;
     }
@@ -5776,6 +6256,12 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     remReconcile(); // arm/reschedule from the new records (persisted schedule)
     clearDraft();
     closeComposer();
+    if (!S.ui.editingId && S.tasks.length === 1) {
+      // one-time tip for a brand-new user — “hints disappear once used”, never a tour
+      let tipSeen = true;
+      try { tipSeen = !!window.localStorage.getItem('zerotodo_tip_k'); } catch (_) {}
+      if (!tipSeen) { try { window.localStorage.setItem('zerotodo_tip_k', '1'); } catch (_) {} toast('Nice one ✓ Tip: press Ctrl/⌘ + K anytime for lightning quick-add.'); }
+    }
     renderAll();
     // If ok === false the storage layer already surfaced a banner.
   }
@@ -8184,6 +8670,117 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     }
   }
 
+  /* ============================ Home & Projects ============================
+     Home is a COMMAND CENTER: what needs attention, one deep breath of stats,
+     and routes onward. Projects is progress-first. Both render from the SAME
+     in-memory state and mutate only through existing handlers (they delegate
+     to real list rows — one behavior, one code path). */
+
+  function todayScope() {
+    const T0 = ymd(new Date());
+    return S.tasks.filter((t) => t.status !== 'completed' && (!t.dueDate || t.dueDate <= T0));
+  }
+
+  function renderHome() {
+    const host = els.homeView; if (!host) return;
+    const now = new Date(); const h = now.getHours(); const T0 = ymd(now);
+    const hi = h < 5 ? 'Still up' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+    const scope = todayScope().slice().sort((a, b) =>
+      ((a.dueDate && a.dueDate < T0) ? -1 : 0) - ((b.dueDate && b.dueDate < T0) ? -1 : 0)
+      || (b.priority === 'high' ? 1 : 0) - (a.priority === 'high' ? 1 : 0)
+      || ((a.dueDate || '9999') < (b.dueDate || '9999') ? -1 : 1));
+    const doneToday = S.tasks.filter((t) => t.status === 'completed' && ((t.completedAt && ymd(new Date(t.completedAt)) === T0) || t.dueDate === T0)).length;
+    const overN = scope.filter((x) => x.dueDate && x.dueDate < T0).length;
+    const up = S.tasks.filter((t) => t.status !== 'completed' && t.dueDate && t.dueDate > T0);
+    let out = '<h1 class="home-hi">' + hi + ' <span class="wc-wave" aria-hidden="true">👋</span></h1>';
+    out += '<p class="home-sub">' + (scope.length ? "Here’s what needs your attention today." : 'Nothing needs you today — the list below is where everything lives.') + '</p>';
+    out += '<div class="home-cta"><button class="btn btn-primary btn-lg" data-cta="add" type="button">＋ Add task</button>' +
+      '<button class="btn btn-ghost" data-cta="plan" type="button">✨ Plan my day</button></div>';
+    out += '<div class="home-stats">' +
+      '<div class="hs"><b>' + (scope.length + (doneToday ? ' · ' + doneToday + ' ✓' : '')) + '</b><span>' + scope.length + ' remaining today' + (overN ? ' · ' + overN + ' overdue' : '') + '</span></div>' +
+      '<div class="hs"><b>' + up.length + '</b><span>upcoming (next 14 days)</span></div></div>';
+    out += '<div class="home-sec"><h3>Today’s tasks <a data-cta="today" role="button" tabindex="0">Open Today →</a></h3>';
+    if (!scope.length) out += '<div class="home-empty">☀️ Clear. <a data-cta="upcoming" role="button" tabindex="0">Check upcoming →</a></div>';
+    for (const x of scope.slice(0, 5)) {
+      const due = x.dueDate ? ((x.dueDate < T0 ? 'Overdue · ' : x.dueDate === T0 ? 'Today' : (ZTNL && ZTNL.fmtDay ? ZTNL.fmtDay(x.dueDate) : x.dueDate))) : 'Anytime';
+      out += '<div class="home-task"><button class="check hcheck" data-cta="tick" data-id="' + esc(x.id) + '" type="button" aria-label="Complete ' + esc(x.title) + '"></button>' +
+        '<span class="ht-title" data-cta="open" data-id="' + esc(x.id) + '" role="button" tabindex="0">' + esc(truncate(x.title, 46)) + '</span>' +
+        '<span class="ht-meta"><i class="ht-prio ' + esc(x.priority || 'med') + '" aria-hidden="true"></i>' + esc(due) + (x.dueTime ? ' · ' + esc(x.dueTime) : '') + '</span></div>';
+    }
+    if (scope.length > 5) out += '<div class="home-empty">+ ' + (scope.length - 5) + ' more in Today</div>';
+    out += '</div>';
+    const days = new Map();
+    for (const x of up) { const k = x.dueDate; if (k) days.set(k, (days.get(k) || 0) + 1); }
+    const soonest = [...days.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1).slice(0, 3);
+    out += '<div class="home-sec"><h3>Upcoming <a data-cta="upcoming" role="button" tabindex="0">See all →</a></h3>';
+    if (!soonest.length) out += '<div class="home-empty">Nothing scheduled ahead — <a data-cta="add" role="button" tabindex="0">add something</a>?</div>';
+    for (const [ds, n] of soonest) {
+      const dd = Math.round((ymdParse(ds) - ymdParse(T0)) / 86400000);
+      const lbl = dd === 1 ? 'Tomorrow' : ymdParse(ds).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      out += '<div class="home-task"><span class="ht-title" data-cta="upcoming" role="button" tabindex="0">' + esc(lbl) + '</span><span class="ht-meta">' + n + ' task' + (n === 1 ? '' : 's') + '</span></div>';
+    }
+    out += '</div>';
+    const projs = liveProjects().filter((p) => !p.archived);
+    out += '<div class="home-sec"><h3>Active projects <a data-cta="projects" role="button" tabindex="0">All →</a></h3>';
+    if (!projs.length) out += '<div class="home-empty">No projects yet — <a data-cta="newproj" role="button" tabindex="0">create your first</a> to organize related tasks.</div>';
+    for (const p of projs.slice(0, 3)) {
+      const mine = S.tasks.filter((x) => x.projectId === p.id && true);
+      const done = mine.filter((x) => x.status === 'completed').length;
+      const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
+      out += '<div class="prog-row" data-cta="proj" data-id="' + esc(p.id) + '" role="button" tabindex="0"><span class="pr-name">' + esc(p.icon || '📁') + '<span>' + esc(p.name) + '</span></span><span class="pr-nums">' + done + ' of ' + mine.length + ' · ' + pct + '%</span><span class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></span></div>';
+    }
+    out += '</div>';
+    host.innerHTML = out;
+  }
+
+  function renderProjectsView() {
+    const host = els.projectsView; if (!host) return;
+    const list = liveProjects().filter((p) => !p.archived);
+    let h = '<div class="home-cta" style="padding:10px 0 2px"><button class="btn btn-primary" data-cta="pjnew" type="button">＋ New project</button></div>';
+    if (!list.length) {
+      h += '<div class="pj-empty"><b>No projects yet.</b>Create your first project to organize related tasks.' +
+        '<button class="btn btn-primary" data-cta="pjnew" type="button">Create project</button></div>';
+    }
+    for (const p of list) {
+      const mine = S.tasks.filter((x) => x.projectId === p.id);
+      const done = mine.filter((x) => x.status === 'completed').length;
+      const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
+      h += '<article class="pj-card" data-cta="proj" data-id="' + esc(p.id) + '" tabindex="0">' +
+        '<h3>' + esc(p.icon || '📁') + ' ' + esc(p.name) + '</h3>' +
+        '<div class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></div>' +
+        '<div class="muted">' + (mine.length ? done + ' of ' + mine.length + ' tasks · ' + pct + '%' : 'no tasks yet — open it to add the first') + '</div></article>';
+    }
+    host.innerHTML = h;
+  }
+
+  function projClick(id) { S.settings.filterProject = id; commitSettings(); S.ui.view = 'today'; if (S.settings.view !== 'today') { S.settings.view = 'today'; commitSettings(); } renderAll(); els.projectDetail.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+
+  function setView(v) {
+    S.ui.view = v;
+    // a sidebar nav click is “go to the primary view” — any drill-in filter resets
+    if (S.settings.filterProject) { S.settings.filterProject = null; }
+    if (S.settings.view !== v) { S.settings.view = v; commitSettings(); }
+    S.ui.cal.open = false; if (S.ui.dash) S.ui.dash.open = false; if (S.ui.hab) S.ui.hab.open = false;
+    S.ui.plan.open = false; S.ui.plan.sug = null; S.ui.plan.edit = false;
+    renderAll();
+  }
+
+  function maybeWelcome() {
+    if (S.ui.welcomed) return;
+    S.ui.welcomed = true;
+    let seen = true;
+    try { seen = !!window.localStorage.getItem('zerotodo_welcome_v1'); } catch (_) {}
+    if (!seen && !S.tasks.length && !S.trash.length && !S.projects.length) {
+      // One calm card over the NORMAL empty list — we never hijack the boot view
+      // (the overlay is the onboarding; the list stays real underneath it).
+      if (els.welcome) els.welcome.hidden = false;
+    }
+  }
+  function welcomeDone() {
+    try { window.localStorage.setItem('zerotodo_welcome_v1', 'done'); } catch (_) {}
+    if (els.welcome) els.welcome.hidden = true;
+  }
+
   /* ================= Daily plan — “Suggested plan” (AI, confirm-gated) ========
    ZTPLAN analyzes tasks/priorities/deadlines/projects/subtask load/reminders/
    estimates/the day's schedule and PROPOSES blocks. The proposal lives only in
@@ -9232,6 +9829,89 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
     };
 
     // Settings panel
+  /* ---------- redesign shell: sidebar nav, bottom nav, ⌘K, onboarding ---------- */
+  for (const [el2, v2] of [[els.navHome, 'home'], [els.navToday, 'today'], [els.navUpcoming, 'upcoming'], [els.navProjects, 'projects']]) {
+    if (el2) el2.onclick = () => setView(v2);
+  }
+  if (els.bottomNav) for (const el2 of els.bottomNav.querySelectorAll('[data-view]')) el2.onclick = () => setView(el2.dataset.view);
+  if (els.mobFab) els.mobFab.onclick = () => els.newTaskBtn.onclick();
+  if (els.sideNewBtn) els.sideNewBtn.onclick = () => els.newTaskBtn.onclick();
+  if (els.navCalendar) els.navCalendar.onclick = () => els.calBtn.onclick();
+  if (els.navPlan) els.navPlan.onclick = () => els.planBtn.onclick();
+  if (els.navDash) els.navDash.onclick = () => els.dashBtn.onclick();
+  if (els.navHabits) els.navHabits.onclick = () => els.habBtn.onclick();
+  if (els.navCompleted) els.navCompleted.onclick = () => { S.settings.filterMode = 'completed'; commitSettings(); setView('today'); };
+  if (els.navTrash) els.navTrash.onclick = () => { S.settings.filterMode = 'trash'; commitSettings(); setView('today'); };
+  if (els.navSettings) els.navSettings.onclick = () => els.settingsBtn.onclick();
+  if (els.sideCollapse) els.sideCollapse.onclick = () => {
+    const col = !document.body.classList.contains('sb-collapsed');
+    document.body.classList.toggle('sb-collapsed', col);
+    els.sideCollapse.setAttribute('aria-label', col ? 'Expand sidebar' : 'Collapse sidebar');
+    els.sideCollapse.setAttribute('data-tip', col ? 'Expand sidebar' : 'Collapse sidebar');
+    try { window.localStorage.setItem('zerotodo_sidebar_v1', col ? '0' : '1'); } catch (_) {}
+  };
+  // Ctrl/Cmd + K → quick-add focus (the NL bar IS the quick-add; Enter parses,
+  // [Create task] confirms). Esc blurs. No command palette exists, so no conflict.
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      if (S.ui.view === 'home' || S.ui.view === 'projects') S.ui.view = 'today';
+      if (els.qaInput) { els.qaInput.focus(); if (els.qaInput.select) els.qaInput.select(); }
+    } else if (e.key === 'Escape' && document.activeElement === els.qaInput) {
+      els.qaInput.blur();
+    }
+  });
+  if (els.wcGoBtn) els.wcGoBtn.onclick = () => { welcomeDone(); els.newTaskBtn.onclick(); };
+  if (els.wcSkipBtn) els.wcSkipBtn.onclick = () => welcomeDone();
+  if (els.moreBtn) els.moreBtn.onclick = () => {
+    const open = !!els.advFields.hidden;
+    els.advFields.hidden = !open;
+    els.moreBtn.setAttribute('aria-expanded', String(open));
+    S.ui.advOpen = open;
+    els.fTitle.focus();
+  };
+  // Home: everything routes to the REAL handlers (rows exist, just hidden) —
+  // ticking completes via the same code path incl. undo + recurrence rolls.
+  const homeAct = (e) => {
+    const a = e.target.closest('[data-cta]'); if (!a) return;
+    const id = a.dataset.id;
+    const c = a.dataset.cta;
+    if (c === 'add') { els.newTaskBtn.onclick(); return; }
+    if (c === 'plan') { els.planBtn.onclick(); return; }
+    if (c === 'today' || c === 'upcoming' || c === 'projects') { setView(c); return; }
+    if (c === 'newproj') { setView('projects'); const nb = els.projectsView && els.projectsView.querySelector('[data-cta="pjnew"]'); if (nb) nb.click(); return; }
+    if (c === 'tick' && id) {
+      const li = els.taskList.querySelector('.task[data-id="' + id + '"]');
+      const btn = li && li.querySelector('[data-act="toggle"]');
+      if (btn) btn.click();
+      return;
+    }
+    if (c === 'open' && id) { openComposer({ mode: 'edit', taskId: id }); return; }
+    if (c === 'proj' && id) { projClick(id); return; }
+  };
+  if (els.homeView) {
+    els.homeView.addEventListener('click', homeAct);
+    els.homeView.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.matches('[data-cta][role="button"], .prog-row')) e.target.click();
+    });
+  }
+  if (els.projectsView) els.projectsView.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-cta]'); if (!a) return;
+    if (a.dataset.cta === 'pjnew') {
+      const bar = document.querySelector('#projectBar [data-act="new"]');
+      setView('today');
+      if (bar) bar.click();
+      return;
+    }
+    if (a.dataset.cta === 'proj') projClick(a.dataset.id);
+  });
+  if (els.emptyState) els.emptyState.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-ec]'); if (!a) return;
+    if (a.dataset.ec === 'add') els.newTaskBtn.onclick();
+    else if (a.dataset.ec === 'plan') els.planBtn.onclick();
+    else setView(a.dataset.ec); // today / upcoming
+  });
+
     els.settingsBtn.onclick = () => {
       els.settingsPanel.hidden = !els.settingsPanel.hidden;
       if (!els.settingsPanel.hidden) updateStorageInfo();

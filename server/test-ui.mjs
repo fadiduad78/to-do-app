@@ -2404,5 +2404,192 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   ok(true, 'daily-plan section completed without uncaught errors');
 }
 
+/* ================= 26. redesign: shell, views, disclosure, onboarding =================
+   The UI redesign must be provably an IMPROVEMENT LAYER, not a behavior change:
+   every check here asserts the new shell routes into the SAME state machine. */
+{
+  const cssSrc = readFileSync(PUB + '/styles.css', 'utf8');
+  const NOW26 = Date.now();
+  const Td = (off) => { const x = new Date(NOW26 + off * 86400000); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+  const seed26 = {
+    app: 'zerotodo', schemaVersion: 5, savedAt: NOW26, settings: {},
+    tasks: [
+      { id: 'ov1', title: 'Pay bill', dueDate: Td(-2), status: 'active', priority: 'med', tags: [], createdAt: NOW26 - 9e5, updatedAt: NOW26 - 9e5 },
+      { id: 'td1', title: 'Do taxes', dueDate: Td(0), status: 'active', priority: 'high', tags: [], createdAt: NOW26 - 8e5, updatedAt: NOW26 - 8e5 },
+      { id: 'tm1', title: 'Team sync', dueDate: Td(1), dueTime: '10:00', status: 'active', priority: 'med', tags: ['work'], projectId: 'pj1', createdAt: NOW26 - 7e5, updatedAt: NOW26 - 7e5 },
+      { id: 'dn1', title: 'Old done', dueDate: Td(0), status: 'completed', completedAt: NOW26 - 3e5, priority: 'low', tags: [], createdAt: NOW26 - 6e5, updatedAt: NOW26 - 6e5 },
+    ],
+    trash: [], subtasks: [], reminders: [], habits: [], focusSessions: [],
+    projects: [{ id: 'pj1', name: 'Q Launch', icon: '🚀', status: 'active', createdAt: NOW26 - 9e5, updatedAt: NOW26 - 9e5, sortOrder: 1 }],
+    version: 5,
+  };
+  const boot26 = (lsInit) => new Promise(async (resolve) => {
+    const w = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+    w.window.HTMLElement.prototype.scrollIntoView = function () {};
+    for (const [k, v] of Object.entries(lsInit || {})) w.window.localStorage.setItem(k, v);
+    w.window.eval(storageSrc); w.window.eval(nlSrc); w.window.eval(aiSrc); w.window.eval(planSrc); w.window.eval(appSrc);
+    await sleep(900);
+    resolve(w);
+  });
+  const r26 = await boot26({ todo_backup_v1: JSON.stringify(seed26), zerotodo_welcome_v1: 'done' });
+  const D = r26.window.document;
+  const $26 = (s) => D.querySelector(s);
+  const mir26 = () => JSON.parse(r26.window.localStorage.getItem('todo_backup_v1'));
+
+  // —— structure & icon system ——
+  ok(!!$26('#appShell') && !$26('#sidebar').hidden && !!$26('#bottomNav') && !!$26('#mobFab'),
+    'shell: sidebar + main column + a SEPARATE mobile bottom nav with FAB (never a shrunk sidebar)');
+  const sideTxt = $26('#sidebar').textContent;
+  ok(['Home', 'Today', 'Upcoming', 'Projects', 'Calendar', 'Completed', 'Trash', 'Settings'].every((n) => sideTxt.includes(n)),
+    'sidebar IA: Home/Today/Upcoming/Projects + Calendar, then Completed/Trash/Settings — the exact mental model');
+  ok($26('#navHome').innerHTML.includes('<svg') && !$26('#sideCollapse').textContent.trim(),
+    'chrome icons are inline SVG from ONE sprite set — no emoji, no unicode mixing');
+  const iconOnly = [...D.querySelectorAll('#sidebar .sb-item, #sidebar .sb-collapse')].filter((b) => !b.textContent.trim());
+  ok(iconOnly.length >= 1 && iconOnly.every((b) => b.hasAttribute('data-tip') && b.hasAttribute('aria-label')),
+    'every icon-only control carries a tooltip AND an accessible name');
+  const spriteIds = new Set([...D.querySelectorAll('svg[hidden] symbol, #zt-sprite symbol, symbol')].map((s) => s.id).filter(Boolean));
+  const uses = [...D.querySelectorAll('use')].map((u) => (u.getAttribute('href') || u.getAttribute('xlink:href') || '')).filter((h) => h.startsWith('#'));
+  ok(spriteIds.size >= 8 && uses.every((h) => spriteIds.has(h.slice(1))),
+    'sprite is single-source: every <use> resolves to a defined symbol (' + uses.length + ' uses, ' + spriteIds.size + ' symbols)');
+  ok(/--sp-\d+:/.test(cssSrc) && /--fs-(xs|s|m|l|xl|2xl):/.test(cssSrc) && /--t-fast:/.test(cssSrc),
+    'design system: spacing/type/duration live in CSS variables, not scattered magic numbers');
+  ok(/prefers-reduced-motion/.test(cssSrc) && /:focus-visible/.test(cssSrc),
+    'accessibility: reduced-motion honored and focus made visible globally');
+  ok(/@media[^{]*max-width:\s*899px[\s\S]*#bottomNav/.test(cssSrc) && /@media[^{]*max-width:\s*899px[\s\S]*composer/.test(cssSrc),
+    'mobile media query carries the bottom nav and the composer-as-bottom-sheet pattern');
+
+  // —— landing view is UNCHANGED (regression lock for ~450 existing checks) ——
+  ok($26('#taskList').hidden === false && $26('#taskList').textContent.includes('Team sync') && $26('#viewHead').textContent === '',
+    'existing users land on the familiar full list — Today/Home are choices, not ambushes');
+  ok($26('#welcome').hidden === true && r26.window.localStorage.getItem('zerotodo_welcome_v1') === 'done',
+    'seen users are NEVER re-onboarded (flag honored before the empty check)');
+
+  // —— Today / Upcoming: windows + teaching groups ——
+  $26('#navToday').click(); await sleep(120);
+  let rows = $26('#taskList').textContent;
+  ok($26('#viewHead').textContent.includes('Today') && rows.includes('Pay bill') && rows.includes('Do taxes') && !rows.includes('Team sync'),
+    'Today shows exactly what needs attention: overdue + due-today (+ undated), never next week');
+  const grps = [...D.querySelectorAll('#taskList .grp')].map((g) => g.textContent.replace(/\d+$/, '').trim());
+  // (the only due-today task is HIGH priority — it belongs to the High bucket;
+  //  an empty “Today” header would violate the hide-empty-sections rule instead)
+  ok(grps.includes('⚠ Overdue') && grps.includes('High priority') && grps.includes('Completed') && !grps.includes('Today'),
+    'Today groups by attention: Overdue → High priority → Today → Completed, and a bucket only appears when filled');
+  ok(!grps.some((g) => /Upcoming|Tomorrow/.test(g)), 'empty sections are NOT shown — no “Tomorrow: 0” headers');
+  ok($26('#navTodayN').textContent === '2', 'sidebar Today badge counts actionable-today (overdue+today, excluding done/future)');
+  $26('#navUpcoming').click(); await sleep(120);
+  rows = $26('#taskList').textContent;
+  ok(rows.includes('Team sync') && !rows.includes('Pay bill') && [...D.querySelectorAll('#taskList .grp')].some((g) => /Tomorrow/.test(g.textContent)),
+    'Upcoming is the mirror window (due > today) grouped BY DAY with real weekday names');
+  // overdue group carries color AND words (color never alone)
+  $26('#navToday').click(); await sleep(120);
+  const overGrp = [...D.querySelectorAll('#taskList .grp')].find((g) => /Overdue/.test(g.textContent));
+  ok(!!overGrp && overGrp.className.includes('over') && overGrp.textContent.includes('⚠') && /\d/.test(overGrp.textContent),
+    'Overdue header: red tint + ⚠ symbol + WORDS + count — never color alone');
+
+  // —— Home: command center that routes, with real handlers underneath ——
+  $26('#navHome').click(); await sleep(140);
+  ok(!$26('#homeView').hidden && $26('#taskList').hidden === true && /Good (morning|afternoon|evening)|Still up/.test($26('#homeView').textContent),
+    'Home: time-aware greeting, the list steps aside — it is a view, not a second app');
+  const homeTxt = $26('#homeView').textContent;
+  ok(/2/.test(homeTxt) && homeTxt.includes('remaining today') && homeTxt.includes('Pay bill') && homeTxt.includes('0 of 1') && /0%/.test(homeTxt),
+    'Home answers “what should I do today?” in one glance: counts, the list itself, and project progress');
+  ok(homeTxt.includes('✨ Plan my day') && homeTxt.includes('＋ Add task'), 'Home leads with the two actions, not with charts (analytics stay on the dashboard)');
+  ok(!!$26('#homeView .prog-row i[style*="width"]'), 'project progress renders as a real bar (not just a % string)');
+  const before26 = JSON.stringify(mir26());
+  $26('#homeView .hcheck').click(); await sleep(460);
+  ok(mir26().tasks.find((x) => x.id === 'ov1').status === 'completed' && before26 !== JSON.stringify(mir26()),
+    'ticking from Home goes through the REAL row handler — same persistence, same rules, no shadow logic');
+  ok(!$26('#homeView').textContent.includes('Pay bill') && $26('#taskList').textContent.includes('Pay bill'),
+    'Home re-derives instantly (row leaves “remaining today”) while the underlying list row stays intact underneath');
+
+  // —— projects view + click-through ——
+  $26('#navProjects').click(); await sleep(120);
+  ok(!$26('#projectsView').hidden && $26('#projectsView').textContent.includes('Q Launch') && /0 of 1/.test($26('#projectsView').textContent),
+    'Projects view: one card per project with name, progress bar and counts');
+  ok(mir26().settings.view === 'projects', 'view choice is a persisted preference (settings-synced like everything else)');
+  $26('#projectsView .pj-card').click(); await sleep(140);
+  ok($26('#taskList').hidden === false && mir26().settings.filterProject === 'pj1',
+    'opening a project jumps into the SAME filtered list — one dataset, no parallel project page');
+
+  // —— overlays still float exclusively over the list under the new nav ——
+  $26('#navHome').click(); await sleep(120);
+  $26('#dashBtn').click(); await sleep(220);
+  ok($26('#dashboard').hidden === false && $26('#homeView').hidden === true,
+    'dashboard opens OVER Home and Home steps aside (render exclusivity survives the redesign)');
+  $26('#dashBtn').click(); await sleep(220);
+  ok($26('#dashboard').hidden === true && !$26('#homeView').hidden, 'closing the dashboard returns to Home when Home was the view');
+
+  // —— composer: drawer class + progressive disclosure ——
+  $26('#navToday').click(); await sleep(120);
+  $26('#newTaskBtn').click(); await sleep(120);
+  ok(D.body.classList.contains('composer-open') && $26('#advFields').hidden === true && $26('#moreBtn').getAttribute('aria-expanded') === 'false',
+    'composer opens as a focused drawer: title + due + priority only, “More options” collapsed with honest aria');
+  $26('#moreBtn').click(); await sleep(60);
+  ok($26('#advFields').hidden === false && $26('#moreBtn').getAttribute('aria-expanded') === 'true', 'one click reveals description/project/tags/time/reminders/repeat');
+  $26('#cancelTaskBtn').click(); await sleep(120);
+  ok(!D.body.classList.contains('composer-open'), 'closing the drawer strips the body class (no phantom padding behind)');
+  // tm1 is DUE TOMORROW — in the Today window it correctly isn’t in the list;
+  // typing a search brings it back (search bypasses view windows, by design)
+  $26('#searchInput').value = 'Team sync';
+  $26('#searchInput').dispatchEvent(new r26.window.Event('input', { bubbles: true })); await sleep(200);
+  const editBtn = $26('#taskList .task[data-id="tm1"] [data-act="edit"]');
+  editBtn.click(); await sleep(140);
+  ok($26('#advFields').hidden === false && $26('#moreBtn').getAttribute('aria-expanded') === 'true',
+    'editing a task WITH advanced data (time/tag) auto-expands “More options” — disclosure never hides truth');
+  $26('#cancelTaskBtn').click(); await sleep(120);
+  $26('#searchInput').value = '';
+  $26('#searchInput').dispatchEvent(new r26.window.Event('input', { bubbles: true })); await sleep(200);
+
+  // —— ⌘K lightning quick-add ——
+  r26.window.dispatchEvent(new r26.window.KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+  await sleep(80);
+  ok(D.activeElement && D.activeElement.id === 'qaInput', 'Ctrl/⌘ + K lands the caret in quick-add from anywhere in the list views');
+
+  // —— sidebar collapse (icons + tooltips only) with its own persisted flag ——
+  $26('#sideCollapse').click(); await sleep(60);
+  ok(D.body.classList.contains('sb-collapsed') && r26.window.localStorage.getItem('zerotodo_sidebar_v1') === '0',
+    'collapse: icons-only, persisted separately from sync data');
+  const r26b = await boot26({ todo_backup_v1: JSON.stringify(seed26), zerotodo_welcome_v1: 'done', zerotodo_sidebar_v1: '0' });
+  ok(r26b.window.document.body.classList.contains('sb-collapsed'), 'collapsed preference re-applies at boot (before first paint of the sidebar)');
+  r26b.window.close();
+
+  // —— onboarding: one calm card, then never again; one tip, then never again ——
+  const r26c = await boot26({});
+  const Dc = r26c.window.document;
+  ok(!$26c('#welcome', Dc) || $Dc0(Dc).hidden === false, 'brand-new user (empty everything) meets a welcome card — the app does not just sit there');
+  function $26c(s, dd) { return dd.querySelector(s); }
+  function $Dc0(dd) { return dd.querySelector('#welcome'); }
+  $Dc0(Dc).querySelector('#wcSkipBtn').click(); await sleep(60);
+  ok($Dc0(Dc).hidden === true && r26c.window.localStorage.getItem('zerotodo_welcome_v1') === 'done', '[No thanks] dismisses and latches forever');
+  const Dqa = Dc.querySelector('#qaInput');
+  Dqa.value = 'Buy milk today';
+  Dqa.dispatchEvent(new r26c.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(250);
+  Dc.querySelector('[data-nl="create"]').click(); await sleep(550); // one-interaction create (prefill + save, no extra clicks)
+  const afterFirst = JSON.parse(r26c.window.localStorage.getItem('todo_backup_v1'));
+  ok(afterFirst.tasks.length === 1 && /Ctrl/.test(Dc.querySelector('#toastHost').textContent) && r26c.window.localStorage.getItem('zerotodo_tip_k') === '1',
+    'after the FIRST task a one-time tip teaches ⌘K — hints vanish once used, there is no tour');
+  const r26d = await boot26({ todo_backup_v1: JSON.stringify(afterFirst), zerotodo_welcome_v1: 'done' });
+  ok(r26d.window.document.querySelector('#welcome').hidden === true, 'second-ever login: zero onboarding noise');
+  r26d.window.close(); r26c.window.close();
+
+  // —— teaching empty states ——
+  const only = { app: 'zerotodo', schemaVersion: 5, savedAt: NOW26, settings: {}, trash: [], subtasks: [], reminders: [], habits: [], focusSessions: [], projects: [], version: 5,
+    tasks: [{ id: 'ft1', title: 'Trip prep', dueDate: Td(3), status: 'active', priority: 'med', tags: [], createdAt: NOW26 - 1e5, updatedAt: NOW26 - 1e5 }] };
+  const r26e = await boot26({ todo_backup_v1: JSON.stringify(only), zerotodo_welcome_v1: 'done' });
+  const De = r26e.window.document;
+  De.querySelector('#navToday').click(); await sleep(120);
+  ok(De.querySelector('#emptyState').hidden === false && /caught up/.test(De.querySelector('#emptyState').textContent),
+    'Today with nothing due says “you’re all caught up” — a state, not a fault');
+  De.querySelector('#emptyState [data-ec="upcoming"]').click(); await sleep(120);
+  ok(De.querySelector('#taskList').textContent.includes('Trip prep'),
+    'the empty state ships working CTAs: [See Upcoming →] routes to where the task actually is');
+  r26e.window.close();
+
+  ok(true, 'redesign section completed without uncaught errors');
+  r26.window.close();
+}
+
+
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
 process.exit(failed ? 1 : 0);

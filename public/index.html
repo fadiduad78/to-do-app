@@ -17,8 +17,65 @@
 </head>
 <body>
 
+<!-- ONE icon family (24px grid, 1.7 stroke, round caps) for all chrome icons.
+     Filled spans of emoji stay inside CONTENT (badges, project icons) where
+     they carry meaning; navigation and actions are always this set. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><defs>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5M6 10v9h12v-9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6l1.4 1.4m10 10 1.4 1.4m0-12.8-1.4 1.4m-10 10-1.4 1.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-up" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 3v4m8-4v4M4 11h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 3v4m8-4v4M4 11h16m-8 3v2.5m0 0 1.8 1.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h3.5L11 6.5H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+<symbol id="i-sparkle" viewBox="0 0 24 24"><path d="m12 4 1.7 4.8L18.5 10l-4.8 1.7L12 16.5l-1.7-4.8L5.5 10l4.8-1.2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M18 15.5 18.8 18l2.2.8-2.2.7-.8 2.2-.7-2.2-2.2-.7 2.2-.8Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 19V9m6 10V4m6 15v-7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 20c3.9 0 6-2.5 6-5.6C18 10 14.5 7 13 3c-3.5 2-7 5.6-7 11.4C6 17.5 8.1 20 12 20Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+<symbol id="i-done" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m8.5 12 2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 4h4m-6.5 3L8.5 20h7l1-13M10.5 10.5v6m3-6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 4.5V3m0 18v-1.5M19.5 12H21M3 12h1.5m12-5.3 1.1-1.1M6.4 17.6l-1.1 1.1m0-13.4 1.1 1.1m11.2 11.2 1.1 1.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m15.5 15.5 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24"><path d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+<symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17 9.4 3.6 3.6 0 0 1 16.8 18Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+</defs></svg>
+
+<div id="appShell">
+
+<!-- SIDEBAR (desktop): mental-model navigation. Collapsible to icons-only,
+     labels return as tooltips; persistence is a client preference (localStorage,
+     not app data). Mobile replaces this with the bottom nav — nothing shrinks. -->
+<aside id="sidebar" aria-label="Main navigation">
+  <div class="sb-top">
+    <div class="brand"><span class="brand-mark"><svg width="14" height="14"><use href="#i-check"/></svg></span><span class="sb-label">ZeroTodo</span></div>
+    <button id="sideCollapse" class="sb-collapse" type="button" data-tip="Collapse sidebar" aria-label="Collapse sidebar"><svg width="18" height="18"><use href="#i-chev"/></svg></button>
+  </div>
+  <button id="sideNewBtn" class="sb-new" type="button"><svg width="16" height="16" aria-hidden="true"><use href="#i-plus"/></svg><span class="sb-label">New task</span></button>
+  <nav class="sb-nav" aria-label="Views">
+    <button id="navHome" class="sb-item" type="button" data-view="home" data-tip="Home"><svg width="18" height="18" aria-hidden="true"><use href="#i-home"/></svg><span class="sb-label">Home</span></button>
+    <button id="navToday" class="sb-item" type="button" data-view="today" data-tip="Today"><svg width="18" height="18" aria-hidden="true"><use href="#i-sun"/></svg><span class="sb-label">Today</span><em class="sb-n" id="navTodayN"></em></button>
+    <button id="navUpcoming" class="sb-item" type="button" data-view="upcoming" data-tip="Upcoming"><svg width="18" height="18" aria-hidden="true"><use href="#i-up"/></svg><span class="sb-label">Upcoming</span></button>
+    <button id="navCalendar" class="sb-item" type="button" data-tip="Calendar"><svg width="18" height="18" aria-hidden="true"><use href="#i-cal"/></svg><span class="sb-label">Calendar</span></button>
+    <button id="navProjects" class="sb-item" type="button" data-view="projects" data-tip="Projects"><svg width="18" height="18" aria-hidden="true"><use href="#i-folder"/></svg><span class="sb-label">Projects</span></button>
+  </nav>
+  <div class="sb-rule" role="presentation"></div>
+  <nav class="sb-nav" aria-label="Tools">
+    <button id="navPlan" class="sb-item" type="button" data-tip="Plan my day — a suggestion you confirm, never a reshuffle"><svg width="18" height="18" aria-hidden="true"><use href="#i-sparkle"/></svg><span class="sb-label">Plan my day</span></button>
+    <button id="navDash" class="sb-item" type="button" data-tip="Dashboard — the numbers, kept in their own room"><svg width="18" height="18" aria-hidden="true"><use href="#i-chart"/></svg><span class="sb-label">Dashboard</span></button>
+    <button id="navHabits" class="sb-item" type="button" data-tip="Habits"><svg width="18" height="18" aria-hidden="true"><use href="#i-flame"/></svg><span class="sb-label">Habits</span></button>
+    <button id="navCompleted" class="sb-item" type="button" data-tip="Completed tasks"><svg width="18" height="18" aria-hidden="true"><use href="#i-done"/></svg><span class="sb-label">Completed</span></button>
+    <button id="navTrash" class="sb-item" type="button" data-tip="Trash — 30 days of undo"><svg width="18" height="18" aria-hidden="true"><use href="#i-trash"/></svg><span class="sb-label">Trash</span></button>
+  </nav>
+  <div class="sb-spacer"></div>
+  <nav class="sb-nav" aria-label="App">
+    <button id="navSettings" class="sb-item" type="button" data-tip="Settings"><svg width="18" height="18" aria-hidden="true"><use href="#i-gear"/></svg><span class="sb-label">Settings</span></button>
+  </nav>
+</aside>
+
+<div id="mainCol">
+
 <header class="topbar">
-  <div class="brand"><span class="brand-mark">✓</span> ZeroTodo</div>
 
   <!-- Save-status indicator: the user always knows whether their data is safe on disk. -->
   <div id="savePill" class="save-pill" role="status" aria-live="polite">
@@ -31,11 +88,12 @@
     <span class="dot"></span><span id="cloudPillText">☁ Connecting…</span>
   </div>
 
+  <div class="brand brand-mob"><span class="brand-mark"><svg width="14" height="14"><use href="#i-check"/></svg></span> ZeroTodo</div>
   <div class="top-actions">
-    <button id="exportBtn" class="btn btn-ghost" title="Download all tasks as a JSON backup file">Export</button>
-    <button id="importBtn" class="btn btn-ghost" title="Restore tasks from a JSON backup file">Import</button>
-    <button id="themeBtn" class="btn btn-icon" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
-    <button id="settingsBtn" class="btn btn-icon" title="Settings" aria-label="Settings">⚙</button>
+    <button id="exportBtn" class="btn btn-icon" data-tip="Export a JSON backup" title="Download all tasks as a JSON backup file" aria-label="Export backup"><svg width="17" height="17"><use href="#i-cloud"/></svg></button>
+    <button id="importBtn" class="btn btn-icon" data-tip="Restore from a backup" title="Restore tasks from a JSON backup file" aria-label="Import backup"><svg width="17" height="17" style="transform:rotate(180deg)"><use href="#i-cloud"/></svg></button>
+    <button id="themeBtn" class="btn btn-icon" data-tip="Dark or light" title="Toggle dark mode" aria-label="Toggle dark mode"><svg width="17" height="17"><use href="#i-moon"/></svg></button>
+    <button id="settingsBtn" class="btn btn-icon" data-tip="Settings" title="Settings" aria-label="Settings"><svg width="17" height="17"><use href="#i-gear"/></svg></button>
   </div>
 </header>
 
@@ -44,28 +102,58 @@
 
 <main class="container">
 
+  <!-- First-run onboarding: 10 seconds, one button, never again (flagged
+       client-side). Returning users with data never see it at all. -->
+  <section id="welcome" class="welcome" hidden aria-label="Welcome">
+    <div class="wc-card">
+      <h1>Welcome to ZeroTodo <span class="wc-wave">👋</span></h1>
+      <p>Capture anything in a sentence, organize projects, and stay on schedule.
+         Your data is saved in this browser automatically — it survives refreshes,
+         crashes and even cleared site storage when sync is on.</p>
+      <button id="wcGoBtn" class="btn btn-primary btn-lg" type="button">Create my first task</button>
+      <button id="wcSkipBtn" class="btn btn-ghost" type="button">Just looking</button>
+    </div>
+  </section>
+
+  <!-- One-line orientation for the list views (Today · Sunday, September 20). -->
+  <div id="viewHead" class="view-head"></div>
+
+  <!-- HOME: the command center — actionable summary, not a stats wall. -->
+  <section id="homeView" class="home-view" hidden aria-label="Home"></section>
+
+  <!-- PROJECTS: progress-first list. Opens a project by filtering the same list. -->
+  <section id="projectsView" class="projects-view" hidden aria-label="Projects"></section>
+
   <!-- Add / edit composer. In-progress input is auto-saved to a draft key (see app.js). -->
   <section id="composer" class="composer" hidden>
     <h2 id="composerTitle">New task</h2>
     <form id="taskForm" novalidate>
       <input id="f-title" type="text" maxlength="200" placeholder="What needs to be done?" autocomplete="off" required>
-      <textarea id="f-desc" rows="2" maxlength="2000" placeholder="Description (optional)"></textarea>
-      <div class="form-row">
+      <div class="form-row primary-row">
         <label class="field">
-          <span>Due date</span>
+          <span>Due</span>
           <input id="f-due" type="date">
         </label>
         <label class="field">
-          <span>Time</span>
-          <input id="f-time" type="time">
-        </label>
-        <label class="field">
           <span>Priority</span>
-          <select id="f-priority">
+          <select id="f-priority" aria-label="Priority">
             <option value="low">Low</option>
-            <option value="med" selected>Medium</option>
+            <option value="med" selected>Normal</option>
             <option value="high">High</option>
           </select>
+        </label>
+      </div>
+      <!-- Progressive disclosure: simple by default; power appears on demand.
+           Opens itself whenever a task/draft/prefill actually HAS advanced data. -->
+      <button type="button" id="moreBtn" class="more-btn" aria-expanded="false" aria-controls="advFields">
+        More options <svg class="more-chev" width="14" height="14" aria-hidden="true"><use href="#i-chev"/></svg>
+      </button>
+      <div id="advFields" hidden>
+      <textarea id="f-desc" rows="2" maxlength="2000" placeholder="Description (optional)"></textarea>
+      <div class="form-row">
+        <label class="field">
+          <span>Time</span>
+          <input id="f-time" type="time">
         </label>
         <label class="field">
           <span>Project</span>
@@ -120,6 +208,7 @@
           <div id="remRows" class="rem-rows"></div>
         </div>
       </div>
+      </div><!-- /advFields -->
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" id="saveTaskBtn">Add task</button>
         <button type="button" class="btn btn-ghost" id="cancelTaskBtn">Cancel</button>
@@ -142,11 +231,18 @@
   </div>
 
   <section class="toolbar">
-    <input id="searchInput" type="search" placeholder="Search title or description…" autocomplete="off" aria-label="Search tasks">
-    <button id="habBtn" class="btn btn-ghost" aria-pressed="false" title="Habits: recurring check-ins, kept separate from one-time tasks">🔥 Habits</button>
-    <button id="dashBtn" class="btn btn-ghost" aria-pressed="false" title="Dashboard: your productivity state, computed live from the same data">📊 Dashboard</button>
-    <button id="calBtn" class="btn btn-ghost" aria-pressed="false" title="Calendar: a view over the same tasks">📅 Calendar</button>
-    <button id="planBtn" class="btn btn-ghost" aria-pressed="false" title="Daily plan: the app studies your tasks, deadlines, projects and schedule, then SUGGESTS a plan — nothing moves until you accept">✨ Plan</button>
+    <label class="search-wrap"><svg width="16" height="16" aria-hidden="true"><use href="#i-search"/></svg>
+      <input id="searchInput" type="search" placeholder="Search tasks, projects, subtasks…" autocomplete="off" aria-label="Search tasks">
+    </label>
+    <!-- The view switchers still live HERE (same ids, same handlers) so mobile +
+         no-JS-oddities keep working — CSS simply steps them aside on wide
+         screens where the sidebar owns navigation. -->
+    <span class="tb-views h-scroller">
+      <button id="habBtn" class="btn btn-ghost" aria-pressed="false" title="Habits: recurring check-ins, kept separate from one-time tasks">🔥 Habits</button>
+      <button id="dashBtn" class="btn btn-ghost" aria-pressed="false" title="Dashboard: your productivity state, computed live from the same data">📊 Dashboard</button>
+      <button id="calBtn" class="btn btn-ghost" aria-pressed="false" title="Calendar: a view over the same tasks">📅 Calendar</button>
+      <button id="planBtn" class="btn btn-ghost" aria-pressed="false" title="Daily plan: the app studies your tasks, deadlines, projects and schedule, then SUGGESTS a plan — nothing moves until you accept">✨ Plan</button>
+    </span>
     <button id="newTaskBtn" class="btn btn-primary">＋ New task</button>
   </section>
 
@@ -304,6 +400,17 @@
     <p class="muted small" id="cloudInfo"></p>
   </section>
 </main>
+
+<nav id="bottomNav" aria-label="Views">
+  <button class="bn-item" type="button" data-view="home" data-tip="Home"><svg width="20" height="20" aria-hidden="true"><use href="#i-home"/></svg><span>Home</span></button>
+  <button class="bn-item" type="button" data-view="today" data-tip="Today"><svg width="20" height="20" aria-hidden="true"><use href="#i-sun"/></svg><span>Today</span></button>
+  <button id="mobFab" class="bn-fab" type="button" aria-label="New task" data-tip="New task"><svg width="22" height="22" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  <button class="bn-item" type="button" data-view="upcoming" data-tip="Upcoming"><svg width="20" height="20" aria-hidden="true"><use href="#i-up"/></svg><span>Upcoming</span></button>
+  <button class="bn-item" type="button" data-view="projects" data-tip="Projects"><svg width="20" height="20" aria-hidden="true"><use href="#i-folder"/></svg><span>Projects</span></button>
+</nav>
+
+</div><!-- /mainCol -->
+</div><!-- /appShell -->
 
 <footer class="footer">
   <div class="container footer-inner">

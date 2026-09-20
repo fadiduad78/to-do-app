@@ -43,6 +43,14 @@
     dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
     habBtn: $('habBtn'), habitsView: $('habitsView'), habitsHost: $('habitsHost'), habInStats: $('habInStats'),
     planBtn: $('planBtn'), planView: $('planView'),
+    sidebar: $('sidebar'), sideCollapse: $('sideCollapse'), sideNewBtn: $('sideNewBtn'),
+    navHome: $('navHome'), navToday: $('navToday'), navTodayN: $('navTodayN'), navUpcoming: $('navUpcoming'),
+    navCalendar: $('navCalendar'), navProjects: $('navProjects'), navPlan: $('navPlan'), navDash: $('navDash'),
+    navHabits: $('navHabits'), navCompleted: $('navCompleted'), navTrash: $('navTrash'), navSettings: $('navSettings'),
+    bottomNav: $('bottomNav'), mobFab: $('mobFab'), viewHead: $('viewHead'),
+    homeView: $('homeView'), projectsView: $('projectsView'),
+    welcome: $('welcome'), wcGoBtn: $('wcGoBtn'), wcSkipBtn: $('wcSkipBtn'),
+    moreBtn: $('moreBtn'), advFields: $('advFields'),
     aiMode: $('aiMode'),
     qaWrap: $('qaWrap'), qaInput: $('qaInput'), qaBtn: $('qaBtn'), qaCard: $('qaCard'),
     focusBar: $('focusBar'),
@@ -111,7 +119,7 @@
     S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null,
                cal: { open: false, view: 'month', anchor: '' },
                dash: { open: false }, hab: { open: false, showArch: false }, focus: { taskId: null },
-               plan: { open: false, sug: null, edit: false } };
+               plan: { open: false, sug: null, edit: false }, view: 'today', advOpen: false, welcomed: false };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
@@ -127,6 +135,11 @@
     // engine itself so client and future importers can never disagree.
     S.settings.planPrefs = window.ZTPLAN ? ZTPLAN.sanitizePrefs(S.settings.planPrefs) : (S.settings.planPrefs && typeof S.settings.planPrefs === 'object' ? S.settings.planPrefs : {});
     if (S.settings.planPrefs.goalProjectId && !S.projects.some((p) => p.id === S.settings.planPrefs.goalProjectId && !p.deletedAt)) S.settings.planPrefs.goalProjectId = null;
+    // Which mental-model view the user lives in (Home/Today/Upcoming/Projects) —
+    // a preference like the filter tabs; default Today (full list as before).
+    S.settings.view = ['all', 'home', 'today', 'upcoming', 'projects'].includes(S.settings.view) ? S.settings.view : 'all';
+    S.ui.view = S.settings.view;
+    try { if (window.localStorage.getItem('zerotodo_sidebar_v1') === '0') document.body.classList.add('sb-collapsed'); } catch (_) {}
     S.settings.calendarFilters = (S.settings.calendarFilters && typeof S.settings.calendarFilters === 'object') ? S.settings.calendarFilters : {};
     S.ui.cal.view = S.settings.calendarView;
     S.ui.cal.anchor = ymd(new Date());
@@ -228,6 +241,13 @@
       : sortedTasks();
     if (mode === 'active') list = list.filter((t) => t.status !== 'completed');
     if (mode === 'completed') list = list.filter((t) => t.status === 'completed');
+    const vwv = S.ui.view;
+    if ((vwv === 'today' || vwv === 'upcoming') && mode !== 'trash' && !S.settings.filterProject && !S.ui.search.trim()) {
+      const Tv = ymd(new Date());
+      list = vwv === 'today'
+        ? list.filter((x) => !x.dueDate || x.dueDate <= Tv)
+        : list.filter((x) => x.dueDate && x.dueDate > Tv);
+    }
     if (S.settings.filterTag) list = list.filter((t) => (t.tags || []).includes(S.settings.filterTag));
     if (S.settings.filterProject) list = list.filter((t) => t.projectId === S.settings.filterProject);
     const q = S.ui.search.trim().toLowerCase();
@@ -502,12 +522,43 @@
       els.planBtn.classList.toggle('on', planOn && !calOn && !dashOn && !habOn);
       els.planBtn.setAttribute('aria-pressed', String(planOn));
     }
-    if (calOn || dashOn || habOn || planOn) {
+    // —— mental-model views (Home / Today / Upcoming / Projects). The overlays
+    // (calendar, dashboard, habits, plan) float on top of the list; Home and
+    // Projects replace it. One dataset underneath, always. ——
+    const vw = S.ui.view || 'today';
+    const listMode = !calOn && !dashOn && !habOn && !planOn;
+    const homeOn = listMode && vw === 'home';
+    const projOn = listMode && vw === 'projects';
+    if (els.homeView) els.homeView.hidden = !homeOn;
+    if (els.projectsView) els.projectsView.hidden = !projOn;
+    for (const [el2, v2] of [[els.navHome, 'home'], [els.navToday, 'today'], [els.navUpcoming, 'upcoming'], [els.navProjects, 'projects']]) {
+      if (!el2) continue;
+      if (listMode && vw === v2) el2.setAttribute('aria-current', 'page'); else el2.removeAttribute('aria-current');
+    }
+    if (els.bottomNav) for (const el2 of els.bottomNav.querySelectorAll('[data-view]')) {
+      if (listMode && vw === el2.dataset.view) el2.setAttribute('aria-current', 'page'); else el2.removeAttribute('aria-current');
+    }
+    if (els.navCalendar) { els.navCalendar.classList.toggle('on', calOn); if (calOn) els.navCalendar.setAttribute('aria-current', 'page'); else els.navCalendar.removeAttribute('aria-current'); }
+    if (els.navPlan) { els.navPlan.classList.toggle('on', planOn); if (planOn) els.navPlan.setAttribute('aria-current', 'page'); else els.navPlan.removeAttribute('aria-current'); }
+    if (els.navTodayN) {
+      const Tn = ymd(new Date());
+      els.navTodayN.textContent = S.tasks.filter((x) => x.status !== 'completed' && (!x.dueDate || x.dueDate <= Tn)).length || '';
+    }
+    if (els.viewHead) els.viewHead.innerHTML = !listMode ? '' : vw === 'today'
+      ? 'Today <small>' + esc(new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })) + '</small>'
+      : vw === 'upcoming' ? 'Upcoming <small>what lands next</small>'
+      : vw === 'projects' ? 'Projects <small>groups with progress</small>' : '';
+    maybeWelcome();
+    if (homeOn) renderHome();
+    if (projOn) renderProjectsView();
+    if (homeOn || projOn || calOn || dashOn || habOn || planOn) {
       for (const el of [els.qaWrap, els.filterTabs, els.tagChips, els.projectBar, els.projectDetail, els.trashBar, els.taskList, els.emptyState]) el.hidden = true;
-      if (habOn && !planOn) renderHabits();
-      if (dashOn && !habOn && !planOn) renderDashboard();
-      if (calOn && !dashOn && !habOn && !planOn) renderCalendar();
-      if (planOn) renderPlan();
+      if (habOn && !planOn && !homeOn && !projOn) renderHabits();
+      if (dashOn && !habOn && !planOn && !homeOn && !projOn) renderDashboard();
+      if (calOn && !dashOn && !habOn && !planOn && !homeOn && !projOn) renderCalendar();
+      if (planOn && !homeOn && !projOn) renderPlan();
+      if (homeOn) renderHome();
+      if (projOn) renderProjectsView();
     } else {
       els.taskList.hidden = false;
       if (els.qaWrap) els.qaWrap.hidden = !window.ZTNL;
@@ -704,6 +755,8 @@
 
   function renderList() {
     if (S.ui.cal.open) return; // calendar is showing; list content is hidden
+    // under Home/Projects the list stays rendered-but-hidden on purpose:
+    // Home’s checkboxes delegate to real rows (one behavior, one code path)
     const inTrash = S.settings.filterMode === 'trash';
     const list = visibleTasks();
     const trashedProj = inTrash ? trashedProjects() : [];
@@ -711,19 +764,63 @@
       els.taskList.innerHTML = '';
       els.emptyState.hidden = false;
       let icon = '🗒️', text = 'No tasks yet — click <b>＋ New task</b> to add one. Everything you write is saved automatically, on every change.';
+      let teaching = false;
+      if (S.ui.view === 'today' && (S.tasks.length || S.trash.length) && !S.settings.filterProject && !S.ui.search.trim() && S.settings.filterMode === 'all') { icon = '🎉'; text = '<b>Nothing due today — you’re all caught up.</b>'; teaching = true; }
+      else if (S.ui.view === 'upcoming' && (S.tasks.length || S.trash.length) && !S.settings.filterProject && !S.ui.search.trim() && S.settings.filterMode === 'all') { icon = '🌱'; text = '<b>Nothing scheduled ahead.</b> A quiet calendar is a valid state — or get a head start.'; teaching = true; }
       if (inTrash) { icon = '🗑️'; text = 'Trash is empty. Deleted tasks (and projects) land here for 30 days before they are removed automatically.'; }
       else if (S.settings.filterProject) {
         const p = projectById(S.settings.filterProject);
         icon = (p && p.icon) || '📁';
         text = 'Nothing in this project yet — use <b>＋ Add task</b> to put the first one here.';
       }
-      else if (S.tasks.length || S.trash.length) { icon = '🔍'; text = 'No tasks match the current filter or search.'; }
-      els.emptyState.innerHTML = '<span class="big">' + icon + '</span>' + text;
+      else if (!teaching && (S.tasks.length || S.trash.length)) { icon = '🔍'; text = 'No tasks match the current filter or search.'; }
+      const vwE = S.ui.view;
+      let cta = '<div class="es-cta"><button class="btn btn-primary btn-sm" data-ec="add" type="button">＋ Add task</button></div>';
+      if (!inTrash && !S.settings.filterProject && !S.ui.search.trim() && S.tasks.length) {
+        if (vwE === 'today') cta = '<div class="es-cta"><button class="btn btn-ghost btn-sm" data-ec="upcoming" type="button">See Upcoming →</button><button class="btn btn-primary btn-sm" data-ec="plan" type="button">✨ Plan my day</button></div>';
+        else if (vwE === 'upcoming') cta = '<div class="es-cta"><button class="btn btn-primary btn-sm" data-ec="add" type="button">＋ Add task</button><button class="btn btn-ghost btn-sm" data-ec="today" type="button">← Back to Today</button></div>';
+      }
+      els.emptyState.innerHTML = '<span class="big">' + icon + '</span>' + text + cta;
       return;
     }
     els.emptyState.hidden = true;
-    els.taskList.innerHTML = trashedProj.map((p) => projectRowTrash(p)).join('')
-      + list.map((t) => taskItemHTML(t, inTrash)).join('');
+    let html = trashedProj.map((p) => projectRowTrash(p)).join('');
+    const vw2 = S.ui.view;
+    const grouping = (vw2 === 'today' || vw2 === 'upcoming') && !inTrash && !S.settings.filterProject && !S.ui.search.trim() && S.settings.filterMode !== 'completed';
+    if (!grouping) {
+      els.taskList.innerHTML = html + list.map((t) => taskItemHTML(t, inTrash)).join('');
+      return;
+    }
+    const T2 = ymd(new Date());
+    const buckets = new Map();
+    const labelFor = (t) => {
+      if (vw2 === 'upcoming') {
+        const dd = Math.round((ymdParse(t.dueDate) - ymdParse(T2)) / 86400000);
+        if (dd > 14) return 'later|Later';
+        if (dd === 1) return 'd|Tomorrow';
+        if (dd <= 6) return 'd|' + ymdParse(t.dueDate).toLocaleDateString(undefined, { weekday: 'long' });
+        return 'd|' + ymdParse(t.dueDate).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+      }
+      if (t.status === 'completed') return 'done|Completed';
+      if (t.dueDate && t.dueDate < T2) return 'over|⚠ Overdue';
+      if (t.priority === 'high') return 'high|High priority';
+      return 'now|Today';
+    };
+    for (const t of list) {
+      const [k, lbl] = (({ 0: a, 1: b }) => [a, b])(labelFor(t).split('|'));
+      if (!buckets.has(k)) buckets.set(k, { lbl, items: [] });
+      buckets.get(k).items.push(t);
+    }
+    const todayOrder = ['over', 'high', 'now', 'done'];
+    const keys = vw2 === 'today' ? todayOrder.filter((k) => buckets.has(k))
+      : [...buckets.keys()].sort((a, b) => a === 'later' ? 1 : b === 'later' ? -1 : (buckets.get(a).items[0].dueDate < buckets.get(b).items[0].dueDate ? -1 : 1));
+    for (const k of keys) {
+      const bk = buckets.get(k);
+      if (!bk || !bk.items.length) continue; // NEVER an “Overdue: 0” header — empty groups are simply absent
+      html += '<li class="grp' + (k === 'over' ? ' over' : '') + '" aria-hidden="true">' + esc(bk.lbl) + ' <em>' + bk.items.length + '</em></li>';
+      html += bk.items.map((t) => taskItemHTML(t, false)).join('');
+    }
+    els.taskList.innerHTML = html;
   }
 
   function renderSettings() {
@@ -769,6 +866,7 @@
     S.ui.editingId = editing ? editing.id : null;
     S.ui.composerOpen = true;
     els.composer.hidden = false;
+    document.body.classList.add('composer-open');
     els.composerTitle.textContent = editing ? 'Edit task' : 'New task';
     els.saveTaskBtn.textContent = editing ? 'Save changes' : 'Add task';
     els.fTitle.value = prefill && prefill.title != null ? prefill.title : (editing ? editing.title : '');
@@ -820,6 +918,7 @@
 
   function closeComposer() {
     S.ui.composerOpen = false;
+    document.body.classList.remove('composer-open');
     S.ui.editingId = null;
     els.composer.hidden = true;
     els.draftHint.hidden = true;
@@ -846,6 +945,14 @@
     const title = v.title.trim();
     if (!title) {
       els.fTitle.classList.add('invalid');
+    // progressive disclosure: open “More options” when the task/prefill actually
+    // HAS advanced data — the form never hides something the user should see.
+    const advDirty = !!(els.fDesc.value || els.fTime.value || (els.fTags && els.fTags.value.trim())
+      || els.fProject.value !== '' || els.fRecurrence.value || (els.remRows && els.remRows.children.length));
+    const advOpen = advDirty || !!S.ui.advOpen;
+    if (els.advFields) els.advFields.hidden = !advOpen;
+    if (els.moreBtn) els.moreBtn.setAttribute('aria-expanded', String(advOpen));
+
       els.fTitle.focus();
       return;
     }
@@ -894,6 +1001,12 @@
     remReconcile(); // arm/reschedule from the new records (persisted schedule)
     clearDraft();
     closeComposer();
+    if (!S.ui.editingId && S.tasks.length === 1) {
+      // one-time tip for a brand-new user — “hints disappear once used”, never a tour
+      let tipSeen = true;
+      try { tipSeen = !!window.localStorage.getItem('zerotodo_tip_k'); } catch (_) {}
+      if (!tipSeen) { try { window.localStorage.setItem('zerotodo_tip_k', '1'); } catch (_) {} toast('Nice one ✓ Tip: press Ctrl/⌘ + K anytime for lightning quick-add.'); }
+    }
     renderAll();
     // If ok === false the storage layer already surfaced a banner.
   }
@@ -3302,6 +3415,117 @@
     }
   }
 
+  /* ============================ Home & Projects ============================
+     Home is a COMMAND CENTER: what needs attention, one deep breath of stats,
+     and routes onward. Projects is progress-first. Both render from the SAME
+     in-memory state and mutate only through existing handlers (they delegate
+     to real list rows — one behavior, one code path). */
+
+  function todayScope() {
+    const T0 = ymd(new Date());
+    return S.tasks.filter((t) => t.status !== 'completed' && (!t.dueDate || t.dueDate <= T0));
+  }
+
+  function renderHome() {
+    const host = els.homeView; if (!host) return;
+    const now = new Date(); const h = now.getHours(); const T0 = ymd(now);
+    const hi = h < 5 ? 'Still up' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+    const scope = todayScope().slice().sort((a, b) =>
+      ((a.dueDate && a.dueDate < T0) ? -1 : 0) - ((b.dueDate && b.dueDate < T0) ? -1 : 0)
+      || (b.priority === 'high' ? 1 : 0) - (a.priority === 'high' ? 1 : 0)
+      || ((a.dueDate || '9999') < (b.dueDate || '9999') ? -1 : 1));
+    const doneToday = S.tasks.filter((t) => t.status === 'completed' && ((t.completedAt && ymd(new Date(t.completedAt)) === T0) || t.dueDate === T0)).length;
+    const overN = scope.filter((x) => x.dueDate && x.dueDate < T0).length;
+    const up = S.tasks.filter((t) => t.status !== 'completed' && t.dueDate && t.dueDate > T0);
+    let out = '<h1 class="home-hi">' + hi + ' <span class="wc-wave" aria-hidden="true">👋</span></h1>';
+    out += '<p class="home-sub">' + (scope.length ? "Here’s what needs your attention today." : 'Nothing needs you today — the list below is where everything lives.') + '</p>';
+    out += '<div class="home-cta"><button class="btn btn-primary btn-lg" data-cta="add" type="button">＋ Add task</button>' +
+      '<button class="btn btn-ghost" data-cta="plan" type="button">✨ Plan my day</button></div>';
+    out += '<div class="home-stats">' +
+      '<div class="hs"><b>' + (scope.length + (doneToday ? ' · ' + doneToday + ' ✓' : '')) + '</b><span>' + scope.length + ' remaining today' + (overN ? ' · ' + overN + ' overdue' : '') + '</span></div>' +
+      '<div class="hs"><b>' + up.length + '</b><span>upcoming (next 14 days)</span></div></div>';
+    out += '<div class="home-sec"><h3>Today’s tasks <a data-cta="today" role="button" tabindex="0">Open Today →</a></h3>';
+    if (!scope.length) out += '<div class="home-empty">☀️ Clear. <a data-cta="upcoming" role="button" tabindex="0">Check upcoming →</a></div>';
+    for (const x of scope.slice(0, 5)) {
+      const due = x.dueDate ? ((x.dueDate < T0 ? 'Overdue · ' : x.dueDate === T0 ? 'Today' : (ZTNL && ZTNL.fmtDay ? ZTNL.fmtDay(x.dueDate) : x.dueDate))) : 'Anytime';
+      out += '<div class="home-task"><button class="check hcheck" data-cta="tick" data-id="' + esc(x.id) + '" type="button" aria-label="Complete ' + esc(x.title) + '"></button>' +
+        '<span class="ht-title" data-cta="open" data-id="' + esc(x.id) + '" role="button" tabindex="0">' + esc(truncate(x.title, 46)) + '</span>' +
+        '<span class="ht-meta"><i class="ht-prio ' + esc(x.priority || 'med') + '" aria-hidden="true"></i>' + esc(due) + (x.dueTime ? ' · ' + esc(x.dueTime) : '') + '</span></div>';
+    }
+    if (scope.length > 5) out += '<div class="home-empty">+ ' + (scope.length - 5) + ' more in Today</div>';
+    out += '</div>';
+    const days = new Map();
+    for (const x of up) { const k = x.dueDate; if (k) days.set(k, (days.get(k) || 0) + 1); }
+    const soonest = [...days.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1).slice(0, 3);
+    out += '<div class="home-sec"><h3>Upcoming <a data-cta="upcoming" role="button" tabindex="0">See all →</a></h3>';
+    if (!soonest.length) out += '<div class="home-empty">Nothing scheduled ahead — <a data-cta="add" role="button" tabindex="0">add something</a>?</div>';
+    for (const [ds, n] of soonest) {
+      const dd = Math.round((ymdParse(ds) - ymdParse(T0)) / 86400000);
+      const lbl = dd === 1 ? 'Tomorrow' : ymdParse(ds).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      out += '<div class="home-task"><span class="ht-title" data-cta="upcoming" role="button" tabindex="0">' + esc(lbl) + '</span><span class="ht-meta">' + n + ' task' + (n === 1 ? '' : 's') + '</span></div>';
+    }
+    out += '</div>';
+    const projs = liveProjects().filter((p) => !p.archived);
+    out += '<div class="home-sec"><h3>Active projects <a data-cta="projects" role="button" tabindex="0">All →</a></h3>';
+    if (!projs.length) out += '<div class="home-empty">No projects yet — <a data-cta="newproj" role="button" tabindex="0">create your first</a> to organize related tasks.</div>';
+    for (const p of projs.slice(0, 3)) {
+      const mine = S.tasks.filter((x) => x.projectId === p.id && true);
+      const done = mine.filter((x) => x.status === 'completed').length;
+      const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
+      out += '<div class="prog-row" data-cta="proj" data-id="' + esc(p.id) + '" role="button" tabindex="0"><span class="pr-name">' + esc(p.icon || '📁') + '<span>' + esc(p.name) + '</span></span><span class="pr-nums">' + done + ' of ' + mine.length + ' · ' + pct + '%</span><span class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></span></div>';
+    }
+    out += '</div>';
+    host.innerHTML = out;
+  }
+
+  function renderProjectsView() {
+    const host = els.projectsView; if (!host) return;
+    const list = liveProjects().filter((p) => !p.archived);
+    let h = '<div class="home-cta" style="padding:10px 0 2px"><button class="btn btn-primary" data-cta="pjnew" type="button">＋ New project</button></div>';
+    if (!list.length) {
+      h += '<div class="pj-empty"><b>No projects yet.</b>Create your first project to organize related tasks.' +
+        '<button class="btn btn-primary" data-cta="pjnew" type="button">Create project</button></div>';
+    }
+    for (const p of list) {
+      const mine = S.tasks.filter((x) => x.projectId === p.id);
+      const done = mine.filter((x) => x.status === 'completed').length;
+      const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
+      h += '<article class="pj-card" data-cta="proj" data-id="' + esc(p.id) + '" tabindex="0">' +
+        '<h3>' + esc(p.icon || '📁') + ' ' + esc(p.name) + '</h3>' +
+        '<div class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></div>' +
+        '<div class="muted">' + (mine.length ? done + ' of ' + mine.length + ' tasks · ' + pct + '%' : 'no tasks yet — open it to add the first') + '</div></article>';
+    }
+    host.innerHTML = h;
+  }
+
+  function projClick(id) { S.settings.filterProject = id; commitSettings(); S.ui.view = 'today'; if (S.settings.view !== 'today') { S.settings.view = 'today'; commitSettings(); } renderAll(); els.projectDetail.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+
+  function setView(v) {
+    S.ui.view = v;
+    // a sidebar nav click is “go to the primary view” — any drill-in filter resets
+    if (S.settings.filterProject) { S.settings.filterProject = null; }
+    if (S.settings.view !== v) { S.settings.view = v; commitSettings(); }
+    S.ui.cal.open = false; if (S.ui.dash) S.ui.dash.open = false; if (S.ui.hab) S.ui.hab.open = false;
+    S.ui.plan.open = false; S.ui.plan.sug = null; S.ui.plan.edit = false;
+    renderAll();
+  }
+
+  function maybeWelcome() {
+    if (S.ui.welcomed) return;
+    S.ui.welcomed = true;
+    let seen = true;
+    try { seen = !!window.localStorage.getItem('zerotodo_welcome_v1'); } catch (_) {}
+    if (!seen && !S.tasks.length && !S.trash.length && !S.projects.length) {
+      // One calm card over the NORMAL empty list — we never hijack the boot view
+      // (the overlay is the onboarding; the list stays real underneath it).
+      if (els.welcome) els.welcome.hidden = false;
+    }
+  }
+  function welcomeDone() {
+    try { window.localStorage.setItem('zerotodo_welcome_v1', 'done'); } catch (_) {}
+    if (els.welcome) els.welcome.hidden = true;
+  }
+
   /* ================= Daily plan — “Suggested plan” (AI, confirm-gated) ========
    ZTPLAN analyzes tasks/priorities/deadlines/projects/subtask load/reminders/
    estimates/the day's schedule and PROPOSES blocks. The proposal lives only in
@@ -4350,6 +4574,89 @@
     };
 
     // Settings panel
+  /* ---------- redesign shell: sidebar nav, bottom nav, ⌘K, onboarding ---------- */
+  for (const [el2, v2] of [[els.navHome, 'home'], [els.navToday, 'today'], [els.navUpcoming, 'upcoming'], [els.navProjects, 'projects']]) {
+    if (el2) el2.onclick = () => setView(v2);
+  }
+  if (els.bottomNav) for (const el2 of els.bottomNav.querySelectorAll('[data-view]')) el2.onclick = () => setView(el2.dataset.view);
+  if (els.mobFab) els.mobFab.onclick = () => els.newTaskBtn.onclick();
+  if (els.sideNewBtn) els.sideNewBtn.onclick = () => els.newTaskBtn.onclick();
+  if (els.navCalendar) els.navCalendar.onclick = () => els.calBtn.onclick();
+  if (els.navPlan) els.navPlan.onclick = () => els.planBtn.onclick();
+  if (els.navDash) els.navDash.onclick = () => els.dashBtn.onclick();
+  if (els.navHabits) els.navHabits.onclick = () => els.habBtn.onclick();
+  if (els.navCompleted) els.navCompleted.onclick = () => { S.settings.filterMode = 'completed'; commitSettings(); setView('today'); };
+  if (els.navTrash) els.navTrash.onclick = () => { S.settings.filterMode = 'trash'; commitSettings(); setView('today'); };
+  if (els.navSettings) els.navSettings.onclick = () => els.settingsBtn.onclick();
+  if (els.sideCollapse) els.sideCollapse.onclick = () => {
+    const col = !document.body.classList.contains('sb-collapsed');
+    document.body.classList.toggle('sb-collapsed', col);
+    els.sideCollapse.setAttribute('aria-label', col ? 'Expand sidebar' : 'Collapse sidebar');
+    els.sideCollapse.setAttribute('data-tip', col ? 'Expand sidebar' : 'Collapse sidebar');
+    try { window.localStorage.setItem('zerotodo_sidebar_v1', col ? '0' : '1'); } catch (_) {}
+  };
+  // Ctrl/Cmd + K → quick-add focus (the NL bar IS the quick-add; Enter parses,
+  // [Create task] confirms). Esc blurs. No command palette exists, so no conflict.
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      if (S.ui.view === 'home' || S.ui.view === 'projects') S.ui.view = 'today';
+      if (els.qaInput) { els.qaInput.focus(); if (els.qaInput.select) els.qaInput.select(); }
+    } else if (e.key === 'Escape' && document.activeElement === els.qaInput) {
+      els.qaInput.blur();
+    }
+  });
+  if (els.wcGoBtn) els.wcGoBtn.onclick = () => { welcomeDone(); els.newTaskBtn.onclick(); };
+  if (els.wcSkipBtn) els.wcSkipBtn.onclick = () => welcomeDone();
+  if (els.moreBtn) els.moreBtn.onclick = () => {
+    const open = !!els.advFields.hidden;
+    els.advFields.hidden = !open;
+    els.moreBtn.setAttribute('aria-expanded', String(open));
+    S.ui.advOpen = open;
+    els.fTitle.focus();
+  };
+  // Home: everything routes to the REAL handlers (rows exist, just hidden) —
+  // ticking completes via the same code path incl. undo + recurrence rolls.
+  const homeAct = (e) => {
+    const a = e.target.closest('[data-cta]'); if (!a) return;
+    const id = a.dataset.id;
+    const c = a.dataset.cta;
+    if (c === 'add') { els.newTaskBtn.onclick(); return; }
+    if (c === 'plan') { els.planBtn.onclick(); return; }
+    if (c === 'today' || c === 'upcoming' || c === 'projects') { setView(c); return; }
+    if (c === 'newproj') { setView('projects'); const nb = els.projectsView && els.projectsView.querySelector('[data-cta="pjnew"]'); if (nb) nb.click(); return; }
+    if (c === 'tick' && id) {
+      const li = els.taskList.querySelector('.task[data-id="' + id + '"]');
+      const btn = li && li.querySelector('[data-act="toggle"]');
+      if (btn) btn.click();
+      return;
+    }
+    if (c === 'open' && id) { openComposer({ mode: 'edit', taskId: id }); return; }
+    if (c === 'proj' && id) { projClick(id); return; }
+  };
+  if (els.homeView) {
+    els.homeView.addEventListener('click', homeAct);
+    els.homeView.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.matches('[data-cta][role="button"], .prog-row')) e.target.click();
+    });
+  }
+  if (els.projectsView) els.projectsView.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-cta]'); if (!a) return;
+    if (a.dataset.cta === 'pjnew') {
+      const bar = document.querySelector('#projectBar [data-act="new"]');
+      setView('today');
+      if (bar) bar.click();
+      return;
+    }
+    if (a.dataset.cta === 'proj') projClick(a.dataset.id);
+  });
+  if (els.emptyState) els.emptyState.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-ec]'); if (!a) return;
+    if (a.dataset.ec === 'add') els.newTaskBtn.onclick();
+    else if (a.dataset.ec === 'plan') els.planBtn.onclick();
+    else setView(a.dataset.ec); // today / upcoming
+  });
+
     els.settingsBtn.onclick = () => {
       els.settingsPanel.hidden = !els.settingsPanel.hidden;
       if (!els.settingsPanel.hidden) updateStorageInfo();
