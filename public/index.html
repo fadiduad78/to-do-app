@@ -146,6 +146,7 @@
     <button id="habBtn" class="btn btn-ghost" aria-pressed="false" title="Habits: recurring check-ins, kept separate from one-time tasks">🔥 Habits</button>
     <button id="dashBtn" class="btn btn-ghost" aria-pressed="false" title="Dashboard: your productivity state, computed live from the same data">📊 Dashboard</button>
     <button id="calBtn" class="btn btn-ghost" aria-pressed="false" title="Calendar: a view over the same tasks">📅 Calendar</button>
+    <button id="planBtn" class="btn btn-ghost" aria-pressed="false" title="Daily plan: the app studies your tasks, deadlines, projects and schedule, then SUGGESTS a plan — nothing moves until you accept">✨ Plan</button>
     <button id="newTaskBtn" class="btn btn-primary">＋ New task</button>
   </section>
 
@@ -186,6 +187,11 @@
   <section id="habitsView" class="habits-view" hidden aria-label="Habits">
     <div id="habitsHost"></div>
   </section>
+
+  <!-- Daily plan (AI): a view like Dashboard/Habits. Proposals live in memory;
+       the ONLY write is [Accept plan], which stamps plan={date,start,end} onto
+       the task records (replacing the day's earlier accepted plan). -->
+  <section id="planView" class="plan-view" hidden aria-label="Suggested daily plan"></section>
 
   <div id="trashBar" class="trash-bar" hidden>
     <span><b id="trashCount"></b> in trash — kept for 30 days, then removed automatically.</span>
@@ -317,6 +323,7 @@
 <script src="notify.js"></script>
 <script src="ai.js"></script>
 <script src="nl.js"></script>
+<script src="plan.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

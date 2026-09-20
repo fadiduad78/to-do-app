@@ -1020,6 +1020,34 @@ button, a, .btn, .check, .chip, .filter-btn, .tag-chip, .sub-check, .sub-toggle,
 @media (max-width: 560px) { .ai-l1 { gap: 4px; } .ai-title { flex-basis: 130px; } .ai-cta { display: block; margin: 4px 0 0; } }
 
 /* ========================= Natural-language quick add ========================= */
+/* ---- Daily plan (AI) panel ---- */
+.plan-view { margin: 6px 0 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 14px 16px; }
+.plan-head { display: flex; align-items: center; gap: 8px; }
+.plan-head h2 { margin: 0; font-size: 18px; }
+.plan-x { margin-left: auto; border: none; background: none; font-size: 15px; cursor: pointer; color: var(--muted); }
+.plan-day { font-size: 13px; color: var(--muted); margin: 2px 0 6px; }
+.plan-analyzed { font-size: 12.5px; margin: 0 0 8px; }
+.plan-accepted { font-size: 13px; margin: 0 0 8px; padding: 6px 10px; border-radius: 9px; background: var(--ok-soft, rgba(46, 160, 67, .12)); color: var(--ok, #2e8b57); }
+.plan-blocks { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; }
+.plan-blk { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 7px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+.plan-time { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.plan-why { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+.plan-why i { font-style: normal; font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.plan-blk.edit { align-items: center; }
+.plan-blk.edit input { border: 1px solid var(--accent); border-radius: 8px; padding: 3px 6px; background: var(--panel); color: inherit; font: inherit; }
+.plan-blk.edit .plan-start { width: 86px; } .plan-blk.edit .plan-min { width: 60px; }
+.plan-rm { margin-left: auto; }
+.plan-skipped { font-size: 12.5px; margin: 2px 0 8px; }
+.plan-empty { padding: 14px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: 10px; margin-bottom: 8px; }
+.plan-prefs { margin: 4px 0 10px; font-size: 13px; }
+.plan-prefrow { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.plan-prefrow label { display: inline-flex; gap: 5px; align-items: center; }
+.plan-prefrow input, .plan-prefrow select { border: 1px solid var(--border); border-radius: 8px; padding: 3px 6px; background: var(--panel); color: inherit; font: inherit; }
+.plan-note { font-size: 12px; margin: 2px 0; }
+.plan-foot { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.badge.planned { background: var(--accent-soft); color: var(--accent); }
+.cal-chip.is-plan { outline: 1px dashed var(--accent); }
+
 .qa-wrap { margin: 4px 0 10px; }
 .qa-row { display: flex; gap: 8px; align-items: stretch; }
 #qaInput { flex: 1 1 auto; font-size: 16px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.04); }

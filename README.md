@@ -462,6 +462,49 @@ add-form pre-filled. The card's Date line reads like the sentence it came from
   repeat panel) with zero writes, and ✕
   abandons cleanly.
 
+## AI Daily Plan (`public/plan.js` — “Suggested plan”)
+
+**One button, zero rearranging.** `✨ Plan` (toolbar) opens a **Suggested plan**
+panel. The engine (`ZTPLAN.planDay`) studies the user's real data — tasks,
+priorities, deadlines, projects, open subtask load, reminders, `estMin`
+estimates and the day's own schedule — and proposes timed blocks:
+
+```
+TODAY’S PLAN — September 20 · window 09:00–22:00
+09:00–09:45  University assignment      [overdue by 1d]
+10:00–11:00  Complete Python API        [unblocks 1 task · due today · high priority]
+11:15–12:45  Expense Tracker            [urgent: due tomorrow]
+13:00–13:30  Review Python              [after its blocker]
+17:00–18:00  Exercise                   [at its scheduled time]
+```
+
+- **Ranking follows the brief, in order:** ① overdue (deeper overdue leads),
+  ② urgent deadlines (today, then within 2 days), ③ high priority,
+  ④ project dependencies — a task that unblocks others is boosted AND any
+  dependent is placed after its blocker, ⑤ the goal project you pick in ⚙.
+  Plain open tasks may fill leftover gaps; a lone low-priority nothing never
+  fabricates a plan (empty day → honest note, not 3 AM nonsense).
+- **Calendar-aware:** every pinned thing today — a task's own `dueTime`
+  (+ its estimate) and every pending reminder — is a busy window blocks must
+  not overlap. A task already pinned to a time gets **its own slot** (the
+  planner follows your schedule instead of fighting it); other tasks then
+  fill holes around it on a 15-minute grid with a configurable gap.
+- **Confirmation is the contract:** the proposal lives only in memory
+  (`S.ui.plan.sug`) — a byte-equality test proves the store is untouched
+  while it is shown, edited, or rejected. The footer is exactly
+  **[Accept plan] · [Edit] · [Reject]**. Edit changes start/duration/removes
+  blocks *on the draft*; accepting is the single write path.
+- **What “accept” writes:** `plan={date,start,end}` on ordinary task records
+  (replacing that day's earlier accepted plan — that's the *update*), shape-
+  validated in lock-step by `storage.js` and `server.js` so sync/supabase
+  agree. Deadlines (`dueDate/dueTime`) are never rewritten; the Calendar view
+  draws accepted blocks (dashed chip + time range), list rows show a `🗓`
+  badge, and completing a task releases its slot.
+- **Deterministic & offline:** no network, no randomness — same input (incl.
+  `now`) → identical plan. `server/test-ui.mjs` §25 pins all five ranking
+  tiers, grid/gap/busy behavior, the cap-and-skip honesty, the zero-write
+  gate, and the accept/clear flows (481 UI checks total).
+
 ## Where your data is stored
 
 | Location | Key / store | Contents |

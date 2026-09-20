@@ -397,6 +397,15 @@
       ? [...new Set(raw.deps.filter((x) => typeof x === 'string' && x && x !== t.id))].slice(0, 12)
       : [];
     t.aiOffer = raw.aiOffer === true;
+    // Daily-plan block (accepted “Suggested plan”): one {date,start,end}
+    // per task, shape-validated here in lock-step so client and server agree.
+    t.plan = (raw.plan && typeof raw.plan === 'object' && !Array.isArray(raw.plan)
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(raw.plan.date || ''))
+      && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.plan.start || ''))
+      && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.plan.end || ''))
+      && raw.plan.end > raw.plan.start)
+      ? { date: raw.plan.date, start: raw.plan.start, end: raw.plan.end }
+      : null;
     t.sortOrder = Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : now;
     t.projectId = typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : null;
     // Calendar support: an optional "HH:MM" placement on the due date. The

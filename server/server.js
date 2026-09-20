@@ -298,6 +298,15 @@ function coerceTask(raw, isTrash) {
     ? [...new Set(raw.deps.filter((x) => typeof x === 'string' && x && x !== t.id))].slice(0, 12)
     : [];
   t.aiOffer = raw.aiOffer === true;
+      // Daily-plan block (accepted “Suggested plan”): one {date,start,end}
+  // per task, shape-validated here in lock-step so client and server agree.
+  t.plan = (raw.plan && typeof raw.plan === 'object' && !Array.isArray(raw.plan)
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(raw.plan.date || ''))
+      && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.plan.start || ''))
+      && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.plan.end || ''))
+      && raw.plan.end > raw.plan.start)
+      ? { date: raw.plan.date, start: raw.plan.start, end: raw.plan.end }
+      : null;
   t.priority = raw.priority === 'low' || raw.priority === 'high' ? raw.priority : 'med';
   t.status = raw.status === 'completed' ? 'completed' : 'active';
   t.tags = Array.isArray(raw.tags)

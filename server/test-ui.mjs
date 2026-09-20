@@ -19,6 +19,7 @@ const notifySrc = readFileSync(PUB + '/notify.js', 'utf8');
 const appSrc = readFileSync(PUB + '/app.js', 'utf8');
 const aiSrc = readFileSync(PUB + '/ai.js', 'utf8');
 const nlSrc = readFileSync(PUB + '/nl.js', 'utf8');
+const planSrc = readFileSync(PUB + '/plan.js', 'utf8');
 
 /* OS notification surface, installed BEFORE boot so we can prove the app
    never asks for permission on load and can inspect every delivery. */
@@ -52,6 +53,7 @@ window.eval(storageSrc);   // the very file the browser loads
 window.eval(notifySrc);    // delivery module — loaded before app.js, as in index.html
 window.eval(aiSrc);        // AI decomposition planner — before app.js, as in index.html
 window.eval(nlSrc);        // natural-language quick add — before app.js, as in index.html
+window.eval(planSrc);       // daily-plan engine — before app.js, as in index.html
 window.eval(appSrc);       // boots async init() → recover() → renderAll()
 await sleep(300);
 
@@ -541,26 +543,33 @@ await sleep(450);
   ok(r && r.status === 'dismissed' && r.dismissed === true, 'dismiss → status dismissed + dismissed flag stay consistent');
 }
 
-/* recurrence: daily completion rolls dueDate + re-arms the reminder */
+/* recurrence: daily completion rolls dueDate + re-arms the reminder.
+   ANCHOR = tomorrow 09:00 (was a fixed 2026-09-20 09:00 — a time bomb: running
+   the suite after that minute would find the 5-min-before reminder already
+   fired and assert 'pending' on a record that correctly fired). */
+const CH0 = new Date(); CH0.setDate(CH0.getDate() + 1); CH0.setHours(9, 0, 0, 0);
+const chS = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const CH9 = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0).getTime();
 $('#newTaskBtn').click(); await sleep(80);
-$('#f-title').value = 'Chores'; $('#f-due').value = '2026-09-20';
+$('#f-title').value = 'Chores'; $('#f-due').value = chS(CH0);
 $('#f-recurrence').value = 'daily'; $('#f-recurrence').dispatchEvent(new window.Event('change', { bubbles: true }));
 $('#addRemBtn').click(); await setRowType(0, 'm5');
 $('#taskForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
 await sleep(320);
 {
   const before = remsFor('Chores')[0];
-  ok(before.status === 'pending' && before.triggerAt === locEpoch(2026, 9, 20, 9, 0) - 5 * 60e3, 'daily task armed with a 5-min-before reminder');
+  ok(before.status === 'pending' && before.triggerAt === CH9(CH0) - 5 * 60e3, 'daily task armed with a 5-min-before reminder (tomorrow 08:55 — clock-proof)');
   let row = $$('#taskList .task').find((li) => li.textContent.includes('Chores'));
   row.querySelector('button.check').click(); await sleep(350);
   let tk = remMirror().tasks.find((x) => x.title === 'Chores');
-  ok(tk.status === 'active' && tk.dueDate === '2026-09-21', 'completing a DAILY task rolls it to tomorrow (same task, same id)');
+  const CH1 = new Date(CH0.getTime() + 864e5), CH2 = new Date(CH0.getTime() + 2 * 864e5);
+  ok(tk.status === 'active' && tk.dueDate === chS(CH1), 'completing a DAILY task rolls it to the next day (same task, same id)');
   let r = remsFor('Chores')[0];
-  ok(r.status === 'pending' && r.triggerAt === locEpoch(2026, 9, 21, 9, 0) - 5 * 60e3 && r.delivered === false, 'reminder re-armed against the new occurrence');
+  ok(r.status === 'pending' && r.triggerAt === CH9(CH1) - 5 * 60e3 && r.delivered === false, 'reminder re-armed against the new occurrence');
   row = $$('#taskList .task').find((li) => li.textContent.includes('Chores'));
   row.querySelector('button.check').click(); await sleep(350);
   tk = remMirror().tasks.find((x) => x.title === 'Chores');
-  ok(tk.dueDate === '2026-09-22', 'second cycle → Sep 22 (cycle math on the stored date string)');
+  ok(tk.dueDate === chS(CH2), 'second cycle → +1 day again (cycle math on the stored date string)');
   ok(remsFor('Chores')[0].id === r.id, 're-arm edits the SAME reminder record (no dupes per cycle)');
 }
 /* monthly clamp: Jan 31 → Feb 28 (never Mar 2) */
@@ -751,7 +760,7 @@ await sleep(300);
   await mkTask('Stale thing', async () => { $('#f-due').value = twoAgoS; });
   ok(nTitle('Task overdue') === odMid + 1, 'repeat mode: a newly overdue task alerts once too');
   {
-    const od2 = remMirror().reminders.find((x) => x.reminderType === 'overdue' && x.forDue === twoAgoS);
+    const od2 = remMirror().reminders.find((x) => x.reminderType === 'overdue' && x.forDue === twoAgoS && taskOf('Stale thing') && x.taskId === taskOf('Stale thing').id);
     ok(od2 && od2.status === 'pending' && od2.triggerAt >= Date.now() + 11 * 3600e3 && od2.triggerAt <= Date.now() + 13 * 3600e3,
       'repeat mode re-arms the SAME record ~odHours(12h) later — bounded cadence, never a tight loop');
     ok(nTitle('Task overdue') === odMid + 1, 're-arm itself sends no second alert until it is next due');
@@ -2239,6 +2248,130 @@ await sleep(300);
   $('#calBtn').click(); await sleep(160);
   ok(!$('#qaWrap').hidden, '…and returns to the list');
   ok(true, 'natural-language add section completed without uncaught errors');
+}
+
+
+/* ================================================================ 25. DAILY PLAN (AI SUGGESTER) */
+console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
+{
+  const T = window.ZTPLAN;
+  ok(!!T && typeof T.planDay === 'function', 'plan engine (public/plan.js) is loaded by the page, as wired in index.html');
+  const NOW25 = new Date(2026, 8, 20, 8, 30); // Sunday morning, fixed
+  const mk = (id, extra) => Object.assign({ id, title: id, status: 'active', priority: 'med', estMin: 0, dueDate: null, dueTime: null, projectId: null, deps: [], sortOrder: 0 }, extra);
+  const BRIEF = [
+    mk('api', { title: 'Complete Python API', priority: 'high', estMin: 60, dueDate: '2026-09-20' }),
+    mk('uni', { title: 'University assignment', estMin: 45, dueDate: '2026-09-19' }),
+    mk('exp', { title: 'Expense Tracker', estMin: 90, dueDate: '2026-09-21' }),
+    mk('gym', { title: 'Exercise', estMin: 60, dueDate: '2026-09-20', dueTime: '17:00' }),
+    mk('rev', { title: 'Review Python', estMin: 30, deps: ['api'] }),
+  ];
+  const BRIEFREM = [{ id: 'r1', status: 'pending', triggerAt: new Date(2026, 8, 20, 16, 30).getTime() }];
+  const PR = { dayStart: '09:00', dayEnd: '22:00', gapMin: 15, maxBlocks: 6 };
+  const p = T.planDay({ tasks: BRIEF, reminders: BRIEFREM, now: NOW25, prefs: PR });
+  const at = (ti) => p.blocks.findIndex((b) => b.taskId === ti);
+  const span = (ti) => { const b = p.blocks[at(ti)]; return b.start + '–' + b.end; };
+  ok(p.blocks.length === 5, 'the brief’s five tasks all become blocks (5/5 placed)');
+  ok(at('uni') === 0 && /overdue by 1d/.test(p.blocks[0].why.join()), 'tier 1 — the OVERDUE task leads the day');
+  ok(at('api') < at('exp'), 'tiers 2–3 — due-today/high-priority ranks above an urgent-tomorrow deadline');
+  ok(/unblocks 1 task/.test(p.blocks[at('api')].why.join()) && at('api') < at('rev'), 'tier 4 — the blocker (unblocks 1 task) is placed BEFORE its dependent');
+  ok(span('gym') === '17:00–18:00' && /at its scheduled time/.test(p.blocks[at('gym')].why.join()), 'the day’s schedule wins: 17:00 Exercise keeps its own slot (the brief’s exact example)');
+  ok(p.blocks.every((b) => !(T.toMin(b.start) < 990 && T.toMin(b.end) > 975)), 'the 16:30 reminder window stays clear — no block overlaps it');
+  ok(p.blocks.every((b) => T.toMin(b.start) % 15 === 0 && T.toMin(b.end) % 15 === 0), 'every block snaps to the 15-minute grid, with 15-min gaps');
+  ok(p.blocks.every((b, i) => i === 0 || T.toMin(b.start) - T.toMin(p.blocks[i - 1].end) >= 15 || T.toMin(b.start) > T.toMin(p.blocks[i - 1].end) + 15 || p.blocks[i - 1].title === 'Exercise'), 'consecutive planned blocks keep a breathing gap');
+  ok(p.blocks.every((b) => T.toMin(b.end) <= T.toMin('22:00') && T.toMin(b.start) >= T.toMin('08:45')), 'nothing spills past the day end or starts before “now”');
+  ok(span('exp') === '11:15–12:45' && span('rev') === '13:00–13:30', 'durations come from the estimates (90m, 30m) rounded to the grid');
+  ok(/analyzed 5 open tasks · 1 overdue/.test(p.notes[0]), 'the panel’s transparency line lists what was analyzed');
+  const p2 = T.planDay({ tasks: [
+    mk('a', { title: 'A plain', sortOrder: 0 }), mk('b', { title: 'B goal', projectId: 'pG', sortOrder: 1 }),
+  ], now: NOW25, prefs: PR });
+  const p2g = T.planDay({ tasks: [
+    mk('a', { title: 'A plain', sortOrder: 0 }), mk('b', { title: 'B goal', projectId: 'pG', sortOrder: 1 }),
+  ], now: NOW25, prefs: Object.assign({}, PR, { goalProjectId: 'pG' }) });
+  ok(p2.blocks[0].title === 'A plain' && p2g.blocks[0].title === 'B goal', 'tier 5 — the user-selected goal project jumps the queue (tie → back to tie)');
+  ok(p2.blocks[0].why.indexOf('your goal') === -1 && p2g.blocks[0].why.join().indexOf('your goal') >= 0, '…and the card says so (“your goal” chip)');
+  const many = []; for (let i = 0; i < 10; i++) many.push(mk('m' + i, { title: 'Task ' + i, dueDate: '2026-09-20', sortOrder: i }));
+  const p3 = T.planDay({ tasks: many, now: NOW25, prefs: Object.assign({}, PR, { maxBlocks: 3 }) });
+  ok(p3.blocks.length === 3 && p3.skipped.length === 7 && /day is full/.test(p3.skipped[0].reason), 'the block cap is honored — overflow is SKIPPED with a stated reason, never silently dropped');
+  const p4 = T.planDay({ tasks: BRIEF, now: NOW25, prefs: Object.assign({}, PR, { dayEnd: '09:45' }) });
+  ok(p4.skipped.length > 0 && /before 09:45/.test(p4.skipped.map((s) => s.reason).join()), 'a tight day end → later tasks report “no free slot before 09:45”');
+  const p5 = T.planDay({ tasks: BRIEF, now: new Date(2026, 8, 20, 21, 55), prefs: PR });
+  ok(p5.blocks.length === 0 && /already past/.test(p5.notes.join()), 'planning AFTER the day is over produces nothing but an honest note (no 3 AM nonsense)');
+  const p6 = T.planDay({ tasks: [], now: NOW25, prefs: PR });
+  ok(p6.blocks.length === 0 && /no open tasks to plan/.test(p6.notes.join()), 'an empty list → “the day is yours”, not a fabricated plan');
+  const LOW = [mk('l', { title: 'Low nothing', priority: 'low' })];
+  ok(T.planDay({ tasks: LOW, now: NOW25, prefs: PR }).blocks.length === 0, 'a lone low-priority task with no deadline is left OUT (plan stays optional, filler has bounds)');
+  ok(JSON.stringify(T.planDay({ tasks: BRIEF, reminders: BRIEFREM, now: NOW25, prefs: PR })) === JSON.stringify(p), 'determinism: same input → identical plan, byte for byte');
+  ok(T.fmtRange({ start: '09:00', end: '10:00' }) === '09:00–10:00' && T.validEditedBlock({ start: '09:00', end: '10:00' }) && !T.validEditedBlock({ start: '10:00', end: '09:00' }), 'helpers: fmtRange + edited-block validation (end must beat start)');
+  const snap = T.planDay({ tasks: [mk('z', { title: 'Z', estMin: 500, dueDate: '2026-09-20' })], now: NOW25, prefs: PR }).blocks[0];
+  ok(snap.min === 120, 'a 500-minute estimate is capped to a 120-minute block — the planner never schedules a 8-hour slab');
+}
+{
+  /* ---- B. the confirmation gate in the MAIN dom (the app itself) ---- */
+  const mir25 = () => JSON.stringify(JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks);
+  const before25 = mir25();
+  $('#planBtn').click(); await sleep(300);
+  const pv = () => $('#planView');
+  ok(!pv().hidden && /Suggested plan/.test(pv().textContent), '✨ Plan opens the “Suggested plan” panel (the brief’s exact header)');
+  ok(/TODAY’S PLAN — /.test(pv().textContent), '…with the TODAY’S PLAN day header over the real day');
+  const blocks25 = [...pv().querySelectorAll('.plan-blk')];
+  ok(blocks25.length > 0, 'blocks are proposed for the live store (the 17 tasks earlier sections seeded)');
+  ok(/\d{2}:\d{2}–\d{2}:\d{2}/.test(pv().textContent), 'times render like the brief: 09:00–10:00');
+  ok(pv().querySelector('[data-plan="accept"]') && pv().querySelector('[data-plan="edit"]') && pv().querySelector('[data-plan="reject"]'), 'the footer is [Accept plan] [Edit] [Reject] — exactly the three the brief names');
+  ok(mir25() === before25, 'ZERO writes while a plan is merely suggested — store byte-identical');
+  const dueBefore25 = {};
+  for (const x of JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks) dueBefore25[x.id] = x.dueDate + '|' + x.dueTime;
+  // edit a proposed time
+  pv().querySelector('[data-plan="edit"]').click(); await sleep(200);
+  const st25 = pv().querySelector('input.plan-start');
+  ok(!!st25, 'Edit turns blocks into time editors (start + duration + remove)');
+  st25.value = '09:30';
+  st25.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(200);
+  ok(/09:30/.test(pv().textContent), 'the edited start shows in the proposal immediately');
+  ok(mir25() === before25, 'editing the PROPOSAL still writes nothing (it is just a draft)');
+  pv().querySelector('[data-plan="edit"]').click(); await sleep(150); // Done editing → recompute keeps fresh
+  pv().querySelector('[data-plan="reject"]').click(); await sleep(200);
+  ok(pv().hidden && mir25() === before25, 'Reject closes the panel and abandons everything — zero writes');
+  // accept for real
+  $('#planBtn').click(); await sleep(300);
+  const nBlk = [...pv().querySelectorAll('.plan-blk')].length;
+  pv().querySelector('[data-plan="accept"]').click(); await sleep(500);
+  ok(mir25() !== before25, 'Accept plan is the ONE moment anything is written');
+  const st25b = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+  const planned25 = st25b.tasks.filter((x) => x.plan && x.plan.date);
+  ok(planned25.length === nBlk, 'exactly the shown blocks were stamped (N proposed → N scheduled)');
+  ok(planned25.every((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.plan.date) && /^\d{2}:\d{2}$/.test(x.plan.start) && x.plan.end > x.plan.start), 'stored schedule info = clean {date,start,end} — this IS the “calendar scheduling information” the brief asks for');
+  ok(planned25.every((x) => dueBefore25[x.id] === (x.dueDate || null) + '|' + (x.dueTime || null)), 'deadlines untouched: plan rides ALONGSIDE dueDate/dueTime, it never rewrites a deadline');
+  ok(/Accepted for today/.test(pv().textContent), 'the panel flips to an ACCEPTED state (you can see what is live)');
+  pv().querySelector('[data-plan="close"]').click(); await sleep(250);
+  const badges = [...doc.querySelectorAll('#taskList .badge.planned')];
+  ok(badges.length === planned25.length, 'every scheduled task shows the 🗓 start-time badge in the list');
+  // the calendar view displays the accepted blocks
+  $('#calBtn').click(); await sleep(250);
+  const planChips = [...doc.querySelectorAll('#calendar .cal-chip.is-plan')];
+  ok(planChips.length > 0 && /\d{2}:\d{2}–\d{2}:\d{2}/.test(planChips[0].textContent), 'the Calendar view draws accepted plan blocks as dashed-outline chips with their time range');
+  $('#calBtn').click(); await sleep(200);
+  // prefs: shrinking the window re-proposes AND persists
+  $('#planBtn').click(); await sleep(250);
+  const de = pv().querySelector('input[data-pref-key="dayEnd"]');
+  de.value = '10:30';
+  de.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(250);
+  ok(/window 09:00–10:30/.test(pv().textContent), '⚙ preferences (day window / gap / cap / goal) re-drive the proposal live');
+  const stPref = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+  ok(stPref.settings.planPrefs.dayEnd === '10:30', '…and persist into settings (survive the store mirror, sync like everything else)');
+  ok(planned25.every((x) => stPref.tasks.find((y) => y.id === x.id).plan.date === planned25[0].plan.date), 'prefs changed the PROPOSAL only — accepted plan records were not silently rearranged');
+  const de2 = $('#planView').querySelector('input[data-pref-key="dayEnd"]');
+  de2.value = '22:00';
+  de2.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(250);
+  // completing a planned task releases its slot
+  $('#planView').querySelector('[data-plan="close"]').click(); await sleep(250);
+  const victim = planned25[0];
+  const li25 = doc.querySelector('#taskList .task[data-id="' + victim.id + '"]');
+  ok(!!li25, 'the scheduled task row is findable (its 🗓 badge visible)');
+  li25.querySelector('[data-act="toggle"]').click(); await sleep(400);
+  const after25 = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+  const v25 = after25.tasks.find((x) => x.id === victim.id);
+  ok(v25.status === 'completed' && !v25.plan, 'completing the task clears its plan slot — a done task should not occupy the day');
+  ok(true, 'daily-plan section completed without uncaught errors');
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

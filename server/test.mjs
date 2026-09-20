@@ -172,6 +172,11 @@ try {
   ok(timed.dueDate === '2026-09-19' && timed.dueTime === '09:30', 'task dueTime rides through the server in the task itself (no second date store)');
   s = await sync('B', s.json.rev, { tasks: [task('new1', 'Timed', ts(8), { dueDate: '2026-09-19', dueTime: '25:99' })], trash: [] }, {}, 'merge');
   ok(s.json.tasks.find((x) => x.id === 'new1').dueTime === null, 'invalid dueTime normalized server-side; valid date untouched');
+  s = await sync('A', s.json.rev, { tasks: [task('new1', 'Timed', ts(9), { plan: { date: '2026-09-20', start: '14:00', end: '15:30' } })], trash: [] }, {}, 'merge');
+  const pl = s.json.tasks.find((x) => x.id === 'new1').plan;
+  ok(pl && pl.date === '2026-09-20' && pl.start === '14:00' && pl.end === '15:30', 'accepted daily-plan block rides the TASK record through sync (no second store, ever)');
+  s = await sync('A', s.json.rev, { tasks: [task('new1', 'Timed', ts(10), { plan: { date: '2026-09-20', start: '16:00', end: '15:00' } })], trash: [] }, {}, 'merge');
+  ok(s.json.tasks.find((x) => x.id === 'new1').plan === null, 'server refuses an end-before-start plan block — same rule as the client, no drift');
   /* ---- reminders (v5): ride the SAME state doc — records, not timers ---- */
   const rem = (id, taskId, upd, extra = {}) => ({
     id, taskId, triggerAt: ts(20), reminderType: 'h1', enabled: true, delivered: false,

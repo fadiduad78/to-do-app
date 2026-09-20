@@ -498,6 +498,17 @@ console.log('\n--- habits (coerce layer) ---');
   const out3 = [];
   CT({ id: 'a3', title: 'T', estMin: 99999 }, out3);
   ok(out3[0].estMin === 10080, 'estMin clamps at one week (10080 min) — no absurd values reach the UI from any source');
+  const outp = [];
+  ok(CT({ id: 'aP1', title: 'T', plan: { date: '2026-09-20', start: '09:00', end: '10:00', extra: 'junk' } }, outp) &&
+    outp[0].plan.date === '2026-09-20' && outp[0].plan.end === '10:00' && outp[0].plan.extra === undefined,
+    'coerceTask plan: valid {date,start,end} round-trips, extra keys are dropped (stored shape is fixed)');
+  const outp2 = [];
+  CT({ id: 'aP2', title: 'T', plan: { date: '2026-13-99', start: '25:00', end: '08:00' } }, outp2);
+  ok(outp2[0].plan === null, 'malformed plan (bad date AND bad time) → null — never half-believed');
+  const outp3 = [];
+  CT({ id: 'aP3', title: 'T', plan: { date: '2026-09-20', start: '11:00', end: '11:00' } }, outp3);
+  CT({ id: 'aP4', title: 'T', plan: 'schedule it' }, outp3);
+  ok(outp3[0].plan === null && outp3[1].plan === null, 'zero-length block (end ≤ start) and non-object plan both normalize to null');
   const out4 = [];
   ok(!CT({ id: 'a4', title: '', estMin: 30 }, out4) && CT({ id: 'a5', title: 'ok' }, out4) === true,
     'AI fields neither rescue an invalid task nor veto a valid one — pure advisory decoration on the existing contract');

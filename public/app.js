@@ -42,6 +42,7 @@
     calBtn: $('calBtn'), calendar: $('calendar'), calBar: $('calBar'), calHost: $('calHost'),
     dashBtn: $('dashBtn'), dashboard: $('dashboard'), dashHost: $('dashHost'),
     habBtn: $('habBtn'), habitsView: $('habitsView'), habitsHost: $('habitsHost'), habInStats: $('habInStats'),
+    planBtn: $('planBtn'), planView: $('planView'),
     aiMode: $('aiMode'),
     qaWrap: $('qaWrap'), qaInput: $('qaInput'), qaBtn: $('qaBtn'), qaCard: $('qaCard'),
     focusBar: $('focusBar'),
@@ -109,7 +110,8 @@
     S = rec.state;
     S.ui = { search: '', editingId: null, composerOpen: false, projectView: null, showArchived: false, openSubs: {}, subEditing: null,
                cal: { open: false, view: 'month', anchor: '' },
-               dash: { open: false }, hab: { open: false, showArch: false }, focus: { taskId: null } };
+               dash: { open: false }, hab: { open: false, showArch: false }, focus: { taskId: null },
+               plan: { open: false, sug: null, edit: false } };
     S.lastSavedAt = rec.lastSavedAt;
     // Re-persist filter preferences from disk (they are part of settings).
     S.settings.filterMode = ['all', 'active', 'completed', 'trash'].includes(S.settings.filterMode) ? S.settings.filterMode : 'all';
@@ -121,6 +123,10 @@
     // Calendar prefs (view + filters) persist like the other settings; the
     // anchor date itself is transient per session.
     S.settings.calendarView = ['month', 'week', 'day'].includes(S.settings.calendarView) ? S.settings.calendarView : 'month';
+    // Daily-plan preferences (window, gap, cap, goal project) — sanitized by the
+    // engine itself so client and future importers can never disagree.
+    S.settings.planPrefs = window.ZTPLAN ? ZTPLAN.sanitizePrefs(S.settings.planPrefs) : (S.settings.planPrefs && typeof S.settings.planPrefs === 'object' ? S.settings.planPrefs : {});
+    if (S.settings.planPrefs.goalProjectId && !S.projects.some((p) => p.id === S.settings.planPrefs.goalProjectId && !p.deletedAt)) S.settings.planPrefs.goalProjectId = null;
     S.settings.calendarFilters = (S.settings.calendarFilters && typeof S.settings.calendarFilters === 'object') ? S.settings.calendarFilters : {};
     S.ui.cal.view = S.settings.calendarView;
     S.ui.cal.anchor = ymd(new Date());
@@ -481,20 +487,27 @@
     const calOn = !!(S.ui && S.ui.cal.open);
     const dashOn = !!(S.ui && S.ui.dash && S.ui.dash.open);
     const habOn = !!(S.ui && S.ui.hab && S.ui.hab.open);
-    els.calendar.hidden = !calOn || dashOn || habOn;
-    els.calBtn.classList.toggle('on', calOn && !dashOn && !habOn);
-    els.calBtn.setAttribute('aria-pressed', String(calOn && !dashOn && !habOn));
-    els.dashboard.hidden = !dashOn || habOn;
-    els.dashBtn.classList.toggle('on', dashOn && !habOn);
-    els.dashBtn.setAttribute('aria-pressed', String(dashOn && !habOn));
-    els.habitsView.hidden = !habOn;
-    els.habBtn.classList.toggle('on', habOn);
-    els.habBtn.setAttribute('aria-pressed', String(habOn));
-    if (calOn || dashOn || habOn) {
+    const planOn = !!(S.ui && S.ui.plan && S.ui.plan.open);
+    els.calendar.hidden = !calOn || dashOn || habOn || planOn;
+    els.calBtn.classList.toggle('on', calOn && !dashOn && !habOn && !planOn);
+    els.calBtn.setAttribute('aria-pressed', String(calOn && !dashOn && !habOn && !planOn));
+    els.dashboard.hidden = !dashOn || habOn || planOn;
+    els.dashBtn.classList.toggle('on', dashOn && !habOn && !planOn);
+    els.dashBtn.setAttribute('aria-pressed', String(dashOn && !habOn && !planOn));
+    els.habitsView.hidden = !habOn || planOn;
+    els.habBtn.classList.toggle('on', habOn && !planOn);
+    els.habBtn.setAttribute('aria-pressed', String(habOn && !planOn));
+    if (els.planView) els.planView.hidden = !planOn;
+    if (els.planBtn) {
+      els.planBtn.classList.toggle('on', planOn && !calOn && !dashOn && !habOn);
+      els.planBtn.setAttribute('aria-pressed', String(planOn));
+    }
+    if (calOn || dashOn || habOn || planOn) {
       for (const el of [els.qaWrap, els.filterTabs, els.tagChips, els.projectBar, els.projectDetail, els.trashBar, els.taskList, els.emptyState]) el.hidden = true;
-      if (habOn) renderHabits();
-      if (dashOn && !habOn) renderDashboard();
-      if (calOn && !dashOn && !habOn) renderCalendar();
+      if (habOn && !planOn) renderHabits();
+      if (dashOn && !habOn && !planOn) renderDashboard();
+      if (calOn && !dashOn && !habOn && !planOn) renderCalendar();
+      if (planOn) renderPlan();
     } else {
       els.taskList.hidden = false;
       if (els.qaWrap) els.qaWrap.hidden = !window.ZTNL;
@@ -643,6 +656,7 @@
             (t.recurrence ? '<span class="badge recur" title="' + esc(recurLabel(t)) + ' · completing rolls to the next date; ↻ opens series actions' + '">↻ ' + esc(recurLabel(t)) + '</span>' : '') +
             (t.focusTotal > 0 ? '<span class="badge focus" title="' + t.focusTotal + ' focused min · ' + (t.focusSessions || 0) + ' completed session(s)">🍅 ' + (t.focusTotal < 60 ? t.focusTotal + 'm' : (Math.round(t.focusTotal / 6) / 10) + 'h') + '</span>' : '') +
             (t.estMin > 0 ? '<span class="badge est" title="Planned effort (from an AI breakdown — advisory)">⏱ ' + (window.ZTAI ? ZTAI.fmtEst(t.estMin) : t.estMin + 'm') + '</span>' : '') +
+            (t.plan ? '<span class="badge planned" title="Scheduled ' + esc(t.plan.date + ' ' + t.plan.start + '–' + t.plan.end) + ' by your daily plan">🗓 ' + esc(t.plan.start) + '</span>' : '') +
             (function () {
               const dd = t.deps || [];
               if (!dd.length) return '';
@@ -1020,6 +1034,7 @@
     pushCompletion(t, now); // timestamp for the dashboard ledger (rides the record)
     t.status = 'completed';
     t.updatedAt = now;
+    if (t.plan) t.plan = null; // completing a task frees its accepted plan block
     ops.push({ store: STORES.tasks, op: 'put', value: t });
     // A finished task must not nag: its pending reminders become skipped.
     for (const r of S.reminders) {
@@ -1759,9 +1774,11 @@
     return true;
   }
   function calTasksOn(ds) {
+    // due-date OR accepted-plan day: a task scheduled onto a day shows there too
+    const eff = (t) => (t.plan && t.plan.date === ds && !t.dueTime) ? t.plan.start : (t.dueTime || '99:99');
     return S.tasks
-      .filter((t) => t.dueDate === ds && calVisible(t))
-      .sort((x, y) => ((x.dueTime || '99:99') < (y.dueTime || '99:99') ? -1 : (x.dueTime || '99:99') > (y.dueTime || '99:99') ? 1 : 0)
+      .filter((t) => ((t.dueDate === ds) || (t.plan && t.plan.date === ds)) && calVisible(t))
+      .sort((x, y) => (eff(x) < eff(y) ? -1 : eff(x) > eff(y) ? 1 : 0)
         || (x.priority === 'high' ? -1 : 0) - (y.priority === 'high' ? -1 : 0));
   }
   function calStats(ds) {
@@ -1773,7 +1790,7 @@
       overdue: tasks.filter((t) => t.status !== 'completed' && ds < today).length,
     };
   }
-  function calChip(t, ghost) {
+  function calChip(t, ghost, ds) {
     const done = t.status === 'completed';
     const due = formatDue(t.dueDate, done);
     const overCls = due && due.cls === 'overdue' ? ' is-over' : '';
@@ -1789,9 +1806,10 @@
         ' title="↻ Future occurrence — ' + esc(recurLabel(t)) + ' (click to edit the current occurrence)">' +
         '<i class="cal-dot" aria-hidden="true"></i>' + (t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') + '↻ ' + esc(truncate(t.title, 18)) + '</span>';
     }
-    return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + (t.recurrence ? ' is-recur' : '') + '" data-tid="' + esc(t.id) + '" draggable="true"' +
-      ' title="' + esc((t.dueTime ? t.dueTime + ' — ' : '') + t.title + (t.recurrence ? ' — ' + recurLabel(t) : '')) + '">' +
-      '<i class="cal-dot" aria-hidden="true"></i>' + (t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') +
+    const onPlan = !ghost && ds && t.plan && t.plan.date === ds;
+    return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + (t.recurrence ? ' is-recur' : '') + (onPlan ? ' is-plan' : '') + '" data-tid="' + esc(t.id) + '" draggable="true"' +
+      ' title="' + esc((onPlan ? '🗓 planned ' + t.plan.start + '–' + t.plan.end + ' — ' : t.dueTime ? t.dueTime + ' — ' : '') + t.title + (t.recurrence ? ' — ' + recurLabel(t) : '')) + '">' +
+      '<i class="cal-dot" aria-hidden="true"></i>' + (onPlan ? '<b>' + esc(t.plan.start + '–' + t.plan.end) + '</b>' : t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') +
       (t.recurrence ? '<i class="cal-rmark" aria-hidden="true" title="Recurring — completes roll forward">↻</i>' : '') +
       bell + (done ? '✓ ' : '') + esc(truncate(t.title, 22)) + '</span>';
   }
@@ -1805,7 +1823,7 @@
         (st.overdue ? '<em class="cal-over" title="' + st.overdue + ' overdue task(s)">!' + st.overdue + '</em>' : '') +
         (st.tasks.length ? '<em class="cal-n" title="' + st.done + ' of ' + st.tasks.length + ' done">' + st.done + '/' + st.tasks.length + '</em>' : '') +
       '</span>' +
-      '<div class="cal-chips">' + shown.map((t) => calChip(t)).join('') +
+      '<div class="cal-chips">' + shown.map((t) => calChip(t, false, ds)).join('') +
         (more > 0 ? '<button class="cal-more" data-cmore="' + ds + '" type="button">+' + more + ' more</button>' : '') +
         (function () {
           const gs = recurGhosts.get(ds) || [];
@@ -1872,7 +1890,7 @@
           const ts = calTasksOn(ds).filter((t) => !t.dueTime);
           const gs = (recurGhosts.get(ds) || []).filter((t) => !t.dueTime);
           return '<div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' +
-            ts.slice(0, 4).map((t) => calChip(t)).join('') + (ts.length > 4 ? '<span class="cal-more">…+' + (ts.length - 4) + '</span>' : '') +
+            ts.slice(0, 4).map((t) => calChip(t, false, ds)).join('') + (ts.length > 4 ? '<span class="cal-more">…+' + (ts.length - 4) + '</span>' : '') +
             gs.map((x) => calChip(x, true)).join('') + '</div>';
         }).join('') + '</div>';
       let rows = '';
@@ -1882,7 +1900,7 @@
         if ((h < 6 || h > 22) && !perDay.some((ts) => ts.length) && !perDayG.some((ts) => ts.length)) continue; // collapse quiet hours
         rows += '<div class="cal-row"><span class="cal-hour-lbl">' + String(h).padStart(2, '0') + ':00</span>' +
           days.map((ds, i) => '<div class="cal-cell slot' + (perDay[i].length ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '">' +
-            perDay[i].map((t) => calChip(t)).join('') + perDayG[i].map((x) => calChip(x, true)).join('') + '</div>').join('') + '</div>';
+            perDay[i].map((t) => calChip(t, false, ds)).join('') + perDayG[i].map((x) => calChip(x, true)).join('') + '</div>').join('') + '</div>';
       }
       body = '<div class="cal-week-heads">' + heads + '</div><div class="cal-scroll">' + allDay + rows + '</div>';
     } else { // day
@@ -1900,16 +1918,16 @@
         const tg = gs.filter((t) => t.dueTime && Number(t.dueTime.slice(0, 2)) === h);
         rows += '<div class="cal-row day"><span class="cal-hour-lbl">' + String(h).padStart(2, '0') + ':00</span>' +
           '<div class="cal-cell slot' + ((ts.length || tg.length) ? ' has-t' : '') + '" data-cdate="' + ds + '" data-chour="' + h + '">' +
-          ts.map((t) => calChip(t)).join('') + tg.map((x) => calChip(x, true)).join('') + '</div></div>';
+          ts.map((t) => calChip(t, false, ds)).join('') + tg.map((x) => calChip(x, true)).join('') + '</div></div>';
       }
       body = '<div class="cal-day-summary"><span>' + st.tasks.length + ' task(s)</span><span>·</span>' +
         '<span>' + st.done + ' done</span>' + (st.overdue ? '<span>·</span><span class="cal-over">⚠ ' + st.overdue + ' overdue</span>' : '') +
         '<span class="spacer"></span><span class="cal-mini"><i style="width:' + pct + '%"></i></span><span>' + pct + '%</span>' +
         '<button class="btn btn-sm btn-primary" data-cnew="' + ds + '" type="button">＋ New task</button></div>' +
-        (allday.length || gs.some((x) => !x.dueTime) ? '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span><div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' + allday.map((t) => calChip(t)).join('') + gs.filter((x) => !x.dueTime).map((x) => calChip(x, true)).join('') + '</div></div>' : '') +
-        (early.length ? '<div class="cal-row"><span class="cal-hour-lbl">Early</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="3">' + early.map((t) => calChip(t)).join('') + '</div></div>' : '') +
+        (allday.length || gs.some((x) => !x.dueTime) ? '<div class="cal-row cal-allday-row"><span class="cal-hour-lbl">All-day</span><div class="cal-cell allday" data-cdate="' + ds + '" data-allday="1">' + allday.map((t) => calChip(t, false, ds)).join('') + gs.filter((x) => !x.dueTime).map((x) => calChip(x, true)).join('') + '</div></div>' : '') +
+        (early.length ? '<div class="cal-row"><span class="cal-hour-lbl">Early</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="3">' + early.map((t) => calChip(t, false, ds)).join('') + '</div></div>' : '') +
         rows +
-        (late.length ? '<div class="cal-row"><span class="cal-hour-lbl">Late</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="23">' + late.map((t) => calChip(t)).join('') + '</div></div>' : '');
+        (late.length ? '<div class="cal-row"><span class="cal-hour-lbl">Late</span><div class="cal-cell allday" data-cdate="' + ds + '" data-chour="23">' + late.map((t) => calChip(t, false, ds)).join('') + '</div></div>' : '');
     }
 
     const mk = (key, cur, items) => '<label class="cal-filter"><select data-cfilter="' + key + '" title="Filter">' +
@@ -2035,13 +2053,13 @@
   function wireCalendar() {
     els.calBtn.onclick = () => {
       S.ui.cal.open = !S.ui.cal.open;
-      if (S.ui.cal.open) { S.ui.cal.anchor = ymd(new Date()); S.ui.dash.open = false; S.ui.hab.open = false; }
+      if (S.ui.cal.open) { S.ui.cal.anchor = ymd(new Date()); S.ui.dash.open = false; S.ui.hab.open = false; if (S.ui.plan) { S.ui.plan.open = false; S.ui.plan.sug = null; } }
       renderAll();
       if (S.ui.cal.open) els.calendar.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
     els.habBtn.onclick = () => {
       S.ui.hab.open = !S.ui.hab.open;
-      if (S.ui.hab.open) { S.ui.cal.open = false; S.ui.dash.open = false; }
+      if (S.ui.hab.open) { S.ui.cal.open = false; S.ui.dash.open = false; if (S.ui.plan) { S.ui.plan.open = false; S.ui.plan.sug = null; } }
       renderAll();
       if (S.ui.hab.open) els.habitsView.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
@@ -3284,7 +3302,184 @@
     }
   }
 
-  /* ================= Natural-language quick add (confirm-gated) =================
+  /* ================= Daily plan — “Suggested plan” (AI, confirm-gated) ========
+   ZTPLAN analyzes tasks/priorities/deadlines/projects/subtask load/reminders/
+   estimates/the day's schedule and PROPOSES blocks. The proposal lives only in
+   S.ui.plan.sug (memory). The ONE write path is [Accept plan], which stamps
+   plan={date,start,end} onto ordinary task records — the Calendar view shows
+   them, deadlines stay untouched, and re-accepting REPLACES the day. Nothing
+   here ever rearranges the user's existing schedule without that click. */
+
+  function planPrefsNow() {
+    return window.ZTPLAN ? ZTPLAN.sanitizePrefs(S.settings.planPrefs)
+      : { dayStart: '09:00', dayEnd: '22:00', gapMin: 15, maxBlocks: 6, goalProjectId: null };
+  }
+  function planCompute() {
+    if (!window.ZTPLAN) return null;
+    const pr = planPrefsNow();
+    if (pr.goalProjectId && !S.projects.some((p) => p.id === pr.goalProjectId && !p.deletedAt)) pr.goalProjectId = null;
+    return ZTPLAN.planDay({ tasks: S.tasks, reminders: S.reminders, subtasks: S.subtasks || [], prefs: pr, now: new Date() });
+  }
+  function planAcceptedOn(ds) {
+    return S.tasks.filter((t) => t.status !== 'completed' && t.plan && t.plan.date === ds)
+      .sort((a, b) => (a.plan.start < b.plan.start ? -1 : 1));
+  }
+
+  function renderPlan() {
+    const host = els.planView; if (!host) return;
+    const P = S.ui.plan;
+    if (!window.ZTPLAN) { host.innerHTML = '<div class="plan-empty">Plan engine (plan.js) is missing.</div>'; return; }
+    if (!P.sug) P.sug = planCompute();
+    const sug = P.sug;
+    if (P.edit) sug.blocks.sort((a, b) => ZTPLAN.toMin(a.start) - ZTPLAN.toMin(b.start));
+    const accepted = planAcceptedOn(sug.date);
+    let h = '<div class="plan-head"><h2>✨ Suggested plan</h2>' +
+      '<button class="btn btn-ghost plan-x" data-plan="rescan" title="Re-analyze the current state">↻</button>' +
+      '<button class="btn btn-ghost plan-x" data-plan="close" aria-label="Close plan" title="Close — nothing has been written">✕</button></div>';
+    h += '<div class="plan-day">TODAY’S PLAN — ' + esc((ZTNL && ZTNL.fmtDayFull) ? ZTNL.fmtDayFull(sug.date) : sug.date) +
+      ' · window ' + esc(sug.dayStart) + '–' + esc(sug.dayEnd) + '</div>';
+    h += '<p class="muted plan-analyzed">' + esc(sug.notes[0] || '') + '</p>';
+    if (accepted.length) h += '<div class="plan-accepted">✓ Accepted for today: ' + accepted.length + ' block(s) on your calendar' +
+      (sug.blocks.length ? ' — accepting again replaces them.' : '.') + '</div>';
+    if (!sug.blocks.length) {
+      h += '<div class="plan-empty">' + esc((sug.notes[sug.notes.length - 1] || 'nothing to schedule') + (accepted.length ? '' : ' — the plan is optional; today stays as you left it.')) + '</div>';
+    } else {
+      h += '<ol class="plan-blocks">';
+      for (const b of sug.blocks) {
+        if (P.edit) {
+          h += '<li class="plan-blk edit"><span class="plan-time">' + esc(ZTPLAN.fmtRange(b)) + '</span><label>start <input class="plan-start" type="time" data-plan-start="' + esc(b.taskId) + '" value="' + esc(b.start) + '"></label>' +
+            '<label>for <input class="plan-min" type="number" data-plan-min="' + esc(b.taskId) + '" min="15" max="240" step="15" value="' + b.min + '"></label><span class="muted">min</span> ' +
+            '<b class="plan-title">' + esc(b.title) + '</b>' +
+            '<button class="btn btn-ghost plan-rm" data-plan="rm" data-task="' + esc(b.taskId) + '" title="Take this out of the plan">✕</button></li>';
+        } else {
+          h += '<li class="plan-blk"><span class="plan-time">' + esc(ZTPLAN.fmtRange(b)) + '</span><b>' + esc(b.title) + '</b>' +
+            '<span class="plan-why">' + b.why.map((w) => '<i>' + esc(w) + '</i>').join('') + '</span></li>';
+        }
+      }
+      h += '</ol>';
+    }
+    if (sug.skipped.length) {
+      h += '<p class="plan-skipped muted">Not scheduled: ' +
+        sug.skipped.map((s) => esc(s.title) + ' <small>(' + esc(s.reason) + ')</small>').join(' · ') + '</p>';
+    }
+    const pp = planPrefsNow();
+    h += '<details class="plan-prefs"><summary>⚙ plan window, gap, goal & cap</summary><div class="plan-prefrow">' +
+      '<label class="muted">day starts <input class="plan-pref" type="time" data-pref-key="dayStart" value="' + esc(pp.dayStart) + '"></label>' +
+      '<label class="muted">day ends <input class="plan-pref" type="time" data-pref-key="dayEnd" value="' + esc(pp.dayEnd) + '"></label>' +
+      '<label class="muted">gap (min) <input class="plan-pref" type="number" data-pref-key="gapMin" min="0" max="120" step="5" value="' + pp.gapMin + '"></label>' +
+      '<label class="muted">max blocks <input class="plan-pref" type="number" data-pref-key="maxBlocks" min="1" max="12" value="' + pp.maxBlocks + '"></label>' +
+      '<label class="muted">goal <select class="plan-pref" data-pref-key="goalProjectId"><option value="">none</option>' +
+      S.projects.filter((p) => !p.deletedAt).map((p) => '<option value="' + esc(p.id) + '"' + (pp.goalProjectId === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('') +
+      '</select></label></div>' +
+      sug.notes.slice(1).map((n) => '<p class="plan-note muted">💡 ' + esc(n) + '</p>').join('') +
+      '</details>';
+    h += '<div class="plan-foot">' +
+      '<button class="btn btn-primary" data-plan="accept">Accept plan</button>' +
+      '<button class="btn btn-ghost" data-plan="edit">' + (P.edit ? 'Done editing' : 'Edit') + '</button>' +
+      '<button class="btn btn-ghost" data-plan="reject">Reject</button>' +
+      (accepted.length ? '<button class="btn btn-danger-ghost" data-plan="clear">Clear today’s schedule</button>' : '') +
+      '</div>';
+    host.innerHTML = h;
+  }
+
+  async function planAccept() {
+    const sug = S.ui.plan.sug;
+    if (!sug || !sug.blocks.length) { toast('Nothing to accept — the plan has no blocks.'); return; }
+    for (const b of sug.blocks) {
+      if (!ZTPLAN.validEditedBlock(b)) { toast('Fix the edited times first (each block needs an end after its start).'); return; }
+    }
+    const now = Date.now();
+    const ops = [];
+    const keep = new Set(sug.blocks.map((b) => b.taskId));
+    for (const b of sug.blocks) {
+      const t = byId(b.taskId);
+      if (!t || t.status === 'completed') continue;
+      t.plan = { date: sug.date, start: b.start, end: b.end };
+      t.updatedAt = now;
+      ops.push({ store: STORES.tasks, op: 'put', value: t });
+    }
+    // “create/update”: yesterday’s acceptance for this date is REPLACED — tasks
+    // that dropped out of the plan lose their block (and nothing else).
+    for (const t of planAcceptedOn(sug.date)) {
+      if (keep.has(t.id)) continue;
+      t.plan = null; t.updatedAt = now;
+      ops.push({ store: STORES.tasks, op: 'put', value: t });
+    }
+    if (!ops.length) { toast('The plan matched nothing — nothing changed.'); return; }
+    await store.commit(ops);
+    S.ui.plan.edit = false;
+    S.ui.plan.sug = planCompute();
+    renderAll();
+    remReconcile();
+    toast('Plan accepted — scheduled times written to the tasks (deadlines untouched). This was the only write.');
+  }
+
+  async function planClearDay() {
+    const acc = planAcceptedOn(ymd(new Date()));
+    if (!acc.length) { toast('No accepted plan for today.'); return; }
+    const now = Date.now();
+    const ops = acc.map((t) => { t.plan = null; t.updatedAt = now; return { store: STORES.tasks, op: 'put', value: t }; });
+    await store.commit(ops);
+    S.ui.plan.sug = planCompute();
+    renderAll();
+    toast('Today’s accepted plan cleared — the tasks themselves are untouched.');
+  }
+
+  els.planBtn.onclick = () => {
+    const P = S.ui.plan;
+    P.open = !P.open;
+    if (P.open) {
+      P.sug = null; P.edit = false;
+      S.ui.cal.open = false; S.ui.dash.open = false; S.ui.hab.open = false;
+    } else { P.sug = null; P.edit = false; }
+    renderAll();
+    if (P.open) els.planView.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  els.planView.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-plan]');
+    if (!b) return;
+    const a = b.dataset.plan;
+    if (a === 'close' || a === 'reject') { S.ui.plan.open = false; S.ui.plan.sug = null; S.ui.plan.edit = false; renderAll(); if (a === 'reject') toast('Plan rejected — nothing was written.'); return; }
+    if (a === 'rescan') { S.ui.plan.sug = planCompute(); renderPlan(); return; }
+    if (a === 'edit') { S.ui.plan.edit = !S.ui.plan.edit; if (!S.ui.plan.edit) S.ui.plan.sug = null; renderPlan(); return; }
+    if (a === 'accept') { planAccept(); return; }
+    if (a === 'clear') { planClearDay(); return; }
+    if (a === 'rm') {
+      const sug = S.ui.plan.sug; if (!sug) return;
+      const id = b.dataset.task;
+      const cut = sug.blocks.find((x) => x.taskId === id);
+      sug.blocks = sug.blocks.filter((x) => x.taskId !== id);
+      if (cut) sug.skipped.push({ taskId: cut.taskId, title: cut.title, reason: 'removed while editing' });
+      renderPlan();
+      return;
+    }
+  });
+  els.planView.addEventListener('change', (e) => {
+    const inp = e.target;
+    const P = S.ui.plan;
+    if (inp.classList && inp.classList.contains('plan-pref')) {
+      const key = inp.dataset.prefKey;
+      const cur = Object.assign({}, S.settings.planPrefs || {});
+      cur[key] = (key === 'gapMin' || key === 'maxBlocks') ? Number(inp.value) : inp.value;
+      if (key === 'goalProjectId' && !inp.value) cur.goalProjectId = null;
+      S.settings.planPrefs = window.ZTPLAN ? ZTPLAN.sanitizePrefs(cur) : cur;
+      commitSettings();
+      P.sug = planCompute();
+      renderPlan(); // prefs change ⇒ a fresh proposal under the new window
+      return;
+    }
+    const tid = inp.dataset ? (inp.dataset.planStart || inp.dataset.planMin) : null;
+    if (!tid || !P.sug) return;
+    const blk = P.sug.blocks.find((x) => x.taskId === tid);
+    if (!blk) return;
+    if (inp.dataset.planStart && /^([01]\d|2[0-3]):[0-5]\d$/.test(inp.value || '')) blk.start = inp.value;
+    if (inp.dataset.planMin) blk.min = Math.min(240, Math.max(15, Math.round(Number(inp.value) || blk.min)));
+    const s0 = ZTPLAN.toMin(blk.start);
+    blk.end = ZTPLAN.fromMin(Math.min(1439, s0 + blk.min));
+    renderPlan();
+  });
+
+  /* ================= Natural-language quick add (confirm-gated) ================
      ZTNL.parse() understands; this block only DISPLAYS the understanding. The
      “I understood” card has no write path: [Create task] pushes the values
      through the composer’s ONE existing submit pipeline (same validation, same
@@ -3794,7 +3989,7 @@
   function wireDashboard() {
     els.dashBtn.onclick = () => {
       S.ui.dash.open = !S.ui.dash.open;
-      if (S.ui.dash.open) { S.ui.cal.open = false; S.ui.hab.open = false; } // the overlays are exclusive
+      if (S.ui.dash.open) { S.ui.cal.open = false; S.ui.hab.open = false; if (S.ui.plan) { S.ui.plan.open = false; S.ui.plan.sug = null; } } // the overlays are exclusive
       renderAll();
       if (S.ui.dash.open) {
         els.dashboard.scrollIntoView({ behavior: 'smooth', block: 'start' });
