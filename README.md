@@ -596,7 +596,11 @@ surface got clearer. Everything below is regression-pinned in
   Acceptance remains the only write path.
 - **Calendar is a time-planning view.** Month cells answer “how full is
   this day?” with density dots + “3 tasks · ~1h 20m” (⚠ overdue, ↻ series
-  markers) — never crammed titles; every cell has an aria-label summary.
+  markers), and — recovery pass — up to two readable title chips per cell with
+  a “+N more” hand-off to the Day view (no crammed lists). Every chip carries
+  an inline ☐ completion control (week/day views) that calls the same
+  `toggleTask` the list uses — no second completion system.
+  Every cell has an aria-label summary.
   Chips in the time views carry the project indicator (📁 icon + tooltip,
   §12). Week stays a planning board; the Day Overview is where titles live, under
   a **Time Balance** bar (“2h 30m planned · 1h 20m free”, a neutral

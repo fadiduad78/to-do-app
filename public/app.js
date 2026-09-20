@@ -1932,10 +1932,11 @@
     const onPlan = !ghost && ds && t.plan && t.plan.date === ds;
     const pj = t.projectId && !ghost ? S.projects.find((p) => p.id === t.projectId && !p.deletedAt) : null; // §12: project indicator
     return '<span class="cal-chip prio-' + t.priority + (done ? ' is-done' : '') + overCls + (t.recurrence ? ' is-recur' : '') + (onPlan ? ' is-plan' : '') + '" data-tid="' + esc(t.id) + '" draggable="true"' +
+      ' aria-label="' + (done ? 'Reopen' : 'Complete') + ' ' + esc(t.title) + ' — task chip"' +
       ' title="' + esc((onPlan ? '🗓 planned ' + t.plan.start + '–' + t.plan.end + ' — ' : t.dueTime ? t.dueTime + ' — ' : '') + t.title + (pj ? ' · 📁 ' + pj.name : '') + (t.recurrence ? ' — ' + recurLabel(t) : '')) + '">' +
       '<i class="cal-dot" aria-hidden="true"></i>' + (onPlan ? '<b>' + esc(t.plan.start + '–' + t.plan.end) + '</b>' : t.dueTime ? '<b>' + esc(t.dueTime) + '</b>' : '') +
       (t.recurrence ? '<i class="cal-rmark" aria-hidden="true" title="Recurring — completes roll forward">↻</i>' : '') +
-      bell + (done ? '✓ ' : '') + (pj ? '<i class="cal-proj" aria-hidden="true" title="Project: ' + esc(pj.name) + '">' + esc(pj.icon || '📁') + '</i>' : '') + esc(truncate(t.title, 22)) + '</span>';
+      bell + '<button class="cal-tick" type="button" data-cdone="' + esc(t.id) + '" draggable="false" role="checkbox" aria-checked="' + (done ? 'true' : 'false') + '" aria-label="' + (done ? 'Reopen' : 'Complete') + ' ' + esc(t.title) + '" title="' + (done ? 'Reopen this task' : 'Complete this task') + '">' + (done ? '✓' : '') + '</button>' + (done ? '✓ ' : '') + (pj ? '<i class="cal-proj" aria-hidden="true" title="Project: ' + esc(pj.name) + '">' + esc(pj.icon || '📁') + '</i>' : '') + esc(truncate(t.title, 22)) + '</span>';
   }
   function calMonthCell(ds, dim) {
     const st = calStats(ds);
@@ -1963,7 +1964,9 @@
       '</span>' +
       (st.tasks.length
         ? '<span class="cal-dots" aria-hidden="true">' + dots + (nDots > 0 ? '<i class="cal-dotm more">+' + nDots + '</i>' : '') + '</span>' +
-          '<span class="cal-load">' + st.tasks.length + ' task' + (st.tasks.length === 1 ? '' : 's') + (hasEst && loadMin ? ' · ~' + fmtDur(loadMin) : '') + '</span>'
+          '<span class="cal-load">' + st.tasks.length + ' task' + (st.tasks.length === 1 ? '' : 's') + (hasEst && loadMin ? ' · ~' + fmtDur(loadMin) : '') + '</span>' +
+          '<div class="cal-chips cal-m-chips">' + st.tasks.slice(0, 2).map((x) => calChip(x, false, ds)).join('') +
+          (st.tasks.length > 2 ? '<span class="cal-more" data-cmore="' + ds + '">+' + (st.tasks.length - 2) + ' more</span>' : '') + '</div>'
         : '<span class="cal-load cal-load-empty" aria-hidden="true"></span>') +
       (gsN ? '<span class="cal-recurhint" title="' + gsN + ' recurring occurrence(s) previewed">↻ ' + gsN + '</span>' : '') +
       '</div>';
@@ -2140,6 +2143,7 @@
     tip.textContent = label;
   }
   function onCalDragStart(e) {
+    if (e.target.closest && e.target.closest('[data-cdone]')) { e.preventDefault(); return; } // a completion click is never a drag
     const chip = e.target.closest && e.target.closest('.cal-chip');
     if (!chip) return;
     calDragId = chip.dataset.tid || null;
@@ -2197,6 +2201,8 @@
     if (gh) { if (gh.dataset.gtid && byId(gh.dataset.gtid)) openComposer({ mode: 'edit', taskId: gh.dataset.gtid }); return; }
     const bell = e.target.closest('[data-remtid]');
     if (bell) { openComposer({ mode: 'edit', taskId: bell.dataset.remtid, focusReminders: true }); return; }
+    const tk = e.target.closest('[data-cdone]');
+    if (tk) { e.stopPropagation(); toggleTask(tk.dataset.cdone); return; } // §16: canonical toggleTask — no second completion system
     const chip = e.target.closest('.cal-chip');
     if (chip) { if (chip.dataset.tid) openComposer({ mode: 'edit', taskId: chip.dataset.tid }); return; }
     const more = e.target.closest('[data-cmore]');

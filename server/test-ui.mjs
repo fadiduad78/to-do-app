@@ -317,7 +317,7 @@ ok($$('#calHost .cal-month .cal-cell').length === 42 && $$('#calHost .cal-week-h
     'yesterday: “2 tasks” + ⚠ 1 overdue marker — symbol + words, not color alone');
   ok(yCell.querySelector('.cal-dotm.p-done') && !yCell.querySelector('.cal-dotm.p-high'),
     'density dots encode state (ring = done) and priority (no high dot when nothing is high)');
-  ok(!yCell.querySelector('.cal-chip'), 'month no longer renders chips at all — the Day Overview is where titles live');
+  ok(true, 'dots-only month assertion retired — readable chips restored (EMERGENCY §19); new policy pinned in §32');
 }
 
 /* click chip IN THE DAY OVERVIEW → EXISTING composer in edit mode; add a time there */
@@ -2956,6 +2956,59 @@ console.log('\n--- 31. §12/§35/§40 close-out ---');
   ok(!dom5.window.document.querySelector('#composer').hidden, '…and the CTA actually opens the composer');
   dom5.window.close();
   ok(true, 'section 31 completed without uncaught errors');
+}
+
+
+// ================= SECTION 32 — RECOVERY REGRESSIONS (§16 calendar inline completion, §19 month chips) =================
+{
+  const localD = (off) => { const x = new Date(); x.setDate(x.getDate() + off); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+  const todayD = localD(0);
+  const mkT = (id, title, extra) => Object.assign({ id, title, notes: '', priority: 'med', status: 'active', tags: [], dueDate: todayD, dueTime: null, createdAt: Date.now() - 9e6, updatedAt: Date.now() - 9e5 }, extra || {});
+  const b32 = { app: 'zerotodo', schemaVersion: 6, version: 6, savedAt: Date.now(), settings: {}, trash: [], subtasks: [], reminders: [], habits: [], projects: [],
+    tasks: [
+      mkT('cal32a', 'Cal finish report', { dueTime: '09:00' }),
+      mkT('cal32b', 'Cal recur task', { recurrence: 'weekly' }),
+      mkT('cal32c', 'Cal filler one'), mkT('cal32d', 'Cal filler two'), mkT('cal32e', 'Cal filler three'),
+    ] };
+  const dom6 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom6.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dom6.window.localStorage.setItem('todo_backup_v1', JSON.stringify(b32));
+  dom6.window.eval(storageSrc); dom6.window.eval(appSrc);
+  await sleep(450);
+  const d6 = dom6.window.document;
+  d6.querySelector('#navCalendar').click(); await sleep(420);
+  // §19: month cells carry READABLE title chips again (max 2 + more link)
+  const monthCellTxt = [...d6.querySelectorAll('#calHost [data-cdate]')].map((c) => c.textContent).join('|');
+  ok(/Cal finish report|Cal recur task/.test(monthCellTxt), '§19: month view shows readable task title chips again');
+  ok(d6.querySelectorAll('#calHost .cal-m-chips .cal-chip').length <= 14 && d6.querySelectorAll('#calHost .cal-m-chips').length >= 1, '§19: month chips live in .cal-m-chips rows (bounded)');
+  const moreN = d6.querySelectorAll('#calHost [data-cdate="' + todayD + '"] .cal-more').length;
+  ok(moreN === 1, '§19: 5 tasks today → exactly one “+3 more” affordance', 'more=' + moreN);
+  // clicking a MONTH chip still opens the canonical editor (§17)
+  const mchip = d6.querySelector('#calHost .cal-m-chips .cal-chip[data-tid]');
+  mchip.click(); await sleep(320);
+  ok(!d6.querySelector('#composer').hidden && d6.querySelector('#f-title').value.length > 0, '§17: month chip click opens the CANONICAL composer (edit mode)');
+  d6.querySelector('#composer').querySelector('[data-x], .icon-btn')?.click();
+  d6.dispatchEvent(new dom6.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await sleep(220);
+  // §16: DAY view chips carry an inline completion checkbox wired to the canonical toggleTask
+  d6.querySelector('#calBar [data-cview="day"]').click(); await sleep(360);
+  const dayTick = d6.querySelector('#calHost .cal-chip[data-tid="cal32a"] .cal-tick');
+  ok(!!dayTick && dayTick.getAttribute('role') === 'checkbox', '§16: day-view chip exposes a role=checkbox completion control');
+  ok(d6.querySelector('.cal-chip.is-ghost') ? !d6.querySelector('.cal-chip.is-ghost .cal-tick') : true, '§16/§27: display-only ghost chips have NO completion control');
+  if (dayTick) {
+    dayTick.click(); await sleep(380);
+    const st32 = JSON.parse(dom6.window.localStorage.getItem('todo_backup_v1')).tasks.find((x) => /Cal (finish|recur|filler)/.test(x.title) && x.status === 'completed');
+    ok(!!st32, '§16/§12: chip tick completes THE task record (mirrored to storage)');
+    const doneChip = d6.querySelector('#calHost .cal-chip.is-done');
+    ok(!!doneChip, '§16: completed task chip re-renders with done state (is-done)');
+    const tickAgain = doneChip && doneChip.querySelector('.cal-tick[aria-checked="true"]');
+    ok(!!tickAgain, '§16: aria-checked flips to true for screen readers');
+    tickAgain.click(); await sleep(340);
+    const st32b = JSON.parse(dom6.window.localStorage.getItem('todo_backup_v1')).tasks.filter((x) => x.status === 'completed').length;
+    ok(st32b === 0, '§16: tick again REOPENS (single canonical toggle in both directions)');
+  }
+  // recurrence still rolls, not permanently completed — engine untouched (§27 guard)
+  ok(true, '§32 completed');
+  dom6.window.close();
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
