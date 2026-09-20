@@ -2856,6 +2856,7 @@ console.log('\n--- 29. settings information architecture ---');
   ok(!panel.hidden && !panel.querySelector('.set-page[data-settab="habits"]').hidden && panel.querySelector('.set-page[data-settab="general"]').hidden,
     'the link lands on Settings → Habits (deep-linked, not dumped at the top)');
   if (!panel.hidden) $('#settingsBtn').click(); await sleep(120);
+  ok(/if \(S\) S\.lastSavedAt/.test(appSrc), 'boot-restore safety: the saved-status hook null-guards state (no red “storage write failed” banner for first-run users)');
   ok(true, 'section 29 completed without uncaught errors');
 }
 

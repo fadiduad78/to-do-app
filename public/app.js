@@ -72,7 +72,7 @@
   const store = globalThis.ZTStorage ? ZTStorage.createStore({
     onStatus(state, at) {
       if (state === 'saving') setPill('saving');
-      else if (state === 'saved') { S.lastSavedAt = at; setPill('saved'); }
+      else if (state === 'saved') { if (S) S.lastSavedAt = at; setPill('saved'); } // boot-restore may fire 'saved' before state exists
       else if (state === 'error') setPill('error');
     },
     onError(msg) {
