@@ -232,6 +232,7 @@ body {
 .banner-msg { flex: 1; }
 .banner-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .banner-close {
+  min-width: 30px; min-height: 30px;
   border: 0; background: none; color: var(--muted); font-size: 16px;
   cursor: pointer; padding: 0 2px; line-height: 1.2; border-radius: 4px;
 }
@@ -1498,6 +1499,30 @@ body.sb-collapsed .sb-new { padding: 0; }
   .settings-panel.set-mobile:not(.set-open) .set-pages { display: none; }
   .set-back { margin-left: auto; }
 }
+
+/* B4 close-out: wizard subtitle, live drag feedback, disabled buttons (§16/21/42) */
+.hw-sub { text-align: center; margin: -6px 0 10px; }
+.cal-dragtip { position: sticky; top: 0; z-index: 7; margin: 0 0 6px; padding: 6px 12px; border-radius: 999px; align-self: center; width: fit-content; margin-left: auto; margin-right: auto; background: var(--surface, #fff); border: 1px solid var(--accent, #4f46e5); color: var(--accent, #4f46e5); font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 14px rgba(0, 0, 0, .12); }
+.btn:disabled, .btn[disabled] { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn:disabled:hover, .btn[disabled]:hover { filter: none; background: inherit; }
+.btn[aria-busy="true"] { opacity: .75; cursor: progress; }
+
+/* §46 mobile close-out: nothing may force the page wider than the viewport */
+@media (max-width: 560px) {
+  .top-actions { flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; }
+}
+.dash-grid > * { min-width: 0; }
+.dash-streak { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.dash-streak * { min-width: 0; }
+.dash-hero, .dash-card { min-width: 0; overflow-wrap: anywhere; }
+.settings-panel .setting-row { flex-wrap: wrap; row-gap: 6px; }
+.settings-panel .setting-row select, .settings-panel .setting-row input[type="text"] { max-width: 100%; min-width: 0; }
+.s-col { min-width: 0; }
+.linklike { min-height: 32px; padding: 6px 10px; }
+.cal-dragtip { max-width: calc(100vw - 24px); overflow-wrap: anywhere; }
+
+/* §46: the redesign's 26px task checkbox must honor the mobile 30px floor */
+@media (max-width: 899px) { .task .check { width: 30px; height: 30px; } }
 
   </style>
 </head>
@@ -7589,10 +7614,19 @@ body.sb-collapsed .sb-new { padding: 0; }
   }
 
   let calDragId = null;
+  let calDragTitle = '';
+  function calDragTip(label) {
+    let tip = els.calHost.querySelector('.cal-dragtip');
+    if (!tip) { tip = document.createElement('div'); tip.className = 'cal-dragtip'; tip.setAttribute('role', 'status'); els.calHost.insertBefore(tip, els.calHost.firstChild); }
+    tip.textContent = label;
+  }
   function onCalDragStart(e) {
     const chip = e.target.closest && e.target.closest('.cal-chip');
     if (!chip) return;
     calDragId = chip.dataset.tid || null;
+    const tt0 = S.tasks.find((x) => x.id === calDragId);
+    calDragTitle = tt0 ? tt0.title : '“' + (chip.textContent || '').trim().slice(0, 24) + '”';
+    calDragTip('Moving “' + calDragTitle + '” — drop it on a time or day to reschedule');
     chip.classList.add('dragging');
     if (e.dataTransfer) { try { e.dataTransfer.setData('text/plain', calDragId || ''); e.dataTransfer.effectAllowed = 'move'; } catch (_) {} }
   }
@@ -7601,11 +7635,20 @@ body.sb-collapsed .sb-new { padding: 0; }
     if (!z) return;
     e.preventDefault();
     if (e.dataTransfer) { try { e.dataTransfer.dropEffect = 'move'; } catch (_) {} }
+    els.calHost.querySelectorAll('.cal-drop').forEach((x) => { if (x !== z) x.classList.remove('cal-drop'); });
     z.classList.add('cal-drop');
+    if (calDragTitle) { // tell them WHERE it is about to land, before they let go
+      const hh = z.dataset.chour != null ? String(Number(z.dataset.chour)).padStart(2, '0') + ':00' : null;
+      const dLbl = (ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(z.dataset.cdate) : z.dataset.cdate;
+      calDragTip('Moving “' + calDragTitle + '” to ' + (hh ? hh + ' on ' : '') + dLbl);
+    }
   }
   function clearCalDrop() {
     els.calHost.querySelectorAll('.cal-drop').forEach((x) => x.classList.remove('cal-drop'));
     els.calHost.querySelectorAll('.cal-chip.dragging').forEach((x) => x.classList.remove('dragging'));
+    const tip0 = els.calHost && els.calHost.querySelector('.cal-dragtip');
+    if (tip0) tip0.remove();
+    calDragTitle = '';
   }
   function onCalDrop(e) {
     const z = e.target.closest('[data-cdate]');
@@ -8923,8 +8966,9 @@ body.sb-collapsed .sb-new { padding: 0; }
       const ov = document.createElement('div');
       ov.className = 'modal-overlay';
       const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      ov.innerHTML = '<div class="modal-card hab-modal hab-wizard" role="dialog" aria-modal="true" aria-label="' + (editing ? 'Edit habit' : 'New habit') + '">' +
-        '<h3>' + (editing ? 'Edit habit' : 'New habit') + '</h3>' +
+      ov.innerHTML = '<div class="modal-card hab-modal hab-wizard" role="dialog" aria-modal="true" aria-label="' + (editing ? 'Edit habit' : 'Create a new habit') + '">' +
+        '<h3>' + (editing ? 'Edit habit' : 'Create a new habit') + '</h3>' +
+        (editing ? '' : '<p class="hw-sub muted small">Small actions become routines.</p>') +
         '<div class="hw-steps" aria-hidden="true">' + [1, 2, 3, 4, 5].map((n) => '<i class="hw-dot" data-n="' + n + '"></i>').join('') + '</div>' +
         '<section class="hw-step" data-step="1"><h4 class="hw-q">What do you want to build?</h4>' +
         '<label>Name<input type="text" id="hh-name" maxlength="120" placeholder="e.g. Study Python" value="' + esc(d.name) + '"></label>' +

@@ -578,6 +578,11 @@ surface got clearer. Everything below is regression-pinned in
 `server/test-ui.mjs` §14 (calendar density contract) and new
 **§27–§30** (588 UI checks total, everything else still green).
 
+- **Verified on real Chromium at 375 px (§46):** every major screen — Home,
+  Plan, Calendar (month + day), Dashboard, Habits (+ wizard), Settings
+  (all drilldown pages), Projects — renders with zero horizontal overflow
+  and no undersized touch targets; the dashboard grid got `min-width: 0`
+  clamps so long streak/hero labels wrap instead of widening the page.
 - **Numbers speak human.** Home shows an integer hero (“6 tasks remaining
   today” + “5 of 8 completed · ~2h 10m of work left”); durations anywhere
   the user sees them are `2h 10m`, never decimals, never raw minutes.

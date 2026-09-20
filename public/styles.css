@@ -217,6 +217,7 @@ body {
 .banner-msg { flex: 1; }
 .banner-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .banner-close {
+  min-width: 30px; min-height: 30px;
   border: 0; background: none; color: var(--muted); font-size: 16px;
   cursor: pointer; padding: 0 2px; line-height: 1.2; border-radius: 4px;
 }
@@ -1483,3 +1484,27 @@ body.sb-collapsed .sb-new { padding: 0; }
   .settings-panel.set-mobile:not(.set-open) .set-pages { display: none; }
   .set-back { margin-left: auto; }
 }
+
+/* B4 close-out: wizard subtitle, live drag feedback, disabled buttons (§16/21/42) */
+.hw-sub { text-align: center; margin: -6px 0 10px; }
+.cal-dragtip { position: sticky; top: 0; z-index: 7; margin: 0 0 6px; padding: 6px 12px; border-radius: 999px; align-self: center; width: fit-content; margin-left: auto; margin-right: auto; background: var(--surface, #fff); border: 1px solid var(--accent, #4f46e5); color: var(--accent, #4f46e5); font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 14px rgba(0, 0, 0, .12); }
+.btn:disabled, .btn[disabled] { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn:disabled:hover, .btn[disabled]:hover { filter: none; background: inherit; }
+.btn[aria-busy="true"] { opacity: .75; cursor: progress; }
+
+/* §46 mobile close-out: nothing may force the page wider than the viewport */
+@media (max-width: 560px) {
+  .top-actions { flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; }
+}
+.dash-grid > * { min-width: 0; }
+.dash-streak { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.dash-streak * { min-width: 0; }
+.dash-hero, .dash-card { min-width: 0; overflow-wrap: anywhere; }
+.settings-panel .setting-row { flex-wrap: wrap; row-gap: 6px; }
+.settings-panel .setting-row select, .settings-panel .setting-row input[type="text"] { max-width: 100%; min-width: 0; }
+.s-col { min-width: 0; }
+.linklike { min-height: 32px; padding: 6px 10px; }
+.cal-dragtip { max-width: calc(100vw - 24px); overflow-wrap: anywhere; }
+
+/* §46: the redesign's 26px task checkbox must honor the mobile 30px floor */
+@media (max-width: 899px) { .task .check { width: 30px; height: 30px; } }

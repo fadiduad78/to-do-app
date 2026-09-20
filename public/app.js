@@ -2124,10 +2124,19 @@
   }
 
   let calDragId = null;
+  let calDragTitle = '';
+  function calDragTip(label) {
+    let tip = els.calHost.querySelector('.cal-dragtip');
+    if (!tip) { tip = document.createElement('div'); tip.className = 'cal-dragtip'; tip.setAttribute('role', 'status'); els.calHost.insertBefore(tip, els.calHost.firstChild); }
+    tip.textContent = label;
+  }
   function onCalDragStart(e) {
     const chip = e.target.closest && e.target.closest('.cal-chip');
     if (!chip) return;
     calDragId = chip.dataset.tid || null;
+    const tt0 = S.tasks.find((x) => x.id === calDragId);
+    calDragTitle = tt0 ? tt0.title : '“' + (chip.textContent || '').trim().slice(0, 24) + '”';
+    calDragTip('Moving “' + calDragTitle + '” — drop it on a time or day to reschedule');
     chip.classList.add('dragging');
     if (e.dataTransfer) { try { e.dataTransfer.setData('text/plain', calDragId || ''); e.dataTransfer.effectAllowed = 'move'; } catch (_) {} }
   }
@@ -2136,11 +2145,20 @@
     if (!z) return;
     e.preventDefault();
     if (e.dataTransfer) { try { e.dataTransfer.dropEffect = 'move'; } catch (_) {} }
+    els.calHost.querySelectorAll('.cal-drop').forEach((x) => { if (x !== z) x.classList.remove('cal-drop'); });
     z.classList.add('cal-drop');
+    if (calDragTitle) { // tell them WHERE it is about to land, before they let go
+      const hh = z.dataset.chour != null ? String(Number(z.dataset.chour)).padStart(2, '0') + ':00' : null;
+      const dLbl = (ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(z.dataset.cdate) : z.dataset.cdate;
+      calDragTip('Moving “' + calDragTitle + '” to ' + (hh ? hh + ' on ' : '') + dLbl);
+    }
   }
   function clearCalDrop() {
     els.calHost.querySelectorAll('.cal-drop').forEach((x) => x.classList.remove('cal-drop'));
     els.calHost.querySelectorAll('.cal-chip.dragging').forEach((x) => x.classList.remove('dragging'));
+    const tip0 = els.calHost && els.calHost.querySelector('.cal-dragtip');
+    if (tip0) tip0.remove();
+    calDragTitle = '';
   }
   function onCalDrop(e) {
     const z = e.target.closest('[data-cdate]');
@@ -3458,8 +3476,9 @@
       const ov = document.createElement('div');
       ov.className = 'modal-overlay';
       const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      ov.innerHTML = '<div class="modal-card hab-modal hab-wizard" role="dialog" aria-modal="true" aria-label="' + (editing ? 'Edit habit' : 'New habit') + '">' +
-        '<h3>' + (editing ? 'Edit habit' : 'New habit') + '</h3>' +
+      ov.innerHTML = '<div class="modal-card hab-modal hab-wizard" role="dialog" aria-modal="true" aria-label="' + (editing ? 'Edit habit' : 'Create a new habit') + '">' +
+        '<h3>' + (editing ? 'Edit habit' : 'Create a new habit') + '</h3>' +
+        (editing ? '' : '<p class="hw-sub muted small">Small actions become routines.</p>') +
         '<div class="hw-steps" aria-hidden="true">' + [1, 2, 3, 4, 5].map((n) => '<i class="hw-dot" data-n="' + n + '"></i>').join('') + '</div>' +
         '<section class="hw-step" data-step="1"><h4 class="hw-q">What do you want to build?</h4>' +
         '<label>Name<input type="text" id="hh-name" maxlength="120" placeholder="e.g. Study Python" value="' + esc(d.name) + '"></label>' +

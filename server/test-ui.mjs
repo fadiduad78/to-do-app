@@ -2646,6 +2646,23 @@ console.log('\n--- 27. calendar day overview & planner balance ---');
       'clicking it opens the EXISTING composer with today + 14:00 pre-filled — one task record, created where it lands');
     $('#cancelTaskBtn').click(); await sleep(140);
   } else ok(false, 'slot 14:00 unexpectedly busy — test assumes an empty evening slot');
+  // dragging a task must narrate itself (§16): “Moving “X” to 16:00 on …”
+  const dragChip = doc.querySelector('#calHost .cal-chip');
+  if (dragChip) {
+    dragChip.dispatchEvent(new window.Event('dragstart', { bubbles: true }));
+    await sleep(90);
+    ok(/Moving “/.test((doc.querySelector('#calHost .cal-dragtip') || {}).textContent || ''), 'dragging shows live “Moving “X” …” feedback the moment the drag starts (§16)');
+    const slot16 = doc.querySelector('#calHost .cal-cell.slot[data-chour="16"]');
+    if (slot16) {
+      slot16.dispatchEvent(new window.Event('dragover', { bubbles: true }));
+      await sleep(90);
+      ok(/to 16:00 on/.test((doc.querySelector('#calHost .cal-dragtip') || {}).textContent || ''),
+        '…and it names the landing spot BEFORE the drop (“to 16:00 on <day>”) — hover, not hope');
+    } else ok(false, 'no 16:00 slot visible for the landing-spot check');
+    dragChip.dispatchEvent(new window.Event('dragend', { bubbles: true }));
+    await sleep(90);
+    ok(!doc.querySelector('#calHost .cal-dragtip'), 'the tip vanishes when the drag ends — nothing lingers');
+  } else ok(false, 'drag feedback: no chip in day view to drag');
   // planner balance panel (§6): words + bar, never raw minutes tables
   $('#calBtn').click(); await sleep(140);
   $('#planBtn').click(); await sleep(950);
@@ -2690,6 +2707,11 @@ console.log('\n--- 28. habit motivation layer ---');
   host.querySelector('[data-hact="new"]').click(); await sleep(200);
   const mc = doc.querySelector('.hab-modal');
   ok(!!mc && mc.querySelectorAll('.hw-step').length === 5, 'the habit editor presents 5 guided steps (fields themselves are unchanged)');
+  ok(/Create a new habit/.test(mc.querySelector('h3').textContent) && /Small actions become routines/.test(mc.textContent),
+    '…with the briefed header: “Create a new habit — Small actions become routines.” (§21)');
+  { const cssTxt = readFileSync(PUB + '/styles.css', 'utf8');
+    ok(/\.btn:disabled/.test(cssTxt) && /aria-busy="true"/.test(cssTxt) && /\.btn:active/.test(cssTxt),
+      'button feedback states are real CSS, not vibes: default/hover/active/disabled/busy (§42)'); }
   ok(/Step 1 of 5/.test(mc.querySelector('.hw-ind').textContent), '…with a visible position marker');
   mc.querySelector('[data-hw="next"]').click(); await sleep(120);
   ok(/Step 1 of 5/.test(mc.querySelector('.hw-ind').textContent) && !!doc.querySelector('.toast, #toastHost') && /name/i.test($('#toastHost').textContent),
