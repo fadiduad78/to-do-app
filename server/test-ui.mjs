@@ -2188,6 +2188,18 @@ await sleep(300);
     '12/5 (both could be months!) → read as month/day WITH a visible note; unambiguous day-month like 12/25 gets no noise');
   ok(P('Dentist 12/25').dueDate === '2026-12-25', 'and 12/25 still resolves right (25 can only be a day)');
   const empty = P('');
+  {
+    const rYest = NL.parse('Fix billing bug yesterday, high priority', { now: NOW });
+    ok(rYest.dueDate === '2026-09-19' && rYest.confidence === 'high' && rYest.title === 'Fix billing bug',
+      '“yesterday” resolves to a REAL past date (an overdue task, tier 1 for the planner) and leaves the title clean');
+    const rY2 = NL.parse('Submit the report the day before yesterday', { now: NOW });
+    ok(rY2.dueDate === '2026-09-18', '“the day before yesterday” → −2 days, likewise honest');
+    const rY3 = NL.parse('Renew passport due yesterday at noon', { now: NOW });
+    ok(rY3.dueDate === '2026-09-19' && rY3.dueTime === '12:00', '“due yesterday at noon” — lead-in and time both survive the past-day eat');
+    const rM = NL.parse('Meeting on Monday', { now: NOW });
+    ok(rM.dueDate === '2026-09-21' && /forward|next/.test(rM.notes.join(' ')) === true || rM.dueDate >= '2026-09-21',
+      'the past-date roll stays for inferred days (a bare weekday never lands in the past) — the exemption is ONLY for explicit yesterdays');
+  }
   ok(empty.confidence === 'low', 'empty input → low confidence, nothing invented');
   dmN.window.close();
 
@@ -2371,6 +2383,12 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   const after25 = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
   const v25 = after25.tasks.find((x) => x.id === victim.id);
   ok(v25.status === 'completed' && !v25.plan, 'completing the task clears its plan slot — a done task should not occupy the day');
+  $('#planBtn').click(); await sleep(300);
+  const clr25 = $('#planView').querySelector('[data-plan="clear"]');
+  ok(!!clr25, 'the accepted-state panel offers [Clear today’s schedule]');
+  clr25.click(); await sleep(400);
+  ok(JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks.every((x) => !x.plan || !x.plan.date),
+    'Clear strips every plan field — the tasks themselves survive (only the SCHEDULED info goes, which is what was accepted)');
   ok(true, 'daily-plan section completed without uncaught errors');
 }
 
