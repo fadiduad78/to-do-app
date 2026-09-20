@@ -3378,10 +3378,10 @@
 
   function habitRecommendations() {
     const CATS = [
-      ['💪 Body', [['Walk 20 minutes', 1, 'daily', 20], ['Stretch for 5 minutes', 1, 'daily', 5], ['Drink water', 8, 'daily', 0]]],
-      ['🧠 Mind', [['Read for 10 minutes', 1, 'daily', 10], ['Journal', 1, 'daily', 5], ['Meditate or breathe', 1, 'daily', 5]]],
-      ['📚 Learning', [['Study for 25 minutes', 1, 'daily', 25], ['Practice coding', 1, 'days', 30], ['Learn 5 new words', 1, 'daily', 10]]],
-      ['😴 Lifestyle', [['Sleep at a consistent time', 1, 'daily', 0], ['Prepare tomorrow’s tasks', 1, 'days', 10], ['Tidy your workspace', 1, 'daily', 5]]],
+      ['💪 Body', [['Walk 20 minutes', 1, 'daily', 20], ['Stretch for 5 minutes', 1, 'daily', 5], ['Exercise', 1, 'days', 30], ['Drink water', 8, 'daily', 0]]],
+      ['🧠 Mind', [['Read for 10 minutes', 1, 'daily', 10], ['Journal', 1, 'daily', 5], ['Meditate or breathe', 1, 'daily', 5], ['Digital detox', 1, 'daily', 0]]],
+      ['📚 Learning', [['Study for 25 minutes', 1, 'daily', 25], ['Practice coding', 1, 'days', 30], ['Learn 5 new words', 1, 'daily', 10], ['Read technical documentation', 1, 'daily', 15]]],
+      ['😴 Lifestyle', [['Sleep at a consistent time', 1, 'daily', 0], ['Reduce screen time before bed', 1, 'daily', 0], ['Prepare tomorrow’s tasks', 1, 'days', 10], ['Tidy your workspace', 1, 'daily', 5]]],
     ];
     // gentle personalization from what the user actually DOES — never health inferences
     const studyN = S.tasks.filter((x) => /stud|learn|course|practice|python|ielts|read|revise/i.test((x.title || '') + ' ' + ((x.tags || []).join(' ')))).length;
@@ -3803,6 +3803,7 @@
           ? '<p class="pb-msg pb-over"><b>Your day is overloaded.</b> ' + sug.skipped.length +
             ' task' + (sug.skipped.length === 1 ? '' : 's') + ' did not fit into ' + fmtDur(avM) + ' of time.' +
             '<span class="pb-acts"><button class="btn btn-sm btn-ghost" data-plan="trim" type="button">Trim the last block</button>' +
+            '<button class="btn btn-sm btn-ghost" data-plan="tomorrow" type="button" title="Opens the Calendar on tomorrow — place tasks there yourself; nothing is moved behind your back">Schedule for tomorrow</button>' +
             '<button class="btn btn-sm btn-ghost" data-plan="keep" type="button">Keep anyway</button></span></p>'
           : '<p class="pb-msg">Your day looks manageable — ' + fmtDur(plM) + ' planned, about ' + fmtDur(freeM) + ' of flexible time left.</p>') +
         '</section>';
@@ -3913,6 +3914,17 @@
     if (!b) return;
     const a = b.dataset.plan;
     if (a === 'close' || a === 'reject') { S.ui.plan.open = false; S.ui.plan.sug = null; S.ui.plan.edit = false; renderAll(); if (a === 'reject') toast('Plan rejected — nothing was written.'); return; }
+    if (a === 'tomorrow') {
+      // overload action without a hidden write: hand the user to tomorrow’s DAY
+      // view, where clicking a slot or dragging is the canonical reschedule
+      const tm = addDaysYmd(ymd(new Date()), 1);
+      S.ui.plan.open = false;
+      els.calBtn.click(); // the ordinary toggle — exclusivity handled there (it re-anchors to today)
+      S.ui.cal.anchor = tm; S.ui.cal.view = 'day'; // THEN land on tomorrow (the open resets anchor)
+      renderAll();
+      toast('Calendar opened on tomorrow — click a time slot, or drag the task onto the day. Nothing moved itself.');
+      return;
+    }
     if (a === 'rescan') {
       if (S.ui.plan.busy) return; // no double-click pileups while “Analyzing…”
       S.ui.plan.busy = true;

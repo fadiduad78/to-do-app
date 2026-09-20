@@ -2417,22 +2417,25 @@ console.log('\n--- 25. Suggested plan: analyze → propose → confirm ---');
   const de2 = $('#planView').querySelector('input[data-pref-key="dayEnd"]');
   de2.value = '22:00';
   de2.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(250);
-  // completing a planned task releases its slot
-  $('#planView').querySelector('[data-plan="close"]').click(); await sleep(250);
-  const victim = planned25[0];
-  const li25 = doc.querySelector('#taskList .task[data-id="' + victim.id + '"]');
-  ok(!!li25, 'the scheduled task row is findable (its 🗓 badge visible)');
-  li25.querySelector('[data-act="toggle"]').click(); await sleep(400);
-  const after25 = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
-  const v25 = after25.tasks.find((x) => x.id === victim.id);
-  const rolled25 = !!v25.recurrence && v25.status === 'active';
-  ok((v25.status === 'completed' || rolled25) && !v25.plan, 'completing the task clears its plan slot — a done (or occurrence-rolled recurring) task does not squat on the day');
-  $('#planBtn').click(); await sleep(300);
-  const clr25 = $('#planView').querySelector('[data-plan="clear"]');
+  // [Clear today’s schedule] — checked while an accepted set is GUARANTEED
+  // (the older order let a time-of-day-dependent accept count starve it)
+  let clr25 = $('#planView').querySelector('[data-plan="clear"]');
+  for (let i = 0; i < 15 && !clr25; i++) { await sleep(100); clr25 = $('#planView') && $('#planView').querySelector('[data-plan="clear"]'); }
   ok(!!clr25, 'the accepted-state panel offers [Clear today’s schedule]');
   clr25.click(); await sleep(400);
   ok(JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks.every((x) => !x.plan || !x.plan.date),
     'Clear strips every plan field — the tasks themselves survive (only the SCHEDULED info goes, which is what was accepted)');
+  // completing a planned task releases its slot — re-accept fresh so this holds at ANY hour
+  $('#planView').querySelector('[data-plan="accept"]').click(); await sleep(450);
+  const plannedNow = JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks.find((x) => x.plan && x.plan.date && x.status === 'active');
+  ok(!!plannedNow, 're-accepted the proposal: a task now carries a plan slot again');
+  $('#planView').querySelector('[data-plan="close"]').click(); await sleep(250);
+  const li25 = doc.querySelector('#taskList .task[data-id="' + plannedNow.id + '"]');
+  ok(!!li25, 'the scheduled task row is findable (its 🗓 badge visible)');
+  li25.querySelector('[data-act="toggle"]').click(); await sleep(400);
+  const v25 = JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks.find((x) => x.id === plannedNow.id);
+  const rolled25 = !!v25.recurrence && v25.status === 'active';
+  ok((v25.status === 'completed' || rolled25) && !v25.plan, 'completing the task clears its plan slot — a done (or occurrence-rolled recurring) task does not squat on the day');
   ok(true, 'daily-plan section completed without uncaught errors');
 }
 
@@ -2716,6 +2719,9 @@ console.log('\n--- 28. habit motivation layer ---');
   const cats = [...recs.querySelectorAll('.hab-recat h4')].map((x) => x.textContent.trim());
   ok(cats.length === 4 && /💪/.test(cats[0]) && /🧠/.test(cats[1]) && /📚/.test(cats[2]) && /😴/.test(cats[3]),
     'Recommended habits grouped under 💪 Body · 🧠 Mind · 📚 Learning · 😴 Lifestyle');
+  ok(recs.querySelectorAll('.hab-rec').length === 16 && /Exercise/.test(recs.textContent) && /Digital detox/.test(recs.textContent)
+     && /technical documentation/.test(recs.textContent) && /Reduce screen time/.test(recs.textContent),
+    'every category carries its four briefed suggestions (16 total) — nothing medical, just ideas (§27–28)');
   const addBtn = [...recs.querySelectorAll('.hab-rec')].find((x) => /Walk 20 minutes/.test(x.textContent)).querySelector('[data-hact="suggest"]');
   addBtn.click(); await sleep(220);
   const mc2 = doc.querySelector('.hab-modal');
@@ -2819,6 +2825,39 @@ console.log('\n--- 29. settings information architecture ---');
     'the link lands on Settings → Habits (deep-linked, not dumped at the top)');
   if (!panel.hidden) $('#settingsBtn').click(); await sleep(120);
   ok(true, 'section 29 completed without uncaught errors');
+}
+
+/* 30. overloaded plan: honest message + the THREE briefed actions (§6) */
+console.log('\n--- 30. planner overload state ---');
+{
+  const TOM = (() => { const x = new Date(); x.setDate(x.getDate() + 1); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); })();
+  const b30 = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
+  b30.settings.planPrefs = { dayStart: '09:00', dayEnd: '09:20', gapMin: 15, maxBlocks: 6, goalProjectId: null };
+  b30.tasks.push(
+    { id: 'ovl1', title: 'Big thing one', dueDate: TODAY, status: 'active', priority: 'high', tags: [], estMin: 90, subtaskIds: [], createdAt: Date.now() - 5e5, updatedAt: Date.now() - 5e5 },
+    { id: 'ovl2', title: 'Big thing two', dueDate: TODAY, status: 'active', priority: 'med', tags: [], estMin: 90, subtaskIds: [], createdAt: Date.now() - 5e5, updatedAt: Date.now() - 5e5 },
+    { id: 'ovl3', title: 'Big thing three', dueDate: TODAY, status: 'active', priority: 'low', tags: [], estMin: 90, subtaskIds: [], createdAt: Date.now() - 5e5, updatedAt: Date.now() - 5e5 });
+  const dom30 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom30.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dom30.window.localStorage.setItem('todo_backup_v1', JSON.stringify(b30));
+  dom30.window.eval(storageSrc); dom30.window.eval(nlSrc); dom30.window.eval(planSrc); dom30.window.eval(appSrc);
+  await sleep(500);
+  const d30 = dom30.window.document;
+  d30.querySelector('#planBtn').click(); await sleep(1300);
+  const ovm = d30.querySelector('.pb-over');
+  ok(!!ovm && /did not fit into 20m of time/.test(ovm.textContent),
+    'overload message in human words: “Your day is overloaded. N task(s) did not fit into 20m of time.” — never “capacity gap”');
+  ok(!!ovm && !!ovm.querySelector('[data-plan="trim"]') && !!ovm.querySelector('[data-plan="tomorrow"]') && !!ovm.querySelector('[data-plan="keep"]'),
+    'the briefed trio is there: trim lower-priority / schedule for tomorrow / keep anyway (§6)');
+  if (ovm) {
+    ovm.querySelector('[data-plan="tomorrow"]').click(); await sleep(400);    ok(!!d30.querySelector('#calHost') && d30.querySelectorAll('#calHost [data-cdate="' + TOM + '"]').length > 0 && /Workload:/.test(d30.querySelector('#calHost').textContent),
+      '“Schedule for tomorrow” hands off to the Calendar on TOMORROW in Day view — the canonical place to reschedule');
+    const after = JSON.parse(dom30.window.localStorage.getItem('todo_backup_v1')).tasks;
+    ok(['ovl1', 'ovl2', 'ovl3'].every((id) => { const x = after.find((y) => y.id === id); return x && x.dueDate === TODAY && !x.plan; }),
+      '…and it wrote NOTHING — the hand-off is navigation; the task stays the source of truth until the user moves it');
+  } else { ok(false, 'tomorrow action missing'); ok(false, 'no hand-off'); ok(false, 'no write check'); }
+  dom30.window.close();
+  ok(true, 'section 30 completed without uncaught errors');
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');
