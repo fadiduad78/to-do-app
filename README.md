@@ -702,6 +702,10 @@ tasks, trash }`. You can also hand-edit it (carefully) and re-import.
   localStorage-only. It keeps working, but export backups more often.
 - **"Restored N tasks from your local backup" notice** — normal and good:
   IndexedDB was empty or unreadable, and the mirror did its job.
+  This restore path shows *only* that calm notice: the saved-status hook
+  null-guards the state object before it exists, so first-run restore can
+  never flash the red "storage write failed" banner (pinned in
+  `server/test-ui.mjs` §29).
 - **Editing in two tabs at once** — each tab's *committed* changes converge
   (last commit wins per record). Unsaved drafts are per-tab session text.
 - **Clearing site data** erases both IndexedDB and localStorage. That is the
