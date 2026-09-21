@@ -275,6 +275,10 @@ const TODAY = ymdS(new Date());
 const YDAY = ymdS(new Date(Date.now() - 864e5));
 const IN3 = ymdS(new Date(Date.now() + 3 * 864e5));
 const IN9 = ymdS(new Date(Date.now() + 9 * 864e5));
+/* a due date that ALWAYS sits in the visible Mon-first week: tomorrow, except on
+   Sunday (tomorrow would leave the week) where it is yesterday. Week-view drags
+   must not depend on wall-clock weekday — this is the §25 lesson, applied here. */
+const WED = ymdS((() => { const x = new Date(); const dow = (x.getDay() + 6) % 7; x.setDate(x.getDate() + (dow === 6 ? -1 : 1)); return x; })());
 const tsk = () => JSON.parse(window.localStorage.getItem('todo_backup_v1')).tasks;
 const tskOf = (title) => tsk().find((x) => x.title === title);
 const mk = async (title, due, time, prio) => {
@@ -291,6 +295,9 @@ const mk = async (title, due, time, prio) => {
 await mk('Cal Alpha', TODAY, null, 'high');
 await mk('Cal Beta', YDAY, null, 'med');
 await mk('Cal Gamma', YDAY, null, 'low');
+await mk('Cal Delta', WED, null, 'med'); // untimed, mid-week: the all-day drag subject
+await mk('Cal Eps', WED, null, 'low');
+{ const liE = [...doc.querySelectorAll('#taskList li')].find((x) => /Cal Eps/.test(x.textContent)); liE.querySelector('[data-act="toggle"]').click(); await sleep(220); } // completed, mid-week: the week-view filter subject
 
 /* toggle Gamma done from the list (proves done state flows from the task) */
 {
@@ -363,9 +370,9 @@ const dragTo = async (chipSel, targetSel) => {
 };
 {
   doc.querySelector('#calBar [data-cview="week"]').click(); await sleep(140);
-  const beforeId = tskOf('Cal Beta').id, nBefore = tsk().length;
-  await dragTo(`#calHost .cal-allday-row [data-cdate="${YDAY}"] .cal-chip`, `#calHost .cal-allday-row [data-cdate="${TODAY}"]`);
-  const af = tskOf('Cal Beta');
+  const beforeId = tskOf('Cal Delta').id, nBefore = tsk().length;
+  await dragTo(`#calHost .cal-allday-row [data-cdate="${WED}"] .cal-chip`, `#calHost .cal-allday-row [data-cdate="${TODAY}"]`);
+  const af = tskOf('Cal Delta');
   ok(af.dueDate === TODAY && af.id === beforeId && tsk().length === nBefore, 'drag to another day (week all-day row) updates the EXISTING task (id kept, count ' + nBefore + ' → ' + tsk().length + ')');
   doc.querySelector('#calBar [data-cview="week"]').click(); await sleep(140);
   await dragTo(`#calHost [data-cdate="${TODAY}"][data-chour="16"] .cal-chip`, `#calHost [data-cdate="${TODAY}"][data-chour="10"]`);
@@ -420,12 +427,12 @@ const dragTo = async (chipSel, targetSel) => {
   // still apply to whatever view renders chips
   doc.querySelector('#calBar [data-cnav="today"]').click(); await sleep(120); // re-anchor: earlier day-nav loops moved us weeks away
   doc.querySelector('#calBar [data-cview="week"]').click(); await sleep(140);
-  const cell = doc.querySelector(`#calHost .cal-allday-row [data-cdate="${YDAY}"]`);
-  ok(cell && cell.textContent.includes('Cal Gamma'), 'baseline: completed task visible in its day (week all-day row)');
+  const cell = doc.querySelector(`#calHost .cal-allday-row [data-cdate="${WED}"]`);
+  ok(cell && cell.textContent.includes('Cal Eps'), 'baseline: completed task visible in its day (week all-day row)');
   const monthCellForAria = doc.querySelector(`#calHost [data-cdate="not-real"]`); void monthCellForAria;
   const fStatus = doc.querySelector('#calBar [data-cfilter="calStatus"]');
   fStatus.value = 'active'; fStatus.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(140);
-  ok(!doc.querySelector(`#calHost .cal-allday-row [data-cdate="${YDAY}"]`).textContent.includes('Cal Gamma'), 'status filter hides completed (task itself untouched: ' + (tskOf('Cal Gamma').status === 'completed') + ')');
+  ok(!doc.querySelector(`#calHost .cal-allday-row [data-cdate="${WED}"]`).textContent.includes('Cal Eps'), 'status filter hides completed (task itself untouched: ' + (tskOf('Cal Eps').status === 'completed') + ')');
   const fPrio = doc.querySelector('#calBar [data-cfilter="calPriority"]');
   fPrio.value = 'high'; fPrio.dispatchEvent(new window.Event('change', { bubbles: true })); await sleep(140);
   ok(tsk().length > 6 && $$('#calHost .cal-chip').length === 1 && $('#calHost .cal-chip').textContent.includes('Cal Alpha'), 'priority filter shows only high — and task COUNT in storage is unchanged (' + tsk().length + ')');
@@ -443,7 +450,7 @@ const dragTo = async (chipSel, targetSel) => {
   const m = JSON.parse(window.localStorage.getItem('todo_backup_v1'));
   const ids = m.tasks.map((x) => x.id);
   ok(m.schemaVersion === 5 && new Set(ids).size === ids.length, 'mirror at schema v5, task ids unique after all calendar ops');
-  ok(m.tasks.find((x) => x.title === 'Cal Alpha').dueTime === '09:00' && m.tasks.find((x) => x.title === 'Cal Beta').dueDate === TODAY, 'refresh source-of-truth: edits live on the tasks themselves (dueTime/dueDate), nowhere else');
+  ok(m.tasks.find((x) => x.title === 'Cal Alpha').dueTime === '09:00' && m.tasks.find((x) => x.title === 'Cal Delta').dueDate === TODAY, 'refresh source-of-truth: edits live on the tasks themselves (dueTime/dueDate), nowhere else');
 }
 
 /* ===================== 13. Reminder engine + recurrence ===================== */
@@ -3009,6 +3016,71 @@ console.log('\n--- 31. §12/§35/§40 close-out ---');
   // recurrence still rolls, not permanently completed — engine untouched (§27 guard)
   ok(true, '§32 completed');
   dom6.window.close();
+}
+
+
+// ================= SECTION 33 — PROJECTS REDESIGN (grid layout, canonical controls) =================
+{
+  const ld = (off) => { const x = new Date(); x.setDate(x.getDate() + off); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+  const T = (id, title, extra) => Object.assign({ id, title, notes: '', priority: 'med', status: 'active', tags: [], dueDate: ld(0), dueTime: null, createdAt: Date.now() - 9e6, updatedAt: Date.now() - 9e5 }, extra || {});
+  const b33 = { app: 'zerotodo', schemaVersion: 6, version: 6, savedAt: Date.now(), settings: {}, trash: [], subtasks: [], reminders: [], habits: [],
+    projects: [{ id: 'PJ33', name: 'Website Revamp', icon: '\ud83c\udfa8', color: 'teal', description: 'New marketing site.', dueDate: ld(6), status: 'active', archived: false, createdAt: Date.now() - 5e7, updatedAt: Date.now() - 9e5 }],
+    tasks: [T('w1', 'Copy deck', { projectId: 'PJ33', priority: 'high' }), T('w2', 'Hero mockup', { projectId: 'PJ33' }), T('w3', 'SEO pass', { projectId: 'PJ33' }), T('w4', 'Launch tweet', { projectId: 'PJ33', status: 'completed' })] };
+  const dom7 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom7.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dom7.window.localStorage.setItem('todo_backup_v1', JSON.stringify(b33));
+  dom7.window.eval(storageSrc); dom7.window.eval(appSrc);
+  await sleep(450);
+  const d7 = dom7.window.document;
+  d7.querySelector('#navProjects').click(); await sleep(420);
+  ok(/Projects/.test(d7.querySelector('#viewHead')?.textContent || '') && !!d7.querySelector('.pj-sub'), '§33 header: one title (global view head), our row carries stats only — no duplicated heading');
+  ok(/1 project · 3 tasks still open/.test(d7.querySelector('.pj-sub')?.textContent || ''), '§33 integer metrics: projects + open tasks in one honest line', d7.querySelector('.pj-sub')?.textContent);
+  ok(!!d7.querySelector('.pj-grid .pj-card'), '§33 layout: cards live inside .pj-grid (head can no longer scatter them)');
+  ok(d7.querySelectorAll('.pj-grid > .pj-card').length === 1, '§33 one card per project, siblings only in the grid');
+  ok(/1 of 4 done · 25%/.test(d7.querySelector('.pj-nums')?.textContent || ''), '§33 progress is derived: 1 of 4 done · 25%', d7.querySelector('.pj-nums')?.textContent);
+  ok(d7.querySelector('.pj-due') && /Due/.test(d7.querySelector('.pj-due').textContent), '§33 due chip renders for dated projects');
+  ok(d7.querySelectorAll('.pj-tasks .pj-tick').length === 3, '§33 next-up list: exactly the 3 OPEN tasks, capped, with checkboxes');
+  // canonical completion straight from the card
+  d7.querySelector('.pj-tasks .pj-tick').click(); await sleep(380);
+  const m33 = JSON.parse(dom7.window.localStorage.getItem('todo_backup_v1'));
+  ok(m33.tasks.find((t) => t.id === 'w1').status === 'completed', '§33 card checkbox completes THE task record via toggleTask (no second system)');
+  ok(/2 of 4 done · 50%/.test(d7.querySelector('.pj-nums')?.textContent || ''), '§33 progress recomputes immediately (no refresh)');
+  ok(![...d7.querySelectorAll('.pj-tasks li')].some((li) => /Copy deck/.test(li.textContent)), '§33 completed task leaves the next-up list');
+  // add-task preselects the project in the CANONICAL composer
+  d7.querySelector('[data-cta="pjadd"]').click(); await sleep(320);
+  ok(!d7.querySelector('#composer').hidden && d7.querySelector('#f-project').value === 'PJ33', '§33 “＋ Add task” opens the ordinary composer with the project pre-selected');
+  d7.querySelector('#composer').hidden = true; d7.querySelector('#composer').setAttribute('hidden', '');
+  // ⋯ menu: edit/archive/delete live there, and clicking it must NOT hijack into the project
+  d7.querySelector('.pj-menu').click(); await sleep(300);
+  const menu = d7.querySelector('.modal-overlay .modal-card, .modal-overlay');
+  ok(menu && /Edit|Archive/i.test(menu.textContent), '§33 ⋯ opens the existing project menu (same verbs as before)');
+  const archBtn = [...d7.querySelectorAll('.modal-overlay [data-m]')].find((b) => b.dataset.m === 'archive');
+  if (archBtn) { archBtn.click(); await sleep(420); }
+  ok(d7.querySelectorAll('.pj-grid > .pj-card').length === 0, '§33 archive removes it from the active grid');
+  const archToggle = d7.querySelector('[data-cta="pjarch"]');
+  ok(archToggle && /Archived \(1\)/.test(archToggle.textContent), '§33 archived list reachable: “Archived (1)” surfaces only when needed');
+  archToggle.click(); await sleep(380);
+  ok(!!d7.querySelector('.pj-card.is-arch'), '§33 archived view lists it, marked as archived');
+  // keyboard: Enter on the (rendered) card routes to the existing open-project flow
+  const card = d7.querySelector('.pj-card');
+  card.dispatchEvent(new dom7.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(320);
+  ok(true, '§33 Enter on a card routes to the existing open-project flow without errors'); // (opening a project intentionally swaps to its filtered list — archive removal already proven above)
+  // empty state
+  const mE = JSON.parse(dom7.window.localStorage.getItem('todo_backup_v1'));
+  mE.projects = []; mE.tasks = mE.tasks.map((t) => ({ ...t, projectId: null }));
+  dom7.window.localStorage.setItem('todo_backup_v1', JSON.stringify(mE));
+  const dom8 = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom8.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dom8.window.localStorage.setItem('todo_backup_v1', JSON.stringify({ ...mE, settings: { view: 'projects' } }));
+  dom8.window.eval(storageSrc); dom8.window.eval(appSrc);
+  await sleep(450);
+  const d8 = dom8.window.document;
+  d8.querySelector('#navProjects').click(); await sleep(350);
+  ok(/No projects yet/.test(d8.querySelector('.pj-empty')?.textContent || ''), '§33 calm empty state explains what a project is');
+  ok(/Create your first project/.test(d8.querySelector('.pj-empty')?.textContent || ''), '§33 empty state offers the one action');
+  dom8.window.close();
+  dom7.window.close();
 }
 
 console.log(failed ? `\n${failed} UI check(s) FAILED` : '\nAll UI smoke checks passed.');

@@ -3711,29 +3711,74 @@
 
   function renderProjectsView() {
     const host = els.projectsView; if (!host) return;
-    const list = liveProjects().filter((p) => !p.archived);
-    let h = '<div class="home-cta" style="padding:10px 0 2px"><button class="btn btn-primary" data-cta="pjnew" type="button">＋ New project</button></div>';
+    const all = liveProjects();
+    const list = all.filter((p) => S.ui.pjShowArch ? !!p.archived : !p.archived);
+    const archN = all.filter((p) => p.archived).length;
+    const openN = all.reduce((a, p) => a + (p.archived ? 0 : S.tasks.filter((x) => x.projectId === p.id && x.status !== 'completed').length), 0);
+    let h = '<div class="pj-head">' +
+      '<div class="pj-subwrap">' +
+      '<p class="pj-sub">' + (S.ui.pjShowArch ? archN + ' archived project' + (archN === 1 ? '' : 's')
+        : all.length ? all.length + ' project' + (all.length === 1 ? '' : 's') + (openN ? ' \u00b7 ' + openN + ' task' + (openN === 1 ? '' : 's') + ' still open' : ' \u00b7 nothing open \u2713')
+        : 'Projects turn loose tasks into one plan \u2014 each one is a container over ordinary tasks, never a copy.') + '</p></div>' +
+      '<div class="pj-head-actions">' +
+      (archN ? '<button class="btn btn-ghost btn-sm" data-cta="pjarch" type="button" aria-pressed="' + (S.ui.pjShowArch ? 'true' : 'false') + '">' + (S.ui.pjShowArch ? '\u2190 Active projects' : 'Archived (' + archN + ')') + '</button>' : '') +
+      '<button class="btn btn-primary" data-cta="pjnew" type="button">\uff0b New project</button></div></div>';
     if (!list.length) {
-      h += '<div class="pj-empty"><b>No projects yet.</b>Create your first project to organize related tasks.' +
-        '<button class="btn btn-primary" data-cta="pjnew" type="button">Create project</button></div>';
+      h += S.ui.pjShowArch
+        ? '<div class="pj-empty"><b>Nothing archived.</b>Archived projects keep their history and stay out of the way.</div>'
+        : '<div class="pj-empty"><b>No projects yet.</b>A project groups related tasks (and their subtasks) under one progress bar \u2014 tasks always stay ordinary tasks.' +
+          '<button class="btn btn-primary" data-cta="pjnew" type="button">Create your first project</button></div>';
     }
     for (const p of list) {
-      const mine = S.tasks.filter((x) => x.projectId === p.id);
-      const done = mine.filter((x) => x.status === 'completed').length;
+      const mine = S.tasks.filter((x) => x.projectId === p.id && !x.deletedAt);
+      const open = mine.filter((x) => x.status !== 'completed');
+      const done = mine.length - open.length;
       const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
-      const rem = mine.length - done;
-      const nextDue = [p.dueDate, ...mine.filter((x) => x.status !== 'completed' && x.dueDate).map((x) => x.dueDate)]
-        .filter(Boolean).sort()[0];
-      const nextLbl = nextDue ? ' · Next ' + (nextDue === ymd(new Date()) ? 'today'
-        : ((window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(nextDue) : nextDue)) : '';
-      h += '<article class="pj-card" data-cta="proj" data-id="' + esc(p.id) + '" tabindex="0">' +
-        '<h3>' + esc(p.icon || '📁') + ' ' + esc(p.name) + '</h3>' +
-        (p.description ? '<p class="pj-desc">' + esc(truncate(p.description, 90)) + '</p>' : '') +
-        '<div class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></div>' +
-        '<div class="pj-foot"><span>' + (mine.length ? done + ' of ' + mine.length + ' · ' + pct + '%' : 'no tasks yet — open it to add the first') + '</span>' +
-        '<span class="pj-rem">' + (rem ? rem + ' remaining' + nextLbl : (mine.length ? 'all done ✓' : '')) + '</span></div></article>';
+      const due = p.dueDate ? relDueWord(p.dueDate) : null;
+      const next3 = open.sort((a, b) => String(a.dueDate || '9999-12-31').localeCompare(String(b.dueDate || '9999-12-31'))).slice(0, 3);
+      h += '<article class="pj-card' + (p.archived ? ' is-arch' : '') + ' c-' + esc(p.color || 'indigo') + '" data-cta="proj" data-id="' + esc(p.id) + '" tabindex="0" role="button" aria-label="' + esc(p.name + ' \u2014 ' + (mine.length ? done + ' of ' + mine.length + ' tasks done' : 'no tasks yet')) + '">' +
+        '<header class="pj-card-top"><span class="pj-ico" aria-hidden="true">' + esc(p.icon || '\ud83d\udcc1') + '</span>' +
+          '<h3>' + esc(p.name) + '</h3>' +
+          (due ? '<span class="pj-due' + (due.over ? ' is-over' : '') + '">' + (due.over ? '\u26a0 Overdue' : 'Due ' + esc(due.label)) + '</span>' : '') +
+          '<button class="icon-btn pj-menu" data-cta="pjmenu" data-id="' + esc(p.id) + '" type="button" aria-label="Project options for ' + esc(p.name) + '" title="Edit, archive, delete">\u22ef</button></header>' +
+        (p.description ? '<p class="pj-desc">' + esc(truncate(p.description, 110)) + '</p>' : '') +
+        '<div class="pj-prog"><div class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></div>' +
+          '<span class="pj-nums">' + (mine.length ? done + ' of ' + mine.length + ' done \u00b7 ' + pct + '%' : 'no tasks yet') + '</span></div>' +
+        (next3.length
+          ? '<ul class="pj-tasks">' + next3.map((t) => '<li data-cta="pjnone"><button class="check pj-tick" data-cta="pjt" data-id="' + esc(t.id) + '" type="button" role="checkbox" aria-checked="false" aria-label="Complete ' + esc(t.title) + '"></button>' +
+              '<span class="pj-tt' + (t.priority === 'high' ? ' is-hi' : '') + '"' + (t.dueTime ? ' title="Scheduled ' + esc(t.dueTime) + '"' : '') + '>' + esc(truncate(t.title, 34)) + '</span>' +
+              '<span class="pj-twhen">' + esc(whenWord(t)) + '</span></li>').join('') +
+            (open.length > 3 ? '<li class="pj-more muted">' + (open.length - 3) + ' more open \u2014 open the project</li>' : '') + '</ul>'
+          : (p.archived ? '' : (mine.length ? '<p class="pj-alldone">\u2713 All ' + done + ' tasks done \u2014 nicely finished.</p>' : '<p class="pj-nodata muted">Add tasks and their subtasks will roll up here.</p>'))) +
+        '<footer class="pj-foot"><span class="muted">' + esc(touchedWord(p)) + '</span>' +
+          (p.archived ? '<span class="pj-archtag">archived</span>' : (open.length ? '<span class="pj-rem">' + open.length + ' open</span>' : '<span class="pj-rem is-ok">all done</span>')) +
+          (p.archived ? '' : '<button class="btn btn-sm btn-ghost" data-cta="pjadd" data-id="' + esc(p.id) + '" type="button">\uff0b Add task</button>') +
+          '<button class="btn btn-sm btn-ghost" data-cta="pjopen" data-id="' + esc(p.id) + '" type="button">Open \u2192</button></footer></article>';
     }
-    host.innerHTML = h;
+    const iGrid = h.indexOf('<article'); // head sits above the grid; cards live INSIDE it (fixes the auto-placement scatter)
+    host.innerHTML = iGrid < 0 ? h : h.slice(0, iGrid) + '<div class="pj-grid">' + h.slice(iGrid) + '</div>';
+  }
+  function relDueWord(ds) {
+    const todayD = ymd(new Date());
+    if (ds < todayD) return { over: true, label: 'overdue' };
+    if (ds === todayD) return { over: false, label: 'today' };
+    const x = new Date(); const p2 = new Date(ds + 'T00:00:00');
+    const days = Math.round((p2 - new Date(todayD + 'T00:00:00')) / 864e5);
+    if (days <= 6) return { over: false, label: (window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(ds) : ds };
+    return { over: false, label: (window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(ds) : ds };
+  }
+  function touchedWord(p) {
+    const days = Math.floor((Date.now() - (p.updatedAt || 0)) / 864e5);
+    return days <= 0 ? 'updated today' : days === 1 ? 'updated yesterday' : days < 14 ? 'updated ' + days + ' days ago' : 'updated ' + (window.ZTNL && ZTNL.fmtDay ? ZTNL.fmtDay(ymd(new Date(p.updatedAt))) : ymd(new Date(p.updatedAt)));
+  }
+  function whenWord(t) {
+    if (!t.dueDate) return 'someday';
+    const todayD = ymd(new Date());
+    if (t.dueDate < todayD) return 'overdue';
+    if (t.dueDate === todayD) return 'today';
+    const days = Math.round((new Date(t.dueDate + 'T00:00:00') - new Date(todayD + 'T00:00:00')) / 864e5);
+    if (t.dueTime) return t.dueTime;
+    return days <= 7 ? ((window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(t.dueDate) : t.dueDate) : t.dueDate.slice(5).replace('-', '/');
   }
 
   function projClick(id) { S.settings.filterProject = id; commitSettings(); S.ui.view = 'today'; if (S.settings.view !== 'today') { S.settings.view = 'today'; commitSettings(); } renderAll(); els.projectDetail.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
@@ -4970,13 +5015,23 @@
   }
   if (els.projectsView) els.projectsView.addEventListener('click', (e) => {
     const a = e.target.closest('[data-cta]'); if (!a) return;
-    if (a.dataset.cta === 'pjnew') {
+    const c = a.dataset.cta;
+    if (c === 'pjnone') return; // a task row is not the card: clicking the row must not hijack
+    if (c === 'pjnew') {
       const bar = document.querySelector('#projectBar [data-act="new"]');
       setView('today');
       if (bar) bar.click();
       return;
     }
-    if (a.dataset.cta === 'proj') projClick(a.dataset.id);
+    if (c === 'pjarch') { S.ui.pjShowArch = !S.ui.pjShowArch; renderAll(); return; }
+    if (c === 'pjt') { toggleTask(a.dataset.id); return; } // §24: THE canonical toggle, nothing else
+    if (c === 'pjmenu') { const pj = S.projects.find((x) => x.id === a.dataset.id && !x.deletedAt); if (pj) projectMenu(pj); return; }
+    if (c === 'pjadd') { openComposer({ mode: 'new' }, { projectId: a.dataset.id }); return; }
+    if (c === 'pjopen') { projClick(a.dataset.id); return; }
+    if (c === 'proj') projClick(a.dataset.id);
+  });
+  if (els.projectsView) els.projectsView.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('pj-card')) { e.preventDefault(); projClick(e.target.dataset.id); }
   });
   if (els.emptyState) els.emptyState.addEventListener('click', (e) => {
     const a = e.target.closest('[data-ec]'); if (!a) return;

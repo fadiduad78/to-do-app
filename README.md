@@ -29,6 +29,14 @@ if the server is unreachable, every original guarantee still holds.
 - Add / edit / delete / complete tasks (title, optional description, due date
   + optional time, priority low/med/high, tags, UUID id, createdAt/updatedAt).
 - Subtasks (checklists) per task, projects with progress, and a **📅 Calendar**
+- **Projects is a real board**: aligned cards (auto-fill grid, colour accent per
+  project) showing derived progress (`2 of 6 done · 33%`), a due/⚠-overdue chip,
+  the next three open tasks **with working checkboxes** (the same `toggleTask`
+  the list uses — completing one from a card instantly moves every view), a
+  “last touched” line, ＋ Add task (pre-selects the project in the ordinary
+  composer), Open → (the filtered list) and a ⋯ menu (edit/archive/delete).
+  Archived projects surface behind an “Archived (N)” toggle. Progress is always
+  derived from task records — projects never store copies.
   (Month / Week / Day) — all *views over the same task records*: rescheduling
   by drag-and-drop updates the task's own `dueDate`/`dueTime`, never a copy.
   Calendar chips carry a live **🔔 N** indicator (pending reminder count, next

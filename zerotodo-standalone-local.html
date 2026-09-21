@@ -1365,8 +1365,54 @@ body.sb-collapsed .sb-new { padding: 0; }
 /* — Projects: a real responsive grid, uniform cards, aligned footers — */
 .project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: var(--sp-3); }
 .project-card { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--sp-2); padding: 10px var(--sp-3); border-radius: var(--r-m); min-height: 44px; }
-.projects-view { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: var(--sp-3); align-items: stretch; }
-.pj-card { display: flex; flex-direction: column; gap: 6px; padding: var(--sp-4); border-radius: var(--r-m); }
+.projects-view { display: block; padding: var(--sp-3) 0 var(--sp-6); }
+.pj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: var(--sp-3); align-items: stretch; }
+.pj-card { display: grid; gap: var(--sp-2); padding: var(--sp-4); border-radius: var(--r-m); border-left: 3px solid var(--accent); transition: transform var(--t-fast), box-shadow var(--t-fast); }
+.pj-card:hover { transform: translateY(-1px); }
+.pj-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pj-subwrap { min-width: 0; }
+.pj-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+.pj-h { margin: 0; font-size: var(--fs-xl); }
+.pj-sub { margin: 3px 0 0; color: var(--muted); font-size: var(--fs-s); }
+.pj-head-actions { display: flex; gap: var(--sp-2); align-items: center; }
+.pj-card-top { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.pj-card-top h3 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
+.pj-ico { font-size: 15px; flex: none; }
+.pj-due { flex: none; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.pj-due.is-over { background: color-mix(in srgb, #e5484d 12%, transparent); color: #d93025; }
+.pj-menu { flex: none; border: 0; background: transparent; cursor: pointer; color: var(--muted); font-size: 15px; padding: 2px 6px; border-radius: 6px; }
+.pj-menu:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.pj-prog { display: flex; align-items: center; gap: var(--sp-2); }
+.pj-prog .pr-bar { flex: 1 1 auto; }
+.pj-nums { flex: none; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.pj-tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.pj-tasks li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; }
+.pj-tick { width: 15px; height: 15px; flex: none; }
+.pj-tt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pj-tt.is-hi::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #e5484d; margin-right: 5px; vertical-align: 1px; }
+.pj-twhen { flex: none; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.pj-more { font-size: 11.5px; padding-left: 23px; }
+.pj-alldone { margin: 0; font-size: 12.5px; color: var(--ok, #2a9d5c); }
+.pj-nodata { margin: 0; font-size: 12px; }
+.pj-foot { display: flex; align-items: center; gap: var(--sp-2); font-size: 11.5px; border-top: 1px solid var(--border); padding-top: var(--sp-2); margin-top: 2px; }
+.pj-foot .btn { margin-left: auto; }
+.pj-foot .btn + .btn { margin-left: 0; }
+.pj-rem { color: var(--muted); }
+.pj-rem.is-ok { color: var(--ok, #2a9d5c); }
+.pj-archtag { font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+.pj-card.is-arch { opacity: .75; }
+.pj-card.c-teal, .pj-card.c-green { border-left-color: #2a9d5c; } .pj-card.c-teal .pj-due, .pj-card.c-green .pj-due { background: color-mix(in srgb, #2a9d5c 12%, transparent); color: #1f7a46; }
+.pj-card.c-amber, .pj-card.c-orange { border-left-color: #d97706; } .pj-card.c-amber .pj-due, .pj-card.c-orange .pj-due { background: color-mix(in srgb, #d97706 12%, transparent); color: #a05a06; }
+.pj-card.c-red, .pj-card.c-rose { border-left-color: #e5484d; } .pj-card.c-red .pj-due, .pj-card.c-rose .pj-due { background: color-mix(in srgb, #e5484d 12%, transparent); color: #c92a2e; }
+.pj-card.c-purple, .pj-card.c-violet { border-left-color: #8b5cf6; } .pj-card.c-purple .pj-due, .pj-card.c-violet .pj-due { background: color-mix(in srgb, #8b5cf6 12%, transparent); color: #6d3ee8; }
+.pj-card.c-blue, .pj-card.c-sky, .pj-card.c-cyan { border-left-color: #3b82f6; } .pj-card.c-blue .pj-due, .pj-card.c-sky .pj-due, .pj-card.c-cyan .pj-due { background: color-mix(in srgb, #3b82f6 12%, transparent); color: #2563eb; }
+.pj-card.c-pink { border-left-color: #ec4899; } .pj-card.c-pink .pj-due { background: color-mix(in srgb, #ec4899 12%, transparent); color: #db2777; }
+.pj-card.c-slate, .pj-card.c-gray { border-left-color: #64748b; } .pj-card.c-slate .pj-due, .pj-card.c-gray .pj-due { background: color-mix(in srgb, #64748b 14%, transparent); color: #475569; }
+@media (max-width: 640px) {
+  .pj-tick { width: 18px; height: 18px; }
+  .pj-head { align-items: flex-start; flex-direction: column; }
+  .pj-head-actions { width: 100%; justify-content: flex-end; }
+}
 .pj-desc { margin: 0; color: var(--muted); font-size: var(--fs-xs); line-height: 1.35; }
 .pj-foot { margin-top: auto; display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-xs); color: var(--muted); }
 .pj-rem { white-space: nowrap; }
@@ -9218,29 +9264,74 @@ body.sb-collapsed .sb-new { padding: 0; }
 
   function renderProjectsView() {
     const host = els.projectsView; if (!host) return;
-    const list = liveProjects().filter((p) => !p.archived);
-    let h = '<div class="home-cta" style="padding:10px 0 2px"><button class="btn btn-primary" data-cta="pjnew" type="button">＋ New project</button></div>';
+    const all = liveProjects();
+    const list = all.filter((p) => S.ui.pjShowArch ? !!p.archived : !p.archived);
+    const archN = all.filter((p) => p.archived).length;
+    const openN = all.reduce((a, p) => a + (p.archived ? 0 : S.tasks.filter((x) => x.projectId === p.id && x.status !== 'completed').length), 0);
+    let h = '<div class="pj-head">' +
+      '<div class="pj-subwrap">' +
+      '<p class="pj-sub">' + (S.ui.pjShowArch ? archN + ' archived project' + (archN === 1 ? '' : 's')
+        : all.length ? all.length + ' project' + (all.length === 1 ? '' : 's') + (openN ? ' \u00b7 ' + openN + ' task' + (openN === 1 ? '' : 's') + ' still open' : ' \u00b7 nothing open \u2713')
+        : 'Projects turn loose tasks into one plan \u2014 each one is a container over ordinary tasks, never a copy.') + '</p></div>' +
+      '<div class="pj-head-actions">' +
+      (archN ? '<button class="btn btn-ghost btn-sm" data-cta="pjarch" type="button" aria-pressed="' + (S.ui.pjShowArch ? 'true' : 'false') + '">' + (S.ui.pjShowArch ? '\u2190 Active projects' : 'Archived (' + archN + ')') + '</button>' : '') +
+      '<button class="btn btn-primary" data-cta="pjnew" type="button">\uff0b New project</button></div></div>';
     if (!list.length) {
-      h += '<div class="pj-empty"><b>No projects yet.</b>Create your first project to organize related tasks.' +
-        '<button class="btn btn-primary" data-cta="pjnew" type="button">Create project</button></div>';
+      h += S.ui.pjShowArch
+        ? '<div class="pj-empty"><b>Nothing archived.</b>Archived projects keep their history and stay out of the way.</div>'
+        : '<div class="pj-empty"><b>No projects yet.</b>A project groups related tasks (and their subtasks) under one progress bar \u2014 tasks always stay ordinary tasks.' +
+          '<button class="btn btn-primary" data-cta="pjnew" type="button">Create your first project</button></div>';
     }
     for (const p of list) {
-      const mine = S.tasks.filter((x) => x.projectId === p.id);
-      const done = mine.filter((x) => x.status === 'completed').length;
+      const mine = S.tasks.filter((x) => x.projectId === p.id && !x.deletedAt);
+      const open = mine.filter((x) => x.status !== 'completed');
+      const done = mine.length - open.length;
       const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
-      const rem = mine.length - done;
-      const nextDue = [p.dueDate, ...mine.filter((x) => x.status !== 'completed' && x.dueDate).map((x) => x.dueDate)]
-        .filter(Boolean).sort()[0];
-      const nextLbl = nextDue ? ' · Next ' + (nextDue === ymd(new Date()) ? 'today'
-        : ((window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(nextDue) : nextDue)) : '';
-      h += '<article class="pj-card" data-cta="proj" data-id="' + esc(p.id) + '" tabindex="0">' +
-        '<h3>' + esc(p.icon || '📁') + ' ' + esc(p.name) + '</h3>' +
-        (p.description ? '<p class="pj-desc">' + esc(truncate(p.description, 90)) + '</p>' : '') +
-        '<div class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></div>' +
-        '<div class="pj-foot"><span>' + (mine.length ? done + ' of ' + mine.length + ' · ' + pct + '%' : 'no tasks yet — open it to add the first') + '</span>' +
-        '<span class="pj-rem">' + (rem ? rem + ' remaining' + nextLbl : (mine.length ? 'all done ✓' : '')) + '</span></div></article>';
+      const due = p.dueDate ? relDueWord(p.dueDate) : null;
+      const next3 = open.sort((a, b) => String(a.dueDate || '9999-12-31').localeCompare(String(b.dueDate || '9999-12-31'))).slice(0, 3);
+      h += '<article class="pj-card' + (p.archived ? ' is-arch' : '') + ' c-' + esc(p.color || 'indigo') + '" data-cta="proj" data-id="' + esc(p.id) + '" tabindex="0" role="button" aria-label="' + esc(p.name + ' \u2014 ' + (mine.length ? done + ' of ' + mine.length + ' tasks done' : 'no tasks yet')) + '">' +
+        '<header class="pj-card-top"><span class="pj-ico" aria-hidden="true">' + esc(p.icon || '\ud83d\udcc1') + '</span>' +
+          '<h3>' + esc(p.name) + '</h3>' +
+          (due ? '<span class="pj-due' + (due.over ? ' is-over' : '') + '">' + (due.over ? '\u26a0 Overdue' : 'Due ' + esc(due.label)) + '</span>' : '') +
+          '<button class="icon-btn pj-menu" data-cta="pjmenu" data-id="' + esc(p.id) + '" type="button" aria-label="Project options for ' + esc(p.name) + '" title="Edit, archive, delete">\u22ef</button></header>' +
+        (p.description ? '<p class="pj-desc">' + esc(truncate(p.description, 110)) + '</p>' : '') +
+        '<div class="pj-prog"><div class="pr-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></div>' +
+          '<span class="pj-nums">' + (mine.length ? done + ' of ' + mine.length + ' done \u00b7 ' + pct + '%' : 'no tasks yet') + '</span></div>' +
+        (next3.length
+          ? '<ul class="pj-tasks">' + next3.map((t) => '<li data-cta="pjnone"><button class="check pj-tick" data-cta="pjt" data-id="' + esc(t.id) + '" type="button" role="checkbox" aria-checked="false" aria-label="Complete ' + esc(t.title) + '"></button>' +
+              '<span class="pj-tt' + (t.priority === 'high' ? ' is-hi' : '') + '"' + (t.dueTime ? ' title="Scheduled ' + esc(t.dueTime) + '"' : '') + '>' + esc(truncate(t.title, 34)) + '</span>' +
+              '<span class="pj-twhen">' + esc(whenWord(t)) + '</span></li>').join('') +
+            (open.length > 3 ? '<li class="pj-more muted">' + (open.length - 3) + ' more open \u2014 open the project</li>' : '') + '</ul>'
+          : (p.archived ? '' : (mine.length ? '<p class="pj-alldone">\u2713 All ' + done + ' tasks done \u2014 nicely finished.</p>' : '<p class="pj-nodata muted">Add tasks and their subtasks will roll up here.</p>'))) +
+        '<footer class="pj-foot"><span class="muted">' + esc(touchedWord(p)) + '</span>' +
+          (p.archived ? '<span class="pj-archtag">archived</span>' : (open.length ? '<span class="pj-rem">' + open.length + ' open</span>' : '<span class="pj-rem is-ok">all done</span>')) +
+          (p.archived ? '' : '<button class="btn btn-sm btn-ghost" data-cta="pjadd" data-id="' + esc(p.id) + '" type="button">\uff0b Add task</button>') +
+          '<button class="btn btn-sm btn-ghost" data-cta="pjopen" data-id="' + esc(p.id) + '" type="button">Open \u2192</button></footer></article>';
     }
-    host.innerHTML = h;
+    const iGrid = h.indexOf('<article'); // head sits above the grid; cards live INSIDE it (fixes the auto-placement scatter)
+    host.innerHTML = iGrid < 0 ? h : h.slice(0, iGrid) + '<div class="pj-grid">' + h.slice(iGrid) + '</div>';
+  }
+  function relDueWord(ds) {
+    const todayD = ymd(new Date());
+    if (ds < todayD) return { over: true, label: 'overdue' };
+    if (ds === todayD) return { over: false, label: 'today' };
+    const x = new Date(); const p2 = new Date(ds + 'T00:00:00');
+    const days = Math.round((p2 - new Date(todayD + 'T00:00:00')) / 864e5);
+    if (days <= 6) return { over: false, label: (window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(ds) : ds };
+    return { over: false, label: (window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(ds) : ds };
+  }
+  function touchedWord(p) {
+    const days = Math.floor((Date.now() - (p.updatedAt || 0)) / 864e5);
+    return days <= 0 ? 'updated today' : days === 1 ? 'updated yesterday' : days < 14 ? 'updated ' + days + ' days ago' : 'updated ' + (window.ZTNL && ZTNL.fmtDay ? ZTNL.fmtDay(ymd(new Date(p.updatedAt))) : ymd(new Date(p.updatedAt)));
+  }
+  function whenWord(t) {
+    if (!t.dueDate) return 'someday';
+    const todayD = ymd(new Date());
+    if (t.dueDate < todayD) return 'overdue';
+    if (t.dueDate === todayD) return 'today';
+    const days = Math.round((new Date(t.dueDate + 'T00:00:00') - new Date(todayD + 'T00:00:00')) / 864e5);
+    if (t.dueTime) return t.dueTime;
+    return days <= 7 ? ((window.ZTNL && ZTNL.fmtDay) ? ZTNL.fmtDay(t.dueDate) : t.dueDate) : t.dueDate.slice(5).replace('-', '/');
   }
 
   function projClick(id) { S.settings.filterProject = id; commitSettings(); S.ui.view = 'today'; if (S.settings.view !== 'today') { S.settings.view = 'today'; commitSettings(); } renderAll(); els.projectDetail.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
@@ -10477,13 +10568,23 @@ body.sb-collapsed .sb-new { padding: 0; }
   }
   if (els.projectsView) els.projectsView.addEventListener('click', (e) => {
     const a = e.target.closest('[data-cta]'); if (!a) return;
-    if (a.dataset.cta === 'pjnew') {
+    const c = a.dataset.cta;
+    if (c === 'pjnone') return; // a task row is not the card: clicking the row must not hijack
+    if (c === 'pjnew') {
       const bar = document.querySelector('#projectBar [data-act="new"]');
       setView('today');
       if (bar) bar.click();
       return;
     }
-    if (a.dataset.cta === 'proj') projClick(a.dataset.id);
+    if (c === 'pjarch') { S.ui.pjShowArch = !S.ui.pjShowArch; renderAll(); return; }
+    if (c === 'pjt') { toggleTask(a.dataset.id); return; } // §24: THE canonical toggle, nothing else
+    if (c === 'pjmenu') { const pj = S.projects.find((x) => x.id === a.dataset.id && !x.deletedAt); if (pj) projectMenu(pj); return; }
+    if (c === 'pjadd') { openComposer({ mode: 'new' }, { projectId: a.dataset.id }); return; }
+    if (c === 'pjopen') { projClick(a.dataset.id); return; }
+    if (c === 'proj') projClick(a.dataset.id);
+  });
+  if (els.projectsView) els.projectsView.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('pj-card')) { e.preventDefault(); projClick(e.target.dataset.id); }
   });
   if (els.emptyState) els.emptyState.addEventListener('click', (e) => {
     const a = e.target.closest('[data-ec]'); if (!a) return;
